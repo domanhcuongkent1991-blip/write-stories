@@ -11,7 +11,9 @@ interface LanguageSelectorProps {
 
 export interface WritingLanguageSelectionController {
   select: (language: WritingLanguage) => void;
-  cancel: () => void;
+  updateOnSelect: (onSelect: (language: WritingLanguage) => void | Promise<void>) => void;
+  activate: () => void;
+  deactivate: () => void;
 }
 
 export function createWritingLanguageSelectionController(
@@ -21,26 +23,35 @@ export function createWritingLanguageSelectionController(
   schedule: (callback: () => void, delay: number) => ReturnType<typeof setTimeout> = setTimeout,
   cancelScheduled: (timer: ReturnType<typeof setTimeout>) => void = clearTimeout,
 ): WritingLanguageSelectionController {
+  let currentOnSelect = onSelect;
   let pending = false;
   let timer: ReturnType<typeof setTimeout> | null = null;
-  let disposed = false;
+  let active = true;
+  let lifecycle = 0;
 
-  const cancel = () => {
+  const deactivate = () => {
     if (timer !== null) cancelScheduled(timer);
     timer = null;
-    disposed = true;
+    active = false;
+    lifecycle += 1;
     pending = false;
   };
 
+  const activate = () => {
+    active = true;
+    lifecycle += 1;
+  };
+
   const select = (language: WritingLanguage) => {
-    if (pending || disposed) return;
+    if (pending || !active) return;
     pending = true;
     setPending(true);
     setSelected(language);
+    const selectionLifecycle = lifecycle;
     timer = schedule(() => {
       timer = null;
-      void Promise.resolve(onSelect(language)).catch(() => {
-        if (disposed) return;
+      void Promise.resolve().then(() => currentOnSelect(language)).catch(() => {
+        if (!active || lifecycle !== selectionLifecycle) return;
         pending = false;
         setPending(false);
         setSelected(null);
@@ -48,7 +59,17 @@ export function createWritingLanguageSelectionController(
     }, 400);
   };
 
-  return { select, cancel };
+  return { select, updateOnSelect: (next) => { currentOnSelect = next; }, activate, deactivate };
+}
+
+export function createWritingLanguageButtonProps(
+  controller: WritingLanguageSelectionController,
+  language: WritingLanguage,
+) {
+  return {
+    "data-writing-language": language,
+    onClick: () => controller.select(language),
+  };
 }
 
 export function LanguageSelector({
@@ -70,10 +91,15 @@ export function LanguageSelector({
       setSelected,
       setPending,
     );
+  } else {
+    controllerRef.current.updateOnSelect(onSelectWritingLanguage);
   }
 
-  useEffect(() => () => {
-    controllerRef.current?.cancel();
+  useEffect(() => {
+    controllerRef.current?.activate();
+    return () => {
+      controllerRef.current?.deactivate();
+    };
   }, []);
 
   return (
@@ -107,8 +133,7 @@ export function LanguageSelector({
       {/* Language cards — generous, distinct, immersive */}
       <div className="flex gap-8 mb-16">
         <button
-          data-writing-language="zh"
-          onClick={() => controllerRef.current?.select("zh")}
+          {...createWritingLanguageButtonProps(controllerRef.current, "zh")}
           disabled={pending}
           onMouseEnter={() => setHovering("zh")}
           onMouseLeave={() => setHovering(null)}
@@ -129,9 +154,8 @@ export function LanguageSelector({
           </div>
         </button>
 
-          <button
-          data-writing-language="en"
-          onClick={() => controllerRef.current?.select("en")}
+        <button
+          {...createWritingLanguageButtonProps(controllerRef.current, "en")}
           disabled={pending}
           onMouseEnter={() => setHovering("en")}
           onMouseLeave={() => setHovering(null)}

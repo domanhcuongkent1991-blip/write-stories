@@ -2,6 +2,7 @@ import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it, vi } from "vitest";
 import {
+  createWritingLanguageButtonProps,
   createWritingLanguageSelectionController,
   LanguageSelector,
 } from "./LanguageSelector";
@@ -36,6 +37,12 @@ describe("LanguageSelector", () => {
     expect(html).toContain("data-writing-language=\"zh\"");
     expect(html).toContain("data-writing-language=\"en\"");
     expect(html).not.toContain("data-writing-language=\"vi\"");
+    const expected = {
+      zh: ["界面语言", "中文创作", "英文创作", "可在设置中更改"],
+      en: ["Interface language", "Chinese Writing", "English Writing", "Can be changed in Settings"],
+      vi: ["Ngôn ngữ giao diện", "Sáng tác bằng tiếng Trung", "Sáng tác bằng tiếng Anh", "Có thể thay đổi trong phần Cài đặt"],
+    }[locale];
+    for (const copy of expected) expect(html).toContain(copy);
   });
 
   it("serializes fast clicks, cleans up the timer, and resets after rejection", async () => {
@@ -55,19 +62,37 @@ describe("LanguageSelector", () => {
 
     controller.select("zh");
     controller.select("en");
-    vi.advanceTimersByTime(400);
-    await Promise.resolve();
-    await Promise.resolve();
+    await vi.advanceTimersByTimeAsync(400);
 
     expect(onSelect).toHaveBeenCalledTimes(1);
     expect(callbacks).toEqual(["zh"]);
     expect(pending).toEqual([true, false]);
     expect(selected).toEqual(["zh", null]);
 
+    controller.deactivate();
+    controller.activate();
+    const updatedOnSelect = vi.fn();
+    controller.updateOnSelect(updatedOnSelect);
     controller.select("en");
-    controller.cancel();
+    controller.deactivate();
     vi.advanceTimersByTime(400);
     expect(onSelect).toHaveBeenCalledTimes(1);
+    expect(updatedOnSelect).not.toHaveBeenCalled();
     vi.useRealTimers();
+  });
+
+  it("wires rendered writing buttons through the production click props", () => {
+    const controller = {
+      select: vi.fn(),
+      updateOnSelect: vi.fn(),
+      activate: vi.fn(),
+      deactivate: vi.fn(),
+    };
+    const zhButton = createWritingLanguageButtonProps(controller, "zh");
+    const enButton = createWritingLanguageButtonProps(controller, "en");
+    zhButton.onClick();
+    enButton.onClick();
+    expect(controller.select).toHaveBeenNthCalledWith(1, "zh");
+    expect(controller.select).toHaveBeenNthCalledWith(2, "en");
   });
 });

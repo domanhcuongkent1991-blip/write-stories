@@ -63,15 +63,15 @@ describe("chat message actions", () => {
   });
 
   it.each([
-    ["zh", "zh", "请阅读我上传的文件。"],
-    ["en", "zh", "请阅读我上传的文件。"],
-    ["vi", "zh", "请阅读我上传的文件。"],
-    ["zh", "en", "Please read the files I uploaded."],
-    ["en", "en", "Please read the files I uploaded."],
-    ["vi", "en", "Please read the files I uploaded."],
+    ["zh", "zh", "请阅读我上传的文件。", "附件："],
+    ["en", "zh", "请阅读我上传的文件。", "Attachments:"],
+    ["vi", "zh", "请阅读我上传的文件。", "Tệp đính kèm:"],
+    ["zh", "en", "Please read the files I uploaded.", "附件："],
+    ["en", "en", "Please read the files I uploaded.", "Attachments:"],
+    ["vi", "en", "Please read the files I uploaded.", "Tệp đính kèm:"],
   ] as const)(
     "sends attachment-only instruction using writing language %s independently of UI locale %s",
-    async (uiLocale, writingLanguage, expected) => {
+    async (uiLocale, writingLanguage, expected, expectedHeading) => {
       const store = createTestStore();
       const sessionId = store.getState().createDraftSession(null, "chat");
       store.getState().setSelectedModel("deepseek-v4-flash", "kkaiapi");
@@ -89,7 +89,16 @@ describe("chat message actions", () => {
       expect(agentCall).toBeDefined();
       const body = JSON.parse((agentCall?.[1] as { body: string }).body);
       expect(body.instruction).toBe(expected);
+      expect(body.attachments).toEqual([{
+        id: "attachment-1",
+        filename: "notes.txt",
+        mediaType: "text/plain",
+        size: 10,
+        dataUrl: "data:text/plain;base64,bm90ZXM=",
+      }]);
       expect(store.getState().sessions[sessionId]?.messages[0]?.content).toContain(expected);
+      expect(store.getState().sessions[sessionId]?.messages[0]?.content).toContain(expectedHeading);
+      expect(store.getState().sessions[sessionId]?.messages[0]?.content).toContain("- notes.txt (text/plain, 10 B)");
     },
   );
 

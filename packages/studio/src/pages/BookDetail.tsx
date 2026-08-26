@@ -797,7 +797,7 @@ export function BookDetail({
                           if (mode) handleRevise(ch.number, mode);
                         }}
                         className="px-2 py-1.5 text-[11px] font-bold rounded-lg bg-secondary text-muted-foreground border border-border/50 outline-none hover:text-primary hover:bg-primary/10 transition-all disabled:opacity-50 cursor-pointer"
-                        title={t("book.rewrite")}
+                        title={t("book.curate")}
                       >
                         <option value="" disabled>{revisingChapters.includes(ch.number) ? t("common.loading") : t("book.curate")}</option>
                         <option value="spot-fix">{t("book.spotFix")}</option>
