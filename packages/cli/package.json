@@ -44,7 +44,7 @@
     "build": "tsc",
     "dev": "tsc --watch",
     "pretest": "pnpm run build",
-    "test": "vitest run --passWithNoTests",
+    "test": "vitest run --passWithNoTests --maxWorkers=1 --minWorkers=1 --no-file-parallelism",
     "pretypecheck": "pnpm run prepare:workspace-core",
     "typecheck": "tsc --noEmit"
   },
