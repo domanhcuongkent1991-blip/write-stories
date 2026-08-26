@@ -5,16 +5,31 @@ import { initialChatState } from "../../initialState";
 import { createCreateSlice } from "../create/action";
 import { createMessageSlice, resolveAgentInstruction } from "./action";
 import { setAppLanguage } from "../../../../lib/app-language";
+import { setWritingLanguage } from "../../../../lib/writing-language";
 
 describe("raw agent instruction boundary", () => {
-  it("does not translate explicit or attachment-only agent content into the UI locale", () => {
-    setAppLanguage("vi");
-
-    expect(resolveAgentInstruction("  nguyên văn  ")).toBe("nguyên văn");
-    expect(resolveAgentInstruction("   ")).toBe("Please read the files I uploaded.");
-
+  afterEach(() => {
     setAppLanguage("zh");
+    setWritingLanguage("zh");
   });
+
+  it.each([
+    ["zh", "zh", "请阅读我上传的文件。"],
+    ["en", "zh", "请阅读我上传的文件。"],
+    ["vi", "zh", "请阅读我上传的文件。"],
+    ["zh", "en", "Please read the files I uploaded."],
+    ["en", "en", "Please read the files I uploaded."],
+    ["vi", "en", "Please read the files I uploaded."],
+  ] as const)(
+    "uses UI locale %s independently of writing language %s",
+    (uiLocale, writingLanguage, expected) => {
+      setAppLanguage(uiLocale);
+      setWritingLanguage(writingLanguage);
+
+      expect(resolveAgentInstruction("   ")).toBe(expected);
+      expect(resolveAgentInstruction("  nguyên văn  ")).toBe("nguyên văn");
+    },
+  );
 });
 
 const { fetchJson } = vi.hoisted(() => ({

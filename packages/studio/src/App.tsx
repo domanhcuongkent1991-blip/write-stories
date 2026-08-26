@@ -31,6 +31,11 @@ import { useTheme } from "./hooks/use-theme";
 import { useI18n } from "./hooks/use-i18n";
 import { setAppLanguage } from "./lib/app-language";
 import { getUiLocalePreference, type UiLocale } from "./lib/ui-locale";
+import {
+  resolveProjectWritingLanguage,
+  setWritingLanguage,
+  type WritingLanguage,
+} from "./lib/writing-language";
 import { postApi, useApi } from "./hooks/use-api";
 import { Sun, Moon } from "lucide-react";
 import { House } from "lucide-react";
@@ -60,6 +65,12 @@ export function createHeaderLocaleSelection(
   return (locale) => setLocale(locale);
 }
 
+export function syncProjectWritingLanguage(language: unknown): WritingLanguage {
+  const resolved = resolveProjectWritingLanguage(language);
+  setWritingLanguage(resolved);
+  return resolved;
+}
+
 export function App() {
   const { route, setRoute } = useHashRoute();
   const sse = useSSE();
@@ -71,11 +82,8 @@ export function App() {
 
   const isDark = theme === "dark";
 
-  // 全局语言同步：app-language 是模块级单例，供用不了 hook 的代码（lib 纯函数、
-  // store slice）读取。这里在渲染期同步赋值，让子组件在同一次渲染里调用内联翻译函数时
-  // 就读到正确语言（只用 effect 的话，effect 要等本次渲染提交后才执行，本次渲染
-  // 里的内联翻译函数会读到旧语言）。赋值是幂等的模块变量写入，StrictMode 重复渲染无影
-  // 响；下面的 effect 在语言加载完成和切换时再设置一次，保证提交后的值也正确。
+  // Keep the display-only module locale current for helpers that cannot use the React hook.
+  // Writing content is synchronized separately from /project.language below.
   setAppLanguage(locale);
   useEffect(() => {
     setAppLanguage(locale);
@@ -87,6 +95,7 @@ export function App() {
 
   useEffect(() => {
     if (project) {
+      syncProjectWritingLanguage(project.language);
       if (!project.languageExplicit) {
         setShowLanguageSelector(true);
       }
@@ -202,6 +211,7 @@ export function App() {
         onUiLocaleChange={setLocale}
         onSelectWritingLanguage={async (lang) => {
           await postApi("/project/language", { language: lang });
+          syncProjectWritingLanguage(lang);
           setShowLanguageSelector(false);
           refetchProject();
         }}

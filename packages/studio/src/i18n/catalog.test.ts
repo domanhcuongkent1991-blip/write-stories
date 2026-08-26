@@ -66,4 +66,29 @@ describe("Studio localization catalog", () => {
       "genre.deleteFailed": "Không thể xóa thể loại",
     });
   });
+
+  it("provides direct Vietnamese copy for Book Detail and first-run chrome", () => {
+    expect(VI_CATALOG).toMatchObject({
+      "book.rewriteBriefPrompt": "Tùy chọn: nhập yêu cầu bổ sung chỉ áp dụng cho lần viết lại này. Để trống để dùng trọng tâm hiện có.",
+      "book.reviseBriefPrompt": "Tùy chọn: nhập yêu cầu bổ sung chỉ áp dụng cho lần chỉnh sửa này. Để trống để dùng trọng tâm hiện có.",
+      "book.syncBriefPrompt": "Tùy chọn: nhập hướng dẫn bổ sung để diễn giải nội dung chương đã chỉnh sửa. Để trống để đồng bộ trực tiếp từ văn bản.",
+      "book.consolidateComplete": "Đã hợp nhất {archived} bản tóm tắt tập và giữ lại {retained} bản tóm tắt chương gần nhất.",
+      "book.foundationFeedbackPrompt": "Nhập phản hồi để chỉnh sửa nền tảng. Thao tác này viết lại nền tảng của sách, không sửa trực tiếp nội dung chương.",
+      "book.foundationRevised": "Đã chỉnh sửa nền tảng.",
+      "book.planContextPrompt": "Tùy chọn: nhập ngữ cảnh bổ sung để lập kế hoạch cho chương tiếp theo.",
+      "book.planComplete": "Đã lập kế hoạch chương {chapter}: {title}",
+      "book.composeContextPrompt": "Tùy chọn: nhập ngữ cảnh bổ sung để soạn chương tiếp theo.",
+      "book.composeComplete": "Đã soạn chương {chapter}: {title}",
+      "book.stateRepaired": "Đã sửa trạng thái chương {chapter}.",
+      "book.syncEditedChapter": "Đồng bộ dữ kiện/trạng thái từ chương đã chỉnh sửa",
+      "languageSelector.interfaceLanguage": "Ngôn ngữ giao diện",
+      "languageSelector.chineseTitle": "Sáng tác bằng tiếng Trung",
+      "languageSelector.chineseGenres": "Huyền huyễn · Tiên hiệp · Đô thị · Kinh dị · Tổng hợp",
+      "languageSelector.chinesePlatforms": "Fanqie Novel · Qidian · Faloo",
+      "languageSelector.englishTitle": "Sáng tác bằng tiếng Anh",
+      "languageSelector.englishGenres": "LitRPG · Thăng cấp · Kỳ ảo lãng mạn · Khoa học viễn tưởng · Dị giới",
+      "languageSelector.englishPlatforms": "Royal Road · Kindle Unlimited · Scribble Hub",
+      "languageSelector.footer": "Có thể thay đổi trong phần Cài đặt",
+    });
+  });
 });

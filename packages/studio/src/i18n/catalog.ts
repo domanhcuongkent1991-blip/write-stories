@@ -185,6 +185,28 @@ export const BASE_STRINGS = {
   "book.planNext": { zh: "计划", en: "Plan" },
   "book.composeNext": { zh: "组装", en: "Compose" },
   "book.repairState": { zh: "修复状态", en: "Repair State" },
+  "book.rewriteBriefPrompt": { zh: "可选：输入这次重写要遵循的补充想法。留空则沿用现有 focus。", en: "Optional rewrite brief for this run only. Leave blank to use existing focus." },
+  "book.reviseBriefPrompt": { zh: "可选：输入这次修订要遵循的补充想法。留空则沿用现有 focus。", en: "Optional revise brief for this run only. Leave blank to use existing focus." },
+  "book.syncBriefPrompt": { zh: "可选：输入这次同步时要遵循的补充说明。留空则直接按正文同步。", en: "Optional sync brief for interpreting the edited chapter body. Leave blank to sync directly from the text." },
+  "book.consolidateComplete": { zh: "已归并 {archived} 个卷摘要，保留最近 {retained} 条章节摘要。", en: "Consolidated {archived} volume(s). Retained {retained} recent chapter summaries." },
+  "book.foundationFeedbackPrompt": { zh: "输入重修基础设定的反馈。此操作会重写基础设定，不直接改正文。", en: "Foundation revision feedback. This rewrites the book foundation, not chapter body." },
+  "book.foundationRevised": { zh: "基础设定已重修。", en: "Foundation revised." },
+  "book.planContextPrompt": { zh: "可选：下一章规划补充说明。", en: "Optional planning context for the next chapter." },
+  "book.planComplete": { zh: "已计划第 {chapter} 章：{title}", en: "Planned chapter {chapter}: {title}" },
+  "book.composeContextPrompt": { zh: "可选：下一章组装补充说明。", en: "Optional compose context for the next chapter." },
+  "book.composeComplete": { zh: "已组装第 {chapter} 章：{title}", en: "Composed chapter {chapter}: {title}" },
+  "book.stateRepaired": { zh: "第 {chapter} 章状态已修复。", en: "Chapter {chapter} state repaired." },
+  "book.syncEditedChapter": { zh: "根据已编辑章节同步 truth/state", en: "Sync truth/state from edited chapter" },
+
+  // First-run language selection
+  "languageSelector.interfaceLanguage": { zh: "界面语言", en: "Interface language" },
+  "languageSelector.chineseTitle": { zh: "中文创作", en: "Chinese Writing" },
+  "languageSelector.chineseGenres": { zh: "玄幻 · 仙侠 · 都市 · 恐怖 · 通用", en: "Xuanhuan · Xianxia · Urban · Horror · General" },
+  "languageSelector.chinesePlatforms": { zh: "番茄小说 · 起点中文网 · 飞卢", en: "Fanqie Novel · Qidian · Faloo" },
+  "languageSelector.englishTitle": { zh: "英文创作", en: "English Writing" },
+  "languageSelector.englishGenres": { zh: "LitRPG · 成长流 · 浪漫奇幻 · 科幻 · 异世界", en: "LitRPG · Progression · Romantasy · Sci-Fi · Isekai" },
+  "languageSelector.englishPlatforms": { zh: "Royal Road · Kindle Unlimited · Scribble Hub", en: "Royal Road · Kindle Unlimited · Scribble Hub" },
+  "languageSelector.footer": { zh: "可在设置中更改", en: "Can be changed in Settings" },
 
   // Style
   "style.title": { zh: "文风分析", en: "Style Analyzer" },

@@ -1,10 +1,18 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   createHeaderLocaleSelection,
   deriveActiveBookId,
   deriveStartupGate,
   isBookCreateChatRoute,
+  syncProjectWritingLanguage,
 } from "./App";
+import { setAppLanguage } from "./lib/app-language";
+import { getWritingLanguage, setWritingLanguage } from "./lib/writing-language";
+
+afterEach(() => {
+  setAppLanguage("zh");
+  setWritingLanguage("zh");
+});
 
 describe("createHeaderLocaleSelection", () => {
   it("changes only the UI locale", () => {
@@ -15,6 +23,25 @@ describe("createHeaderLocaleSelection", () => {
 
     expect(setLocale).toHaveBeenCalledOnce();
     expect(setLocale).toHaveBeenCalledWith("vi");
+  });
+
+  it("does not let a Vietnamese UI selection mutate project writing language", () => {
+    setWritingLanguage("en");
+    const selectLocale = createHeaderLocaleSelection(setAppLanguage);
+
+    selectLocale("vi");
+
+    expect(getWritingLanguage()).toBe("en");
+  });
+});
+
+describe("syncProjectWritingLanguage", () => {
+  it("syncs zh/en from the project and never stores vi", () => {
+    expect(syncProjectWritingLanguage("en")).toBe("en");
+    expect(getWritingLanguage()).toBe("en");
+
+    expect(syncProjectWritingLanguage("vi")).toBe("zh");
+    expect(getWritingLanguage()).toBe("zh");
   });
 });
 

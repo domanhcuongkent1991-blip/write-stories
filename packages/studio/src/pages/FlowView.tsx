@@ -16,7 +16,7 @@ import {
 import "@xyflow/react/dist/style.css";
 import { useApi, fetchJson } from "../hooks/use-api";
 import { useColors } from "../hooks/use-colors";
-import { tr } from "../lib/app-language";
+import { selectWritingText } from "../lib/writing-language";
 import type { Theme } from "../hooks/use-theme";
 import type { TFunction } from "../hooks/use-i18n";
 import { layoutStoryGraph } from "../lib/story-flow-layout";
@@ -25,7 +25,9 @@ import type { StoryGraph } from "@actalk/inkos-core/interactive-film/graph-schem
 
 export function resolveNewGraphContent(kind: "choice" | "node"): string {
   // Persistent story content follows the legacy zh/en writing boundary, not UI locale.
-  return kind === "choice" ? tr("新选项", "New choice") : tr("新节点", "New node");
+  return kind === "choice"
+    ? selectWritingText("新选项", "New choice")
+    : selectWritingText("新节点", "New node");
 }
 
 interface Nav {

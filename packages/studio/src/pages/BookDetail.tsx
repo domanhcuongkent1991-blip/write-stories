@@ -204,12 +204,7 @@ export function BookDetail({
   };
 
   const handleRewrite = async (chapterNum: number) => {
-    const brief = window.prompt(
-      data?.book.language === "en"
-        ? "Optional rewrite brief for this run only. Leave blank to use existing focus."
-        : "可选：输入这次重写要遵循的补充想法。留空则沿用现有 focus。",
-      "",
-    );
+    const brief = window.prompt(t("book.rewriteBriefPrompt"), "");
     if (brief === null) return;
     setRewritingChapters((prev) => [...prev, chapterNum]);
     try {
@@ -228,12 +223,7 @@ export function BookDetail({
   };
 
   const handleRevise = async (chapterNum: number, mode: ReviseMode) => {
-    const brief = window.prompt(
-      data?.book.language === "en"
-        ? "Optional revise brief for this run only. Leave blank to use existing focus."
-        : "可选：输入这次修订要遵循的补充想法。留空则沿用现有 focus。",
-      "",
-    );
+    const brief = window.prompt(t("book.reviseBriefPrompt"), "");
     if (brief === null) return;
     setRevisingChapters((prev) => [...prev, chapterNum]);
     try {
@@ -252,12 +242,7 @@ export function BookDetail({
   };
 
   const handleSync = async (chapterNum: number) => {
-    const brief = window.prompt(
-      data?.book.language === "en"
-        ? "Optional sync brief for interpreting the edited chapter body. Leave blank to sync directly from the text."
-        : "可选：输入这次同步时要遵循的补充说明。留空则直接按正文同步。",
-      "",
-    );
+    const brief = window.prompt(t("book.syncBriefPrompt"), "");
     if (brief === null) return;
     setSyncingChapters((prev) => [...prev, chapterNum]);
     try {
@@ -353,19 +338,15 @@ export function BookDetail({
       const result = await fetchJson<{ archivedVolumes?: number; retainedChapters?: number }>(`/books/${bookId}/consolidate`, {
         method: "POST",
       });
-      return data?.book.language === "en"
-        ? `Consolidated ${result.archivedVolumes ?? 0} volume(s). Retained ${result.retainedChapters ?? 0} recent chapter summaries.`
-        : `已归并 ${result.archivedVolumes ?? 0} 个卷摘要，保留最近 ${result.retainedChapters ?? 0} 条章节摘要。`;
+      return t("book.consolidateComplete", {
+        archived: result.archivedVolumes ?? 0,
+        retained: result.retainedChapters ?? 0,
+      });
     });
   };
 
   const handleReviseFoundation = async () => {
-    const feedback = window.prompt(
-      data?.book.language === "en"
-        ? "Foundation revision feedback. This rewrites the book foundation, not chapter body."
-        : "输入重修基础设定的反馈。此操作会重写基础设定，不直接改正文。",
-      "",
-    );
+    const feedback = window.prompt(t("book.foundationFeedbackPrompt"), "");
     if (!feedback?.trim()) return;
     await runBookAction("revise-foundation", async () => {
       await fetchJson(`/books/${bookId}/foundation/revise`, {
@@ -373,17 +354,12 @@ export function BookDetail({
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ feedback }),
       });
-      return data?.book.language === "en" ? "Foundation revised." : "基础设定已重修。";
+      return t("book.foundationRevised");
     });
   };
 
   const handlePlan = async () => {
-    const context = window.prompt(
-      data?.book.language === "en"
-        ? "Optional planning context for the next chapter."
-        : "可选：下一章规划补充说明。",
-      "",
-    );
+    const context = window.prompt(t("book.planContextPrompt"), "");
     if (context === null) return;
     await runBookAction("plan", async () => {
       const result = await fetchJson<{ chapterNumber?: number; title?: string }>(`/books/${bookId}/plan`, {
@@ -391,19 +367,15 @@ export function BookDetail({
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ context: context.trim() || undefined }),
       });
-      return data?.book.language === "en"
-        ? `Planned chapter ${result.chapterNumber ?? "?"}: ${result.title ?? ""}`
-        : `已计划第 ${result.chapterNumber ?? "?"} 章：${result.title ?? ""}`;
+      return t("book.planComplete", {
+        chapter: result.chapterNumber ?? "?",
+        title: result.title ?? "",
+      });
     });
   };
 
   const handleCompose = async () => {
-    const context = window.prompt(
-      data?.book.language === "en"
-        ? "Optional compose context for the next chapter."
-        : "可选：下一章组装补充说明。",
-      "",
-    );
+    const context = window.prompt(t("book.composeContextPrompt"), "");
     if (context === null) return;
     await runBookAction("compose", async () => {
       const result = await fetchJson<{ chapterNumber?: number; title?: string }>(`/books/${bookId}/compose`, {
@@ -411,16 +383,17 @@ export function BookDetail({
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ context: context.trim() || undefined }),
       });
-      return data?.book.language === "en"
-        ? `Composed chapter ${result.chapterNumber ?? "?"}: ${result.title ?? ""}`
-        : `已组装第 ${result.chapterNumber ?? "?"} 章：${result.title ?? ""}`;
+      return t("book.composeComplete", {
+        chapter: result.chapterNumber ?? "?",
+        title: result.title ?? "",
+      });
     });
   };
 
   const handleRepairState = async (chapterNum: number) => {
     await runBookAction(`repair-state-${chapterNum}`, async () => {
       await fetchJson(`/books/${bookId}/repair-state/${chapterNum}`, { method: "POST" });
-      return data?.book.language === "en" ? `Chapter ${chapterNum} state repaired.` : `第 ${chapterNum} 章状态已修复。`;
+      return t("book.stateRepaired", { chapter: chapterNum });
     });
   };
 
@@ -798,7 +771,7 @@ export function BookDetail({
                         onClick={() => handleSync(ch.number)}
                         disabled={syncingChapters.includes(ch.number) || ch.number !== latestPersistedChapter}
                         className="p-2 rounded-lg bg-secondary text-muted-foreground hover:text-primary hover:bg-primary/10 transition-all shadow-sm disabled:opacity-50"
-                        title={data?.book.language === "en" ? "Sync truth/state from edited chapter" : "根据已编辑章节同步 truth/state"}
+                        title={t("book.syncEditedChapter")}
                       >
                         {syncingChapters.includes(ch.number)
                           ? <div className="w-3.5 h-3.5 border-2 border-muted-foreground/20 border-t-muted-foreground rounded-full animate-spin" />

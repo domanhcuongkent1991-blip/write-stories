@@ -1,6 +1,7 @@
 import { useState } from "react";
-import type { WritingLanguage } from "@actalk/inkos-core";
+import { formatLocalizedString } from "../i18n/catalog";
 import type { UiLocale } from "../lib/ui-locale";
+import type { WritingLanguage } from "../lib/writing-language";
 
 interface LanguageSelectorProps {
   readonly uiLocale: UiLocale;
@@ -15,6 +16,9 @@ export function LanguageSelector({
 }: LanguageSelectorProps) {
   const [hovering, setHovering] = useState<WritingLanguage | null>(null);
   const [selected, setSelected] = useState<WritingLanguage | null>(null);
+  const t = (key: Parameters<typeof formatLocalizedString>[0]) => (
+    formatLocalizedString(key, uiLocale)
+  );
 
   const handleWritingLanguageSelect = (language: WritingLanguage) => {
     setSelected(language);
@@ -33,7 +37,7 @@ export function LanguageSelector({
         <div className="text-base text-muted-foreground tracking-widest uppercase">Studio</div>
       </div>
 
-      <div className="mb-8 flex gap-0.5 rounded-lg bg-muted/50 p-0.5" aria-label="Interface language">
+      <div className="mb-8 flex gap-0.5 rounded-lg bg-muted/50 p-0.5" aria-label={t("languageSelector.interfaceLanguage")}>
         {(["zh", "en", "vi"] as const).map((locale) => (
           <button
             key={locale}
@@ -53,6 +57,7 @@ export function LanguageSelector({
       {/* Language cards — generous, distinct, immersive */}
       <div className="flex gap-8 mb-16">
         <button
+          data-writing-language="zh"
           onClick={() => handleWritingLanguageSelect("zh")}
           onMouseEnter={() => setHovering("zh")}
           onMouseLeave={() => setHovering(null)}
@@ -64,16 +69,17 @@ export function LanguageSelector({
                 : "border-border bg-card/50"
           }`}
         >
-          <div className="font-serif text-3xl mb-4 text-foreground">中文创作</div>
+          <div className="font-serif text-3xl mb-4 text-foreground">{t("languageSelector.chineseTitle")}</div>
           <div className="text-base text-foreground/70 leading-relaxed mb-6">
-            玄幻 · 仙侠 · 都市 · 恐怖 · 通用
+            {t("languageSelector.chineseGenres")}
           </div>
           <div className="text-sm text-muted-foreground">
-            番茄小说 · 起点中文网 · 飞卢
+            {t("languageSelector.chinesePlatforms")}
           </div>
         </button>
 
         <button
+          data-writing-language="en"
           onClick={() => handleWritingLanguageSelect("en")}
           onMouseEnter={() => setHovering("en")}
           onMouseLeave={() => setHovering(null)}
@@ -85,18 +91,18 @@ export function LanguageSelector({
                 : "border-border bg-card/50"
           }`}
         >
-          <div className="font-serif text-3xl italic mb-4 text-foreground">English Writing</div>
+          <div className="font-serif text-3xl italic mb-4 text-foreground">{t("languageSelector.englishTitle")}</div>
           <div className="text-base text-foreground/70 leading-relaxed mb-6">
-            LitRPG · Progression · Romantasy · Sci-Fi · Isekai
+            {t("languageSelector.englishGenres")}
           </div>
           <div className="text-sm text-muted-foreground">
-            Royal Road · Kindle Unlimited · Scribble Hub
+            {t("languageSelector.englishPlatforms")}
           </div>
         </button>
       </div>
 
       <div className="text-sm text-muted-foreground">
-        可在设置中更改 · Can be changed in Settings
+        {t("languageSelector.footer")}
       </div>
     </div>
   );

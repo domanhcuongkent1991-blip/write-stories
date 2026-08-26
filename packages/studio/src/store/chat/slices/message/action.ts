@@ -11,7 +11,8 @@ import type {
   SessionSummary,
 } from "../../types";
 import { fetchJson } from "../../../../hooks/use-api";
-import { tr, translateAppString } from "../../../../lib/app-language";
+import { translateAppString } from "../../../../lib/app-language";
+import { selectWritingText } from "../../../../lib/writing-language";
 import { isConfirmedProductionSend } from "../../message-policy";
 import { attachSessionStreamListeners } from "./stream-events";
 import {
@@ -80,7 +81,10 @@ function formatUserMessageForDisplay(text: string, attachments: ReadonlyArray<Ch
 export function resolveAgentInstruction(input: string): string {
   const trimmed = input.trim();
   // Raw protocol boundary: UI locale must never change content sent to the agent.
-  return trimmed || tr("请阅读我上传的文件。", "Please read the files I uploaded.");
+  return trimmed || selectWritingText(
+    "请阅读我上传的文件。",
+    "Please read the files I uploaded.",
+  );
 }
 
 export const createMessageSlice: StateCreator<ChatStore, [], [], MessageActions> = (set, get) => {
