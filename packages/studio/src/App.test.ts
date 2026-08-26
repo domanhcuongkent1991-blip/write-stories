@@ -1,5 +1,22 @@
-import { describe, expect, it } from "vitest";
-import { deriveActiveBookId, deriveStartupGate, isBookCreateChatRoute } from "./App";
+import { describe, expect, it, vi } from "vitest";
+import {
+  createHeaderLocaleSelection,
+  deriveActiveBookId,
+  deriveStartupGate,
+  isBookCreateChatRoute,
+} from "./App";
+
+describe("createHeaderLocaleSelection", () => {
+  it("changes only the UI locale", () => {
+    const setLocale = vi.fn();
+    const selectLocale = createHeaderLocaleSelection(setLocale);
+
+    selectLocale("vi");
+
+    expect(setLocale).toHaveBeenCalledOnce();
+    expect(setLocale).toHaveBeenCalledWith("vi");
+  });
+});
 
 describe("deriveActiveBookId", () => {
   it("returns the current book across book-centered routes", () => {

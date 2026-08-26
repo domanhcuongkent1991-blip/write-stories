@@ -1,13 +1,25 @@
 import { useState } from "react";
+import type { WritingLanguage } from "@actalk/inkos-core";
+import type { UiLocale } from "../lib/ui-locale";
 
-export function LanguageSelector({ onSelect }: { onSelect: (lang: "zh" | "en") => void }) {
-  const [hovering, setHovering] = useState<"zh" | "en" | null>(null);
-  const [selected, setSelected] = useState<"zh" | "en" | null>(null);
+interface LanguageSelectorProps {
+  readonly uiLocale: UiLocale;
+  readonly onUiLocaleChange: (locale: UiLocale) => void;
+  readonly onSelectWritingLanguage: (language: WritingLanguage) => void | Promise<void>;
+}
 
-  const handleSelect = (lang: "zh" | "en") => {
-    setSelected(lang);
+export function LanguageSelector({
+  uiLocale,
+  onUiLocaleChange,
+  onSelectWritingLanguage,
+}: LanguageSelectorProps) {
+  const [hovering, setHovering] = useState<WritingLanguage | null>(null);
+  const [selected, setSelected] = useState<WritingLanguage | null>(null);
+
+  const handleWritingLanguageSelect = (language: WritingLanguage) => {
+    setSelected(language);
     // Brief pause for the selection animation before transitioning
-    setTimeout(() => onSelect(lang), 400);
+    setTimeout(() => void onSelectWritingLanguage(language), 400);
   };
 
   return (
@@ -21,10 +33,27 @@ export function LanguageSelector({ onSelect }: { onSelect: (lang: "zh" | "en") =
         <div className="text-base text-muted-foreground tracking-widest uppercase">Studio</div>
       </div>
 
+      <div className="mb-8 flex gap-0.5 rounded-lg bg-muted/50 p-0.5" aria-label="Interface language">
+        {(["zh", "en", "vi"] as const).map((locale) => (
+          <button
+            key={locale}
+            type="button"
+            onClick={() => onUiLocaleChange(locale)}
+            className={`rounded-md px-3 py-1.5 text-base font-medium transition-colors ${
+              uiLocale === locale
+                ? "bg-primary text-primary-foreground"
+                : "text-muted-foreground hover:text-foreground"
+            }`}
+          >
+            {locale === "zh" ? "中" : locale.toUpperCase()}
+          </button>
+        ))}
+      </div>
+
       {/* Language cards — generous, distinct, immersive */}
       <div className="flex gap-8 mb-16">
         <button
-          onClick={() => handleSelect("zh")}
+          onClick={() => handleWritingLanguageSelect("zh")}
           onMouseEnter={() => setHovering("zh")}
           onMouseLeave={() => setHovering(null)}
           className={`group w-80 border rounded-lg p-10 text-left transition-all duration-300 ${
@@ -45,7 +74,7 @@ export function LanguageSelector({ onSelect }: { onSelect: (lang: "zh" | "en") =
         </button>
 
         <button
-          onClick={() => handleSelect("en")}
+          onClick={() => handleWritingLanguageSelect("en")}
           onMouseEnter={() => setHovering("en")}
           onMouseLeave={() => setHovering(null)}
           className={`group w-80 border rounded-lg p-10 text-left transition-all duration-300 ${

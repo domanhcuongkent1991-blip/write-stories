@@ -30,7 +30,8 @@ import { useSessionEvents } from "./hooks/use-session-events";
 import { useTheme } from "./hooks/use-theme";
 import { useI18n } from "./hooks/use-i18n";
 import { setAppLanguage, tr } from "./lib/app-language";
-import { postApi, putApi, useApi } from "./hooks/use-api";
+import { getUiLocalePreference, type UiLocale } from "./lib/ui-locale";
+import { postApi, useApi } from "./hooks/use-api";
 import { Sun, Moon } from "lucide-react";
 import { House } from "lucide-react";
 
@@ -53,11 +54,17 @@ export function deriveStartupGate(input: {
   return input.projectError ? "error" : "loading";
 }
 
+export function createHeaderLocaleSelection(
+  setLocale: (locale: UiLocale) => void,
+): (locale: UiLocale) => void {
+  return (locale) => setLocale(locale);
+}
+
 export function App() {
   const { route, setRoute } = useHashRoute();
   const sse = useSSE();
   const { theme, setTheme } = useTheme();
-  const { t, lang: currentLang } = useI18n();
+  const { t, locale, setLocale } = useI18n();
   const { data: project, error: projectError, refetch: refetchProject } = useApi<{ language: string; languageExplicit: boolean }>("/project");
   const [showLanguageSelector, setShowLanguageSelector] = useState(false);
   const [ready, setReady] = useState(false);
@@ -69,10 +76,10 @@ export function App() {
   // 就读到正确语言（只用 effect 的话，effect 要等本次渲染提交后才执行，本次渲染
   // 里的 tr() 会读到旧语言）。赋值是幂等的模块变量写入，StrictMode 重复渲染无影
   // 响；下面的 effect 在语言加载完成和切换时再设置一次，保证提交后的值也正确。
-  setAppLanguage(currentLang);
+  setAppLanguage(locale);
   useEffect(() => {
-    setAppLanguage(currentLang);
-  }, [currentLang]);
+    setAppLanguage(locale);
+  }, [locale]);
 
   useEffect(() => {
     document.documentElement.classList.toggle("dark", isDark);
@@ -88,6 +95,7 @@ export function App() {
   }, [project]);
 
   useSessionEvents(sse, route, setRoute);
+  const selectHeaderLocale = createHeaderLocaleSelection(setLocale);
 
   const nav = {
     toDashboard: () => setRoute({ page: "dashboard" }),
@@ -128,25 +136,51 @@ export function App() {
   const startupGate = deriveStartupGate({ ready, projectError });
 
   if (startupGate === "error") {
+    const startupLocale = getUiLocalePreference();
+    const errorTitle = startupLocale === "zh"
+      ? "无法加载项目配置"
+      : startupLocale === "vi"
+        ? "Không thể tải cấu hình dự án"
+        : startupLocale === "en"
+          ? "Failed to load project config"
+          : "无法加载项目配置 / Failed to load project config";
+    const errorInstruction = startupLocale === "zh"
+      ? "请检查项目根目录下的 inkos.json 是否存在且为合法 JSON，然后重试。"
+      : startupLocale === "vi"
+        ? "Hãy kiểm tra inkos.json trong thư mục gốc của dự án có tồn tại và là JSON hợp lệ, rồi thử lại."
+        : startupLocale === "en"
+          ? "Check that inkos.json in the project root exists and is valid JSON, then retry."
+          : null;
+    const retryLabel = startupLocale === "zh"
+      ? "重试"
+      : startupLocale === "vi"
+        ? "Thử lại"
+        : startupLocale === "en"
+          ? "Retry"
+          : "重试 / Retry";
+
     return (
       <div className="min-h-screen bg-background flex items-center justify-center p-6">
         <div className="max-w-md w-full rounded-2xl border border-destructive/30 bg-destructive/5 p-6 space-y-4">
           <div>
-            <h1 className="text-lg font-semibold text-destructive">无法加载项目配置 / Failed to load project config</h1>
+            <h1 className="text-lg font-semibold text-destructive">{errorTitle}</h1>
             <p className="mt-2 text-sm text-muted-foreground break-all">{projectError}</p>
           </div>
-          {/* 项目配置没加载出来，语言未知，所以这屏中英双语并排展示。 */}
           <p className="text-sm text-muted-foreground">
-            请检查项目根目录下的 inkos.json 是否存在且为合法 JSON，然后重试。
-            <br />
-            Check that inkos.json in the project root exists and is valid JSON, then retry.
+            {errorInstruction ?? (
+              <>
+                请检查项目根目录下的 inkos.json 是否存在且为合法 JSON，然后重试。
+                <br />
+                Check that inkos.json in the project root exists and is valid JSON, then retry.
+              </>
+            )}
           </p>
           <button
             type="button"
             onClick={() => refetchProject()}
             className="rounded-lg bg-primary px-4 py-2 text-sm font-medium text-primary-foreground"
           >
-            重试 / Retry
+            {retryLabel}
           </button>
         </div>
       </div>
@@ -164,7 +198,9 @@ export function App() {
   if (showLanguageSelector) {
     return (
       <LanguageSelector
-        onSelect={async (lang) => {
+        uiLocale={locale}
+        onUiLocaleChange={setLocale}
+        onSelectWritingLanguage={async (lang) => {
           await postApi("/project/language", { language: lang });
           setShowLanguageSelector(false);
           refetchProject();
@@ -197,22 +233,22 @@ export function App() {
           <div className="flex items-center gap-3">
             <div className="flex gap-0.5 bg-muted/50 rounded-lg p-0.5">
               <button
-                onClick={async () => {
-                  await putApi("/project", { language: "zh" });
-                  refetchProject();
-                }}
-                className={`px-2.5 py-1 text-[16px] font-medium rounded-md ${currentLang === "zh" ? "bg-primary text-primary-foreground" : "text-muted-foreground"}`}
+                onClick={() => selectHeaderLocale("zh")}
+                className={`px-2.5 py-1 text-[16px] font-medium rounded-md ${locale === "zh" ? "bg-primary text-primary-foreground" : "text-muted-foreground"}`}
               >
                 中
               </button>
               <button
-                onClick={async () => {
-                  await putApi("/project", { language: "en" });
-                  refetchProject();
-                }}
-                className={`px-2.5 py-1 text-[16px] font-medium rounded-md ${currentLang === "en" ? "bg-primary text-primary-foreground" : "text-muted-foreground"}`}
+                onClick={() => selectHeaderLocale("en")}
+                className={`px-2.5 py-1 text-[16px] font-medium rounded-md ${locale === "en" ? "bg-primary text-primary-foreground" : "text-muted-foreground"}`}
               >
                 EN
+              </button>
+              <button
+                onClick={() => selectHeaderLocale("vi")}
+                className={`px-2.5 py-1 text-[16px] font-medium rounded-md ${locale === "vi" ? "bg-primary text-primary-foreground" : "text-muted-foreground"}`}
+              >
+                VI
               </button>
             </div>
 
