@@ -40,7 +40,11 @@ vi.mock("../localization.js", () => ({
   formatWriteNextProgress: vi.fn(() => "progress"),
   formatWriteNextResultLines: vi.fn(() => ["ok"]),
   formatWriteNextComplete: vi.fn(() => "done"),
-  resolveCliLanguage: vi.fn(() => "zh"),
+}));
+
+vi.mock("../locale.js", () => ({
+  resolveCliLocale: vi.fn(() => "zh"),
+  resolveWritingLanguage: vi.fn((value?: "zh" | "en") => value ?? "zh"),
 }));
 
 describe("inkos write next review mode", () => {

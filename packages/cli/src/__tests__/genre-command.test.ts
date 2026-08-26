@@ -13,7 +13,7 @@ describe("genre template scaffold", () => {
   } as const;
 
   it("defaults to the Chinese template", () => {
-    const template = buildGenreTemplate(params);
+    const template = buildGenreTemplate(params, "zh");
 
     expect(template).toContain("name: Sci-Fi");
     expect(template).toContain("id: scifi");

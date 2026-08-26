@@ -38,7 +38,11 @@ vi.mock("../localization.js", () => ({
   formatWriteNextComplete: vi.fn(() => "done"),
   formatAutoWriteStart: vi.fn(() => "auto-start"),
   formatAutoWriteAlreadyComplete: vi.fn(() => "nothing-to-do"),
-  resolveCliLanguage: vi.fn(() => "zh"),
+}));
+
+vi.mock("../locale.js", () => ({
+  resolveCliLocale: vi.fn(() => "zh"),
+  resolveWritingLanguage: vi.fn((value?: "zh" | "en") => value ?? "zh"),
 }));
 
 function chapterResult(chapterNumber: number, status = "ready-for-review") {

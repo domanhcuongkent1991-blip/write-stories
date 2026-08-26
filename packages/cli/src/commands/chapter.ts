@@ -9,8 +9,8 @@ import {
   formatChapterSyncMissingFiles,
   formatChapterSyncNoChanges,
   formatChapterSyncSummary,
-  resolveCliLanguage,
 } from "../localization.js";
+import { resolveCliLocale, resolveWritingLanguage } from "../locale.js";
 import { findProjectRoot, log, logError, resolveBookId } from "../utils.js";
 
 export const chapterCommand = new Command("chapter")
@@ -22,12 +22,13 @@ chapterCommand
   .argument("[book-id]", "Book ID (auto-detected if only one book)")
   .option("--json", "Output JSON")
   .action(async (bookIdArg: string | undefined, opts) => {
+    const locale = resolveCliLocale();
     try {
       const root = findProjectRoot();
       const bookId = await resolveBookId(bookIdArg, root);
       const state = new StateManager(root);
       const book = await state.loadBookConfig(bookId);
-      const language = resolveCliLanguage(book.language);
+      const writingLanguage = resolveWritingLanguage(book.language);
 
       const result = await syncChapterWordCounts(state, bookId);
 
@@ -37,15 +38,15 @@ chapterCommand
       }
 
       if (result.changes.length === 0) {
-        log(formatChapterSyncNoChanges(language, result.checkedChapters));
+        log(formatChapterSyncNoChanges(locale, result.checkedChapters));
       } else {
         for (const change of result.changes) {
-          log(formatChapterSyncChange(language, change, result.countingMode));
+          log(formatChapterSyncChange(locale, writingLanguage, change));
         }
-        log(formatChapterSyncSummary(language, result.changes.length, result.checkedChapters));
+        log(formatChapterSyncSummary(locale, result.changes.length, result.checkedChapters));
       }
       if (result.missingChapterFiles.length > 0) {
-        log(formatChapterSyncMissingFiles(language, result.missingChapterFiles));
+        log(formatChapterSyncMissingFiles(locale, result.missingChapterFiles));
       }
     } catch (e) {
       if (opts.json) {
@@ -65,12 +66,12 @@ chapterCommand
   .option("--force", "Skip confirmation prompt")
   .option("--json", "Output JSON")
   .action(async (bookIdArg: string, opts) => {
+    const locale = resolveCliLocale();
     try {
       const root = findProjectRoot();
       const bookId = await resolveBookId(bookIdArg, root);
       const state = new StateManager(root);
       const book = await state.loadBookConfig(bookId);
-      const language = resolveCliLanguage(book.language);
       const requestedChapter = opts.chapter === undefined ? undefined : parseInt(opts.chapter, 10);
 
       if (!opts.force) {
@@ -81,13 +82,13 @@ chapterCommand
         const rl = createInterface({ input: process.stdin, output: process.stdout });
         const answer = await new Promise<string>((resolve) => {
           rl.question(
-            formatChapterDeleteConfirm(language, { bookTitle: book.title, bookId, number: target, title }),
+            formatChapterDeleteConfirm(locale, { bookTitle: book.title, bookId, number: target, title }),
             resolve,
           );
         });
         rl.close();
         if (answer.toLowerCase() !== "y") {
-          log(formatChapterDeleteCancelled(language));
+          log(formatChapterDeleteCancelled(locale));
           return;
         }
       }
@@ -99,7 +100,7 @@ chapterCommand
       if (opts.json) {
         log(JSON.stringify(result, null, 2));
       } else {
-        log(formatChapterDeleteDone(language, {
+        log(formatChapterDeleteDone(locale, {
           number: result.deletedChapter,
           title: result.title,
           trashedFiles: result.trashedFiles,

@@ -10,6 +10,7 @@ const loadBookConfigMock = vi.fn();
 const getNextChapterNumberMock = vi.fn();
 const logMock = vi.fn();
 const logErrorMock = vi.fn();
+const resolveCliLocaleMock = vi.fn<() => "zh" | "en" | "vi">(() => "zh");
 
 vi.mock("@actalk/inkos-core", () => ({
   PipelineRunner: class {
@@ -45,6 +46,11 @@ vi.mock("../utils.js", () => ({
   logError: logErrorMock,
 }));
 
+vi.mock("../locale.js", () => ({
+  resolveCliLocale: resolveCliLocaleMock,
+  resolveWritingLanguage: vi.fn((value?: "zh" | "en") => value ?? "zh"),
+}));
+
 const notifyChannels = [
   { type: "telegram", botToken: "123:ABC", chatId: "-100", format: "text" },
 ];
@@ -66,6 +72,7 @@ describe("--notify command option", () => {
   beforeEach(() => {
     vi.resetModules();
     vi.clearAllMocks();
+    resolveCliLocaleMock.mockReturnValue("zh");
     loadBookConfigMock.mockResolvedValue({
       title: "示例书",
       language: "zh",
@@ -190,7 +197,8 @@ describe("--notify command option", () => {
       expect(exitSpy).not.toHaveBeenCalled();
     });
 
-    it("uses English copy when the book language is en", async () => {
+    it("uses English copy when the CLI locale is en", async () => {
+      resolveCliLocaleMock.mockReturnValue("en");
       loadBookConfigMock.mockResolvedValue({ title: "My Book", language: "en", writing: {} });
       auditDraftMock.mockResolvedValueOnce({
         chapterNumber: 2,

@@ -10,9 +10,8 @@ import {
   formatWriteNextComplete,
   formatWriteNextProgress,
   formatWriteNextResultLines,
-  resolveCliLanguage,
-  type CliLanguage,
 } from "../localization.js";
+import { resolveCliLocale, resolveWritingLanguage } from "../locale.js";
 import { sendCommandNotification } from "../notify-helper.js";
 
 export const autoCommand = new Command("auto")
@@ -23,7 +22,7 @@ export const autoCommand = new Command("auto")
   .option("-q, --quiet", "Suppress console output")
   .option("--notify", "Send a notification to configured notify channels when the command finishes")
   .action(async (args: ReadonlyArray<string>, opts) => {
-    let notifyLanguage: CliLanguage = "zh";
+    const locale = resolveCliLocale();
     let notifyBookName: string | undefined;
     try {
       const root = findProjectRoot();
@@ -47,8 +46,7 @@ export const autoCommand = new Command("auto")
 
       const state = new StateManager(root);
       const book = await state.loadBookConfig(bookId);
-      const language = resolveCliLanguage(book.language);
-      notifyLanguage = language;
+      const writingLanguage = resolveWritingLanguage(book.language);
       notifyBookName = book.title ?? bookId;
       const migrationHint = await getLegacyMigrationHint(root, bookId);
       if (migrationHint && !opts.json) {
@@ -60,7 +58,7 @@ export const autoCommand = new Command("auto")
         if (opts.json) {
           log(JSON.stringify([], null, 2));
         } else {
-          log(formatAutoWriteAlreadyComplete(language, bookId, startChapter - 1, targetChapter));
+          log(formatAutoWriteAlreadyComplete(locale, bookId, startChapter - 1, targetChapter));
         }
         return;
       }
@@ -73,13 +71,13 @@ export const autoCommand = new Command("auto")
         chapterReviewMode: "auto",
       }));
 
-      if (!opts.json) log(formatAutoWriteStart(language, bookId, startChapter, targetChapter));
+      if (!opts.json) log(formatAutoWriteStart(locale, bookId, startChapter, targetChapter));
 
       const wordCount = opts.words ? parseInt(opts.words, 10) : undefined;
 
       const results = [];
       for (let chapter = startChapter; chapter <= targetChapter; chapter++) {
-        if (!opts.json) log(formatWriteNextProgress(language, chapter, targetChapter, bookId));
+        if (!opts.json) log(formatWriteNextProgress(locale, chapter, targetChapter, bookId));
 
         let result;
         try {
@@ -93,7 +91,7 @@ export const autoCommand = new Command("auto")
         results.push(result);
 
         if (!opts.json) {
-          for (const line of formatWriteNextResultLines(language, {
+          for (const line of formatWriteNextResultLines(locale, writingLanguage, {
             chapterNumber: result.chapterNumber,
             title: result.title,
             wordCount: result.wordCount,
@@ -117,7 +115,7 @@ export const autoCommand = new Command("auto")
       if (opts.json) {
         log(JSON.stringify(results, null, 2));
       } else {
-        log(formatWriteNextComplete(language));
+        log(formatWriteNextComplete(locale));
       }
 
       // The pipeline itself already sends one notification per completed
@@ -127,8 +125,8 @@ export const autoCommand = new Command("auto")
       // run wrote more than one chapter.
       if (opts.notify && results.length > 1) {
         await sendCommandNotification({
-          title: formatNotifyCommandTitle(language, "auto", notifyBookName, true),
-          body: formatNotifyBatchWriteBody(language, results.map((r) => ({
+          title: formatNotifyCommandTitle(locale, "auto", notifyBookName, true),
+          body: formatNotifyBatchWriteBody(locale, writingLanguage, results.map((r) => ({
             chapterNumber: r.chapterNumber,
             title: r.title,
             wordCount: r.wordCount,
@@ -139,8 +137,8 @@ export const autoCommand = new Command("auto")
     } catch (e) {
       if (opts.notify) {
         await sendCommandNotification({
-          title: formatNotifyCommandTitle(notifyLanguage, "auto", notifyBookName, false),
-          body: formatNotifyFailureBody(notifyLanguage, e),
+          title: formatNotifyCommandTitle(locale, "auto", notifyBookName, false),
+          body: formatNotifyFailureBody(locale, e),
         });
       }
       if (opts.json) {

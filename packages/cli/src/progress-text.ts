@@ -5,22 +5,24 @@ import {
   formatWriteNextComplete,
   formatWriteNextProgress,
   formatWriteNextResultLines,
-  type CliLanguage,
 } from "./localization.js";
+import type { WritingLanguage } from "@actalk/inkos-core";
+import type { CliLocale } from "./locale.js";
 
-export { type CliLanguage };
+export { type CliLocale } from "./locale.js";
 
 export function formatWriteStartLine(
-  language: CliLanguage,
+  locale: CliLocale,
   current: number,
   total: number,
   bookId: string,
 ): string {
-  return formatWriteNextProgress(language, current, total, bookId);
+  return formatWriteNextProgress(locale, current, total, bookId);
 }
 
 export function formatWriteCompletionLines(
-  language: CliLanguage,
+  locale: CliLocale,
+  writingLanguage: WritingLanguage,
   result: {
     readonly chapterNumber: number;
     readonly title: string;
@@ -35,51 +37,42 @@ export function formatWriteCompletionLines(
     }>;
   },
 ): string[] {
-  return [...formatWriteNextResultLines(language, result), ""];
+  return [...formatWriteNextResultLines(locale, writingLanguage, result), ""];
 }
 
-export function formatWriteDoneLine(language: CliLanguage): string {
-  return formatWriteNextComplete(language);
+export function formatWriteDoneLine(locale: CliLocale): string {
+  return formatWriteNextComplete(locale);
 }
 
 export function formatImportDiscoveryLine(
-  language: CliLanguage,
+  locale: CliLocale,
   chapterCount: number,
   bookId: string,
 ): string {
-  return formatImportChaptersDiscovery(language, chapterCount, bookId);
+  return formatImportChaptersDiscovery(locale, chapterCount, bookId);
 }
 
 export function formatImportResumeLine(
-  language: CliLanguage,
+  locale: CliLocale,
   resumeFrom: number,
 ): string {
-  return formatImportChaptersResume(language, resumeFrom);
+  return formatImportChaptersResume(locale, resumeFrom);
 }
 
 export function formatImportCompletionLines(
-  language: CliLanguage,
+  locale: CliLocale,
+  writingLanguage: WritingLanguage,
   result: {
     readonly importedCount: number;
-    readonly totalCountLabel: string;
+    readonly totalWords: number;
     readonly nextChapter: number;
     readonly bookId: string;
   },
 ): string[] {
-  return [
-    language === "en" ? "Import complete:" : "导入完成：",
-    language === "en"
-      ? `  Chapters imported: ${result.importedCount}`
-      : `  已导入章节：${result.importedCount}`,
-    language === "en"
-      ? `  Total length: ${result.totalCountLabel}`
-      : `  总长度：${result.totalCountLabel}`,
-    language === "en"
-      ? `  Next chapter number: ${result.nextChapter}`
-      : `  下一章编号：${result.nextChapter}`,
-    "",
-    language === "en"
-      ? `Run "inkos write next ${result.bookId}" to continue writing.`
-      : `运行 "inkos write next ${result.bookId}" 继续写作。`,
-  ];
+  return formatImportChaptersComplete(locale, writingLanguage, {
+    importedCount: result.importedCount,
+    totalWords: result.totalWords,
+    nextChapter: result.nextChapter,
+    continueBookId: result.bookId,
+  });
 }

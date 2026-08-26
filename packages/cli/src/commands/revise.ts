@@ -5,9 +5,8 @@ import {
   formatNotifyCommandTitle,
   formatNotifyFailureBody,
   formatNotifyReviseBody,
-  resolveCliLanguage,
-  type CliLanguage,
 } from "../localization.js";
+import { resolveCliLocale, resolveWritingLanguage } from "../locale.js";
 import { sendCommandNotification } from "../notify-helper.js";
 
 export const reviseCommand = new Command("revise")
@@ -19,7 +18,7 @@ export const reviseCommand = new Command("revise")
   .option("--json", "Output JSON")
   .option("--notify", "Send a notification to configured notify channels when the command finishes")
   .action(async (bookIdArg: string | undefined, chapterStr: string | undefined, opts) => {
-    let notifyLanguage: CliLanguage = "zh";
+    const locale = resolveCliLocale();
     let notifyBookName: string | undefined;
     try {
       const config = await loadConfig();
@@ -37,8 +36,7 @@ export const reviseCommand = new Command("revise")
 
       const state = new StateManager(root);
       const book = await state.loadBookConfig(bookId);
-      const language = resolveCliLanguage(book.language);
-      notifyLanguage = language;
+      const writingLanguage = resolveWritingLanguage(book.language);
       notifyBookName = book.title ?? bookId;
       const pipeline = new PipelineRunner(buildPipelineConfig(config, root, {
         externalContext: opts.brief,
@@ -69,8 +67,8 @@ export const reviseCommand = new Command("revise")
       // reviseDraft, so --notify always sends the completion notification here.
       if (opts.notify) {
         await sendCommandNotification({
-          title: formatNotifyCommandTitle(language, "revise", notifyBookName, true),
-          body: formatNotifyReviseBody(language, {
+          title: formatNotifyCommandTitle(locale, "revise", notifyBookName, true),
+          body: formatNotifyReviseBody(locale, writingLanguage, {
             chapterNumber: result.chapterNumber,
             applied: result.applied,
             wordCount: result.wordCount,
@@ -82,8 +80,8 @@ export const reviseCommand = new Command("revise")
     } catch (e) {
       if (opts.notify) {
         await sendCommandNotification({
-          title: formatNotifyCommandTitle(notifyLanguage, "revise", notifyBookName, false),
-          body: formatNotifyFailureBody(notifyLanguage, e),
+          title: formatNotifyCommandTitle(locale, "revise", notifyBookName, false),
+          body: formatNotifyFailureBody(locale, e),
         });
       }
       if (opts.json) {

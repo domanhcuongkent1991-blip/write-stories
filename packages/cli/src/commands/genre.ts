@@ -1,9 +1,14 @@
 import { Command } from "commander";
 import { writeFile, mkdir, readFile } from "node:fs/promises";
 import { join } from "node:path";
-import { listAvailableGenres, readGenreProfile, getBuiltinGenresDir } from "@actalk/inkos-core";
+import {
+  listAvailableGenres,
+  readGenreProfile,
+  getBuiltinGenresDir,
+  type WritingLanguage,
+} from "@actalk/inkos-core";
 import { findProjectRoot, log, logError } from "../utils.js";
-import { resolveCliLanguage, type CliLanguage } from "../localization.js";
+import { resolveWritingLanguage } from "../locale.js";
 
 export function buildGenreTemplate(
   params: {
@@ -13,9 +18,9 @@ export function buildGenreTemplate(
     readonly power: boolean;
     readonly era: boolean;
   },
-  language: CliLanguage = "zh",
+  writingLanguage: WritingLanguage,
 ): string {
-  if (language === "en") {
+  if (writingLanguage === "en") {
     return `---
 name: ${params.name}
 id: ${params.id}
@@ -157,7 +162,7 @@ genreCommand
           power: opts.power,
           era: opts.era,
         },
-        resolveCliLanguage(opts.lang),
+        resolveWritingLanguage(opts.lang),
       );
 
       await writeFile(filePath, template, "utf-8");

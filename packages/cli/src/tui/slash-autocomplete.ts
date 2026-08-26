@@ -1,4 +1,4 @@
-import type { CliLanguage } from "../localization.js";
+import type { CliLocale } from "../locale.js";
 
 const SLASH_COMMAND_VARIANTS: ReadonlyArray<{ zh: string; en: string }> = [
   { zh: "/new 输入你的想法", en: "/new describe your idea" },
@@ -17,8 +17,8 @@ const SLASH_COMMAND_VARIANTS: ReadonlyArray<{ zh: string; en: string }> = [
   { zh: "/exit", en: "/exit" },
 ];
 
-export function buildSlashCommands(language: CliLanguage = "zh"): readonly string[] {
-  return SLASH_COMMAND_VARIANTS.map((variant) => (language === "en" ? variant.en : variant.zh));
+export function buildSlashCommands(locale: CliLocale = "zh"): readonly string[] {
+  return SLASH_COMMAND_VARIANTS.map((variant) => (locale === "zh" ? variant.zh : variant.en));
 }
 
 export const SLASH_COMMANDS = buildSlashCommands("zh");

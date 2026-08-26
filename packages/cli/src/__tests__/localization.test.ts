@@ -25,7 +25,6 @@ import {
   formatWriteNextComplete,
   formatWriteNextProgress,
   formatWriteNextResultLines,
-  resolveCliLanguage,
 } from "../localization.js";
 
 const CHINESE_CHARS = /[一-鿿]/;
@@ -47,7 +46,7 @@ describe("CLI localization", () => {
     expect(formatWriteNextProgress("zh", 1, 2, "shan-he"))
       .toBe('[1/2] 为「shan-he」撰写章节...');
     expect(formatWriteNextComplete("zh")).toBe("完成。");
-    expect(formatWriteNextResultLines("zh", {
+    expect(formatWriteNextResultLines("zh", "zh", {
       chapterNumber: 3,
       title: "风雪夜",
       wordCount: 3200,
@@ -66,7 +65,7 @@ describe("CLI localization", () => {
     expect(formatWriteNextProgress("en", 2, 3, "harbor"))
       .toBe('[2/3] Writing chapter for "harbor"...');
     expect(formatWriteNextComplete("en")).toBe("Done.");
-    expect(formatWriteNextResultLines("en", {
+    expect(formatWriteNextResultLines("en", "en", {
       chapterNumber: 4,
       title: "Cold Harbor",
       wordCount: 2200,
@@ -100,7 +99,7 @@ describe("CLI localization", () => {
     expect(formatImportChaptersDiscovery("zh", 12, "shan-he"))
       .toBe('发现 12 章，准备导入到「shan-he」。');
     expect(formatImportChaptersResume("zh", 5)).toBe("从第 5 章继续导入。");
-    expect(formatImportChaptersComplete("zh", {
+    expect(formatImportChaptersComplete("zh", "zh", {
       importedCount: 8,
       totalWords: 45678,
       nextChapter: 13,
@@ -117,7 +116,7 @@ describe("CLI localization", () => {
     expect(formatImportChaptersDiscovery("en", 10, "harbor"))
       .toBe('Found 10 chapters to import into "harbor".');
     expect(formatImportChaptersResume("en", 6)).toBe("Resuming from chapter 6.");
-    expect(formatImportChaptersComplete("en", {
+    expect(formatImportChaptersComplete("en", "en", {
       importedCount: 10,
       totalWords: 18342,
       nextChapter: 11,
@@ -146,35 +145,6 @@ describe("CLI localization", () => {
       "Canon imported: story/parent_canon.md",
       "Writer and auditor will auto-detect this file for spinoff mode.",
     ]);
-  });
-});
-
-describe("resolveCliLanguage environment fallback", () => {
-  it("prefers the explicit language over any environment variable", () => {
-    expect(resolveCliLanguage("en", { INKOS_LOCALE: "zh_CN" })).toBe("en");
-    expect(resolveCliLanguage("zh", { INKOS_LOCALE: "en", LANG: "en_US.UTF-8" })).toBe("zh");
-  });
-
-  it("reads INKOS_LOCALE before the system locale variables", () => {
-    expect(resolveCliLanguage(undefined, { INKOS_LOCALE: "en", LANG: "zh_CN.UTF-8" })).toBe("en");
-    expect(resolveCliLanguage(undefined, { INKOS_LOCALE: "zh-CN", LC_ALL: "en_US.UTF-8" })).toBe("zh");
-  });
-
-  it("falls back to LC_ALL, then LC_MESSAGES, then LANG", () => {
-    expect(resolveCliLanguage(undefined, { LC_ALL: "en_US.UTF-8" })).toBe("en");
-    expect(resolveCliLanguage(undefined, { LC_MESSAGES: "en_GB.UTF-8" })).toBe("en");
-    expect(resolveCliLanguage(undefined, { LANG: "en_US.UTF-8" })).toBe("en");
-    expect(resolveCliLanguage(undefined, { LANG: "zh_CN.UTF-8" })).toBe("zh");
-  });
-
-  it("lets an unrecognized explicit language fall through to the environment", () => {
-    expect(resolveCliLanguage("fr", { LANG: "en_US.UTF-8" })).toBe("en");
-  });
-
-  it("defaults to zh when nothing is set or the locale is unrecognized", () => {
-    expect(resolveCliLanguage(undefined, {})).toBe("zh");
-    expect(resolveCliLanguage(undefined, { LANG: "C" })).toBe("zh");
-    expect(resolveCliLanguage("fr", {})).toBe("zh");
   });
 });
 

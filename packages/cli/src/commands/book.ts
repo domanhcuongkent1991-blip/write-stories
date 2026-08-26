@@ -12,8 +12,8 @@ import {
   formatBookCreateLocation,
   formatBookCreateNextStep,
   formatBookRestoreDone,
-  resolveCliLanguage,
 } from "../localization.js";
+import { resolveCliLocale, resolveWritingLanguage } from "../locale.js";
 import { createBookBackup, listBookBackups, restoreBookBackup } from "../book-backup.js";
 import { loadConfig, buildPipelineConfig, findProjectRoot, resolveBookId, log, logError } from "../utils.js";
 
@@ -32,6 +32,7 @@ bookCommand
   .option("--lang <language>", "Writing language: zh (Chinese) or en (English). Defaults from genre.")
   .option("--json", "Output JSON")
   .action(async (opts) => {
+    const locale = resolveCliLocale();
     try {
       const root = findProjectRoot();
 
@@ -60,13 +61,11 @@ bookCommand
         status: "outlining",
         targetChapters: parseInt(opts.targetChapters, 10),
         chapterWordCount: parseInt(opts.chapterWords, 10),
-        language: opts.lang ?? config.language,
+        language: resolveWritingLanguage(opts.lang ?? config.language),
         createdAt: now,
         updatedAt: now,
       };
-      const language = resolveCliLanguage(book.language);
-
-      if (!opts.json) log(formatBookCreateCreating(language, book.title, book.genre, book.platform));
+      if (!opts.json) log(formatBookCreateCreating(locale, book.title, book.genre, book.platform));
 
       const brief = opts.brief
         ? await readFile(resolve(opts.brief), "utf-8")
@@ -86,11 +85,11 @@ bookCommand
           nextStep: `inkos write next ${bookId}`,
         }, null, 2));
       } else {
-        log(formatBookCreateCreated(language, bookId));
-        log(formatBookCreateLocation(language, bookId));
-        log(formatBookCreateFoundationReady(language));
+        log(formatBookCreateCreated(locale, bookId));
+        log(formatBookCreateLocation(locale, bookId));
+        log(formatBookCreateFoundationReady(locale));
         log("");
-        log(formatBookCreateNextStep(language, bookId));
+        log(formatBookCreateNextStep(locale, bookId));
       }
     } catch (e) {
       if (opts.json) {
@@ -122,7 +121,7 @@ bookCommand
       if (opts.chapterWords) updates.chapterWordCount = parseInt(opts.chapterWords, 10);
       if (opts.targetChapters) updates.targetChapters = parseInt(opts.targetChapters, 10);
       if (opts.status) updates.status = opts.status;
-      if (opts.lang) updates.language = opts.lang;
+      if (opts.lang) updates.language = resolveWritingLanguage(opts.lang);
 
       if (Object.keys(updates).length === 0) {
         if (opts.json) {
@@ -274,14 +273,14 @@ bookCommand
       const root = findProjectRoot();
       // Backups must also work on broken books (e.g. corrupted book.json),
       // so the output language follows the environment, not the book config.
-      const language = resolveCliLanguage();
+      const locale = resolveCliLocale();
 
       if (opts.list) {
         const backups = await listBookBackups(root, bookId);
         if (opts.json) {
           log(JSON.stringify({ bookId, backups }, null, 2));
         } else if (backups.length === 0) {
-          log(formatBookBackupListEmpty(language, bookId));
+          log(formatBookBackupListEmpty(locale, bookId));
         } else {
           for (const backup of backups) {
             log(`  ${backup.id}  ${backup.createdAt}`);
@@ -294,7 +293,7 @@ bookCommand
       if (opts.json) {
         log(JSON.stringify({ bookId, backupId: result.backupId }, null, 2));
       } else {
-        log(formatBookBackupCreated(language, bookId, result.backupId));
+        log(formatBookBackupCreated(locale, bookId, result.backupId));
       }
     } catch (e) {
       if (opts.json) {
@@ -315,14 +314,14 @@ bookCommand
   .action(async (bookId: string, backupId: string, opts) => {
     try {
       const root = findProjectRoot();
-      const language = resolveCliLanguage();
+      const locale = resolveCliLocale();
 
       const result = await restoreBookBackup(root, bookId, backupId);
 
       if (opts.json) {
         log(JSON.stringify(result, null, 2));
       } else {
-        log(formatBookRestoreDone(language, {
+        log(formatBookRestoreDone(locale, {
           bookId,
           backupId: result.restoredFrom,
           preRestoreBackupId: result.preRestoreBackupId,

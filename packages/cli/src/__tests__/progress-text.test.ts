@@ -11,7 +11,7 @@ import {
 describe("CLI progress text", () => {
   it("formats Chinese write progress lines", () => {
     expect(formatWriteStartLine("zh", 1, 3, "demo-book")).toBe('[1/3] 为「demo-book」撰写章节...');
-    expect(formatWriteCompletionLines("zh", {
+    expect(formatWriteCompletionLines("zh", "zh", {
       chapterNumber: 7,
       title: "潮声夜渡",
       wordCount: 2345,
@@ -36,7 +36,7 @@ describe("CLI progress text", () => {
 
   it("formats English write progress lines", () => {
     expect(formatWriteStartLine("en", 2, 5, "demo-book")).toBe('[2/5] Writing chapter for "demo-book"...');
-    expect(formatWriteCompletionLines("en", {
+    expect(formatWriteCompletionLines("en", "en", {
       chapterNumber: 7,
       title: "Harbor Wake",
       wordCount: 2310,
@@ -57,9 +57,9 @@ describe("CLI progress text", () => {
   it("formats Chinese import progress lines", () => {
     expect(formatImportDiscoveryLine("zh", 12, "demo-book")).toBe('发现 12 章，准备导入到「demo-book」。');
     expect(formatImportResumeLine("zh", 8)).toBe("从第 8 章继续导入。");
-    expect(formatImportCompletionLines("zh", {
+    expect(formatImportCompletionLines("zh", "zh", {
       importedCount: 12,
-      totalCountLabel: "24000字",
+      totalWords: 24000,
       nextChapter: 13,
       bookId: "demo-book",
     })).toEqual([
@@ -75,9 +75,9 @@ describe("CLI progress text", () => {
   it("formats English import progress lines", () => {
     expect(formatImportDiscoveryLine("en", 12, "demo-book")).toBe('Found 12 chapters to import into "demo-book".');
     expect(formatImportResumeLine("en", 8)).toBe("Resuming from chapter 8.");
-    expect(formatImportCompletionLines("en", {
+    expect(formatImportCompletionLines("en", "en", {
       importedCount: 12,
-      totalCountLabel: "24000 words",
+      totalWords: 24000,
       nextChapter: 13,
       bookId: "demo-book",
     })).toEqual([

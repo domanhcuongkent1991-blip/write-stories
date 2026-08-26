@@ -11,9 +11,8 @@ import {
   formatWriteNextComplete,
   formatWriteNextProgress,
   formatWriteNextResultLines,
-  resolveCliLanguage,
-  type CliLanguage,
 } from "../localization.js";
+import { resolveCliLocale, resolveWritingLanguage } from "../locale.js";
 import { sendCommandNotification } from "../notify-helper.js";
 
 export const writeCommand = new Command("write")
@@ -31,7 +30,7 @@ writeCommand
   .option("-q, --quiet", "Suppress console output")
   .option("--notify", "Send a notification to configured notify channels when the command finishes")
   .action(async (bookIdArg: string | undefined, opts) => {
-    let notifyLanguage: CliLanguage = "zh";
+    const locale = resolveCliLocale();
     let notifyBookName: string | undefined;
     try {
       const root = findProjectRoot();
@@ -39,8 +38,7 @@ writeCommand
       const context = await resolveContext(opts);
       const state = new StateManager(root);
       const book = await state.loadBookConfig(bookId);
-      const language = resolveCliLanguage(book.language);
-      notifyLanguage = language;
+      const writingLanguage = resolveWritingLanguage(book.language);
       notifyBookName = book.title ?? bookId;
       const migrationHint = await getLegacyMigrationHint(root, bookId);
       if (migrationHint && !opts.json) {
@@ -59,13 +57,13 @@ writeCommand
 
       const results = [];
       for (let i = 0; i < count; i++) {
-        if (!opts.json) log(formatWriteNextProgress(language, i + 1, count, bookId));
+        if (!opts.json) log(formatWriteNextProgress(locale, i + 1, count, bookId));
 
         const result = await pipeline.writeNextChapter(bookId, wordCount);
         results.push(result);
 
         if (!opts.json) {
-          for (const line of formatWriteNextResultLines(language, {
+          for (const line of formatWriteNextResultLines(locale, writingLanguage, {
             chapterNumber: result.chapterNumber,
             title: result.title,
             wordCount: result.wordCount,
@@ -81,9 +79,9 @@ writeCommand
 
         if (result.status === "state-degraded") {
           if (!opts.json) {
-            log(language === "en"
-              ? "State repair required before continuing. Stopping batch."
-              : "需要先修复 state，已停止后续连写。");
+            log(locale === "zh"
+              ? "需要先修复 state，已停止后续连写。"
+              : "State repair required before continuing. Stopping batch.");
           }
           break;
         }
@@ -92,7 +90,7 @@ writeCommand
       if (opts.json) {
         log(JSON.stringify(results, null, 2));
       } else {
-        log(formatWriteNextComplete(language));
+        log(formatWriteNextComplete(locale));
       }
 
       // The pipeline itself already sends one notification per completed
@@ -102,8 +100,8 @@ writeCommand
       // run wrote more than one chapter.
       if (opts.notify && results.length > 1) {
         await sendCommandNotification({
-          title: formatNotifyCommandTitle(language, "write-next", notifyBookName, true),
-          body: formatNotifyBatchWriteBody(language, results.map((r) => ({
+          title: formatNotifyCommandTitle(locale, "write-next", notifyBookName, true),
+          body: formatNotifyBatchWriteBody(locale, writingLanguage, results.map((r) => ({
             chapterNumber: r.chapterNumber,
             title: r.title,
             wordCount: r.wordCount,
@@ -114,8 +112,8 @@ writeCommand
     } catch (e) {
       if (opts.notify) {
         await sendCommandNotification({
-          title: formatNotifyCommandTitle(notifyLanguage, "write-next", notifyBookName, false),
-          body: formatNotifyFailureBody(notifyLanguage, e),
+          title: formatNotifyCommandTitle(locale, "write-next", notifyBookName, false),
+          body: formatNotifyFailureBody(locale, e),
         });
       }
       if (opts.json) {
@@ -137,7 +135,7 @@ writeCommand
   .option("--json", "Output JSON")
   .option("--notify", "Send a notification to configured notify channels when the command finishes")
   .action(async (args: ReadonlyArray<string>, opts) => {
-    let notifyLanguage: CliLanguage = "zh";
+    const locale = resolveCliLocale();
     let notifyBookName: string | undefined;
     try {
       const root = findProjectRoot();
@@ -170,7 +168,7 @@ writeCommand
 
       const state = new StateManager(root);
       const book = await state.loadBookConfig(bookId);
-      notifyLanguage = resolveCliLanguage(book.language);
+      const writingLanguage = resolveWritingLanguage(book.language);
       notifyBookName = book.title ?? bookId;
       const bookDir = state.bookDir(bookId);
       const chaptersDir = join(bookDir, "chapters");
@@ -231,12 +229,11 @@ writeCommand
       }));
 
       const result = await pipeline.writeNextChapter(bookId, wordCount);
-      const language = resolveCliLanguage(book.language);
 
       if (opts.json) {
         log(JSON.stringify(result, null, 2));
       } else {
-        for (const line of formatWriteNextResultLines(language, {
+        for (const line of formatWriteNextResultLines(locale, writingLanguage, {
           chapterNumber: result.chapterNumber,
           title: result.title,
           wordCount: result.wordCount,
@@ -256,8 +253,8 @@ writeCommand
     } catch (e) {
       if (opts.notify) {
         await sendCommandNotification({
-          title: formatNotifyCommandTitle(notifyLanguage, "write-rewrite", notifyBookName, false),
-          body: formatNotifyFailureBody(notifyLanguage, e),
+          title: formatNotifyCommandTitle(locale, "write-rewrite", notifyBookName, false),
+          body: formatNotifyFailureBody(locale, e),
         });
       }
       if (opts.json) {
@@ -276,6 +273,7 @@ writeCommand
   .option("--brief <text>", "One-off guidance for how to interpret the edited chapter while syncing")
   .option("--json", "Output JSON")
   .action(async (args: ReadonlyArray<string>, opts) => {
+    const locale = resolveCliLocale();
     try {
       const root = findProjectRoot();
 
@@ -295,7 +293,6 @@ writeCommand
 
       const state = new StateManager(root);
       const book = await state.loadBookConfig(bookId);
-      const language = resolveCliLanguage(book.language);
       const config = await loadConfig();
       const pipeline = new PipelineRunner(buildPipelineConfig(config, root, {
         externalContext: opts.brief,
@@ -305,7 +302,7 @@ writeCommand
       if (opts.json) {
         log(JSON.stringify(result, null, 2));
       } else {
-        for (const line of formatWriteNextResultLines(language, {
+        for (const line of formatWriteNextResultLines(locale, resolveWritingLanguage(book.language), {
           chapterNumber: result.chapterNumber,
           title: result.title,
           wordCount: result.wordCount,
@@ -333,6 +330,7 @@ writeCommand
   .argument("<args...>", "Book ID (optional) and chapter number")
   .option("--json", "Output JSON")
   .action(async (args: ReadonlyArray<string>, opts) => {
+    const locale = resolveCliLocale();
     try {
       const root = findProjectRoot();
 
@@ -352,7 +350,6 @@ writeCommand
 
       const state = new StateManager(root);
       const book = await state.loadBookConfig(bookId);
-      const language = resolveCliLanguage(book.language);
       const config = await loadConfig();
       const pipeline = new PipelineRunner(buildPipelineConfig(config, root));
       const result = await pipeline.repairChapterState(bookId, chapter);
@@ -360,7 +357,7 @@ writeCommand
       if (opts.json) {
         log(JSON.stringify(result, null, 2));
       } else {
-        for (const line of formatWriteNextResultLines(language, {
+        for (const line of formatWriteNextResultLines(locale, resolveWritingLanguage(book.language), {
           chapterNumber: result.chapterNumber,
           title: result.title,
           wordCount: result.wordCount,

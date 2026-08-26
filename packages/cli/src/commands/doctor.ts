@@ -15,8 +15,8 @@ import {
   formatDoctorHintOpenAiProbeExhausted,
   formatDoctorHintQuota,
   formatDoctorHintStreamRequirement,
-  resolveCliLanguage,
 } from "../localization.js";
+import { resolveCliLocale } from "../locale.js";
 
 function buildDoctorProbePlans(
   preferredApiFormat: "chat" | "responses" | undefined,
@@ -108,7 +108,7 @@ export const doctorCommand = new Command("doctor")
     const root = findProjectRoot();
     // doctor is not scoped to a book, so the language comes from the environment
     // (INKOS_LOCALE -> LC_ALL/LC_MESSAGES/LANG, default zh).
-    const language = resolveCliLanguage();
+    const locale = resolveCliLocale();
 
     if (opts.repairNodeRuntime) {
       const repair = await ensureNodeRuntimePinFiles(root);
@@ -341,7 +341,7 @@ export const doctorCommand = new Command("doctor")
           checks.push({
             name: "  Hint",
             ok: false,
-            detail: formatDoctorHintQuota(language),
+            detail: formatDoctorHintQuota(locale),
           });
         }
 
@@ -349,7 +349,7 @@ export const doctorCommand = new Command("doctor")
           checks.push({
             name: "  Hint",
             ok: false,
-            detail: formatDoctorHintOpenAiProbeExhausted(language),
+            detail: formatDoctorHintOpenAiProbeExhausted(locale),
           });
         }
       }
@@ -358,14 +358,14 @@ export const doctorCommand = new Command("doctor")
       const hints: string[] = [];
 
       if (errMsg.includes("Connection error") || errMsg.includes("ECONNREFUSED") || errMsg.includes("fetch failed")) {
-        hints.push(formatDoctorHintBaseUrl(language));
+        hints.push(formatDoctorHintBaseUrl(locale));
       }
       if (errMsg.includes("400")) {
-        hints.push(formatDoctorHintStreamRequirement(language));
-        hints.push(formatDoctorHintModelName(language));
+        hints.push(formatDoctorHintStreamRequirement(locale));
+        hints.push(formatDoctorHintModelName(locale));
       }
       if (errMsg.includes("401")) {
-        hints.push(formatDoctorHintInvalidApiKey(language));
+        hints.push(formatDoctorHintInvalidApiKey(locale));
       }
 
       checks.push({

@@ -8,8 +8,8 @@ import {
   formatImportChaptersComplete,
   formatImportChaptersDiscovery,
   formatImportChaptersResume,
-  resolveCliLanguage,
 } from "../localization.js";
+import { resolveCliLocale, resolveWritingLanguage } from "../locale.js";
 
 export const importCommand = new Command("import")
   .description("Import external data into a book");
@@ -21,17 +21,17 @@ importCommand
   .requiredOption("--from <parent-book-id>", "Parent book ID to import canon from")
   .option("--json", "Output JSON")
   .action(async (targetBookIdArg: string | undefined, opts) => {
+    const locale = resolveCliLocale();
     try {
       const root = findProjectRoot();
       const targetBookId = await resolveBookId(targetBookIdArg, root);
       const config = await loadConfig();
       const state = new StateManager(root);
-      const targetBook = await state.loadBookConfig(targetBookId);
-      const language = resolveCliLanguage(targetBook.language);
+      await state.loadBookConfig(targetBookId);
 
       const pipeline = new PipelineRunner(buildPipelineConfig(config, root));
 
-      if (!opts.json) log(formatImportCanonStart(language, opts.from, targetBookId));
+      if (!opts.json) log(formatImportCanonStart(locale, opts.from, targetBookId));
 
       await pipeline.importCanon(targetBookId, opts.from);
 
@@ -42,7 +42,7 @@ importCommand
           output: "story/parent_canon.md",
         }, null, 2));
       } else {
-        for (const line of formatImportCanonComplete(language)) {
+        for (const line of formatImportCanonComplete(locale)) {
           log(line);
         }
       }
@@ -66,6 +66,7 @@ importCommand
   .option("--series", "Treat as a new series (shared universe, independent story) instead of direct continuation")
   .option("--json", "Output JSON")
   .action(async (bookIdArg: string | undefined, opts) => {
+    const locale = resolveCliLocale();
     try {
       const root = findProjectRoot();
       const bookId = await resolveBookId(bookIdArg, root);
@@ -73,7 +74,7 @@ importCommand
 
       const state = new StateManager(root);
       const book = await state.loadBookConfig(bookId);
-      const language = resolveCliLanguage(book.language);
+      const writingLanguage = resolveWritingLanguage(book.language);
       const existingChapterCount = (await state.getNextChapterNumber(bookId)) - 1;
       if (existingChapterCount > 0 && !opts.resumeFrom) {
         throw new Error(
@@ -86,9 +87,9 @@ importCommand
       const chapters = [...await loadChaptersFromPath(fromPath, opts.split)];
 
       if (!opts.json) {
-        log(formatImportChaptersDiscovery(language, chapters.length, bookId));
+        log(formatImportChaptersDiscovery(locale, chapters.length, bookId));
         if (opts.resumeFrom) {
-          log(formatImportChaptersResume(language, opts.resumeFrom));
+          log(formatImportChaptersResume(locale, opts.resumeFrom));
         }
       }
 
@@ -104,7 +105,7 @@ importCommand
       if (opts.json) {
         log(JSON.stringify(result, null, 2));
       } else {
-        for (const line of formatImportChaptersComplete(language, {
+        for (const line of formatImportChaptersComplete(locale, writingLanguage, {
           importedCount: result.importedCount,
           totalWords: result.totalWords,
           nextChapter: result.nextChapter,

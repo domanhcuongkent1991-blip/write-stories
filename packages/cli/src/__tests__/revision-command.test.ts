@@ -39,7 +39,11 @@ vi.mock("../utils.js", () => ({
 
 vi.mock("../localization.js", () => ({
   formatWriteNextResultLines: vi.fn(() => ["ok"]),
-  resolveCliLanguage: vi.fn(() => "zh"),
+}));
+
+vi.mock("../locale.js", () => ({
+  resolveCliLocale: vi.fn(() => "zh"),
+  resolveWritingLanguage: vi.fn((value?: "zh" | "en") => value ?? "zh"),
 }));
 
 describe("revision-related CLI commands", () => {
