@@ -4,6 +4,7 @@ import {
   type InteractionSession,
 } from "@actalk/inkos-core";
 import { Box, Text, useApp, useInput } from "ink";
+import { contentWidth } from "./ansi.js";
 import { processTuiAgentInput } from "./agent-input.js";
 import { describeActivityState } from "./activity-state.js";
 import { resolveComposerCaretState } from "./composer-caret.js";
@@ -80,7 +81,7 @@ export function InkTuiDashboard(props: InkTuiDashboardProps): React.JSX.Element 
   const activeAccent = props.isSubmitting ? WARM_ACCENT : statusColor(model.executionStatus);
   const composer = renderComposerDisplay(props.inputValue, model.composerPlaceholder, props.showComposerCursor ?? false);
 
-  const separatorWidth = Math.max(20, (process.stdout.columns ?? 60) - 8);
+  const separatorWidth = contentWidth(process.stdout.columns, 8, 60);
   const thinRule = "─".repeat(separatorWidth);
 
   return (

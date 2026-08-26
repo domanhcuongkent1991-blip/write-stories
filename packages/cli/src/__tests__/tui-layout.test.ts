@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { renderTuiFrame } from "../tui/app.js";
+import { box, displayWidth } from "../tui/ansi.js";
 import { drawInputHint } from "../tui/effects.js";
 
 afterEach(() => {
@@ -66,5 +67,13 @@ describe("tui layout", () => {
     drawInputHint();
 
     expect(logSpy).not.toHaveBeenCalled();
+  });
+
+  it("keeps every box border aligned at common terminal widths", () => {
+    for (const width of [20, 40, 80]) {
+      const rendered = box(["Tiếng Việt", "中文", "✅"], width);
+      const lineWidths = rendered.split("\n").map(displayWidth);
+      expect(new Set(lineWidths)).toEqual(new Set([width]));
+    }
   });
 });

@@ -6,7 +6,7 @@ import {
   brightCyan, brightGreen, brightYellow, brightBlue, brightMagenta, brightWhite,
   bgCyan, bgBlue, bgMagenta, bgGreen, bgYellow, bgRed, bgGray,
   clearLine, hideCursor, showCursor, reset,
-  badge, sleep, stripAnsi, box,
+  badge, contentWidth, padToDisplayWidth, sleep,
 } from "./ansi.js";
 import { formatModeLabel, getTuiCopy, normalizeStageLabel, resolveTuiLocale, type TuiLocale } from "./i18n.js";
 import {
@@ -187,8 +187,8 @@ export function drawInputHint(): void {
 }
 
 export function printInputSeparator(): void {
-  const w = Math.min(process.stdout.columns ?? 60, 60);
-  console.log(c("  " + "─".repeat(w - 4), gray));
+  const width = contentWidth(process.stdout.columns, 4, 60, 60);
+  console.log(c("  " + "─".repeat(width), gray));
 }
 
 /* ── Startup animation ── */
@@ -364,10 +364,9 @@ export function printStyledHelp(): void {
   for (const section of sections) {
     console.log(`  ${c(section.title, bold, cyan)}`);
     for (const [cmd, desc] of section.commands) {
-      const cmdStr = c(cmd, green);
+      const cmdStr = c(padToDisplayWidth(cmd, 24, 1), green);
       const descStr = c(desc, dim);
-      const padding = " ".repeat(Math.max(1, 24 - stripAnsi(cmd).length));
-      console.log(`    ${cmdStr}${padding}${descStr}`);
+      console.log(`    ${cmdStr}${descStr}`);
     }
     console.log();
   }
