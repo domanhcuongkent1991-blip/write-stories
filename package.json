@@ -32,6 +32,7 @@
     "typecheck": "pnpm -r typecheck",
     "audit:semantic-patterns": "node scripts/audit-semantic-patterns.mjs",
     "verify:publish-manifests": "node scripts/verify-no-workspace-protocol.mjs packages/core packages/cli packages/studio",
+    "verify:i18n-package": "node scripts/verify-i18n-package.mjs",
     "benchmark:studio-e2e": "node scripts/studio-e2e-benchmark.mjs",
     "check:i18n": "pnpm --filter @actalk/inkos-studio run check:i18n",
     "release": "pnpm check:i18n && pnpm build && pnpm test"
