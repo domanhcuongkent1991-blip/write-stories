@@ -1,4 +1,5 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
+import { setAppLanguage } from "./app-language";
 import { localizeKnownRuntimeMessage } from "./error-copy";
 
 describe("localizeKnownRuntimeMessage", () => {
@@ -30,5 +31,20 @@ describe("localizeKnownRuntimeMessage", () => {
     );
     expect(cliMessage).toContain("INKOS_LLM_API_KEY 未设置");
     expect(cliMessage).not.toMatch(/kkaiapi/i);
+  });
+
+  describe("Vietnamese UI fallback", () => {
+    afterEach(() => {
+      setAppLanguage("zh");
+    });
+
+    it("keeps known English runtime copy and raw provider details unchanged", () => {
+      setAppLanguage("vi");
+      const raw = "Latest chapter 3 is state-degraded. Repair state or rewrite that chapter before continuing.";
+      const providerDetail = "Provider detail: user says 'giữ nguyên'; request_id=req-vi-1";
+
+      expect(localizeKnownRuntimeMessage(raw)).toBe(raw);
+      expect(localizeKnownRuntimeMessage(providerDetail)).toBe(providerDetail);
+    });
   });
 });

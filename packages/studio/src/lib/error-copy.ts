@@ -31,8 +31,10 @@ const KNOWN_RUNTIME_REPLACEMENTS: ReadonlyArray<{
 ];
 
 export function localizeKnownRuntimeMessage(message: string): string {
-  // Runtime messages arrive in English; in English mode show them as-is.
-  if (getAppLanguage() === "en") return message;
+  // Runtime messages arrive in English; only the Chinese UI uses the legacy
+  // Chinese replacements. Vietnamese follows the English fallback so raw
+  // provider/runtime details are never rewritten into Chinese.
+  if (getAppLanguage() !== "zh") return message;
   let localized = message;
   for (const entry of KNOWN_RUNTIME_REPLACEMENTS) {
     localized = localized.replace(entry.pattern, entry.replacement);

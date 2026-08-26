@@ -79,11 +79,11 @@ export function stripStructuralMarkers(text: string): string {
 // (各卷OKR（Objective + Key Results）, 全书Objective, KR1/KR2…). That's useful
 // content wearing engineering clothes — relabel it to plain Chinese for the
 // reader. Only touches Chinese documents so an English book's prose is left
-// intact (no zh labels spliced into English text). In the English UI the
-// relabeling is skipped entirely — English readers should not have "Key
-// Results" rewritten into Chinese labels. Display-only; raw file is unchanged.
+// intact (no zh labels spliced into English text). Non-Chinese UIs skip the
+// relabeling entirely — readers should not have "Key Results" rewritten into
+// Chinese labels. Display-only; raw file is unchanged.
 export function relabelOkrJargon(text: string): string {
-  if (getAppLanguage() === "en") return text;
+  if (getAppLanguage() !== "zh") return text;
   if (!text || !/[一-鿿]/.test(text)) return text;
   return text
     .replace(/各卷\s*OKR\s*[（(]\s*Objective\s*\+\s*Key\s*Results\s*[）)]/gi, "各卷目标与关键节点")
@@ -158,7 +158,7 @@ const FOUNDATION_FILE_LABELS_EN: Record<string, string> = {
 export function foundationFileLabel(name: string): string | undefined {
   const zh = FOUNDATION_FILE_LABELS[name];
   if (zh === undefined) return undefined;
-  return getAppLanguage() === "en" ? FOUNDATION_FILE_LABELS_EN[name] ?? zh : zh;
+  return getAppLanguage() === "zh" ? zh : FOUNDATION_FILE_LABELS_EN[name] ?? zh;
 }
 
 // --- current_state.md ---------------------------------------------------

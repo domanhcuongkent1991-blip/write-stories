@@ -711,6 +711,37 @@ describe("English app language", () => {
   });
 });
 
+describe("runtime labels follow UI locale", () => {
+  afterEach(() => {
+    setAppLanguage("zh");
+  });
+
+  it.each([
+    ["zh", "写作", "撰写章节草稿"],
+    ["en", "Write", "Draft the chapter"],
+    ["vi", "Viết", "Soạn bản nháp chương"],
+  ] as const)("renders known server labels in %s while preserving raw result", (locale, expectedLabel, expectedStage) => {
+    setAppLanguage(locale);
+    const rawResult = "Raw provider result: giữ nguyên / original payload";
+    const exec = makeExec({
+      id: `writer-${locale}`,
+      tool: "sub_agent",
+      agent: "writer",
+      status: "running",
+      // Server may have selected writing-language labels; the UI must map known chrome labels.
+      label: "写作",
+      result: rawResult,
+      stages: [{ label: "撰写章节草稿", status: "completed" }],
+    });
+
+    const html = renderToStaticMarkup(React.createElement(ToolExecutionSteps, { executions: [exec] }));
+
+    expect(html).toContain(expectedLabel);
+    expect(html).toContain(expectedStage);
+    expect(html).toContain(rawResult);
+  });
+});
+
 describe("UtilityExecutionRow", () => {
   it("renders an expandable, default-collapsed result body when the execution has a result", () => {
     const exec = makeExec({

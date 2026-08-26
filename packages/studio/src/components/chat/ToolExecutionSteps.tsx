@@ -15,6 +15,7 @@ import {
 } from "lucide-react";
 import { buildApiUrl } from "../../hooks/use-api";
 import { translateAppString } from "../../lib/app-language";
+import type { StringKey } from "../../i18n/catalog";
 import { chatSelectors, useChatStore } from "../../store/chat";
 import { usePreferencesStore } from "../../store/preferences";
 import {
@@ -23,6 +24,100 @@ import {
 } from "./NarrativeForecastPreview";
 
 const t = translateAppString;
+
+// The API emits these labels in the project's writing language. They are
+// display-only chrome, so map the known stable labels back to catalog keys at
+// the UI boundary. Unknown labels remain untouched because they may be raw
+// tool/provider content rather than chrome.
+const RUNTIME_LABEL_KEYS: Readonly<Record<string, StringKey>> = {
+  "建书": "runtime.agent.architect",
+  "Book setup": "runtime.agent.architect",
+  "写作": "runtime.agent.writer",
+  "Writing": "runtime.agent.writer",
+  "Write": "runtime.agent.writer",
+  "审计": "runtime.agent.auditor",
+  "Audit": "runtime.agent.auditor",
+  "修订": "runtime.agent.reviser",
+  "Revision": "runtime.agent.reviser",
+  "Revise": "runtime.agent.reviser",
+  "导出": "runtime.agent.exporter",
+  "Export": "runtime.agent.exporter",
+  "读取文件": "runtime.tool.read",
+  "Read file": "runtime.tool.read",
+  "编辑文件": "runtime.tool.edit",
+  "Edit file": "runtime.tool.edit",
+  "搜索": "runtime.tool.grep",
+  "Search": "runtime.tool.grep",
+  "列目录": "runtime.tool.ls",
+  "List directory": "runtime.tool.ls",
+  "整理上下文": "runtime.tool.contextCompression",
+  "Organize context": "runtime.tool.contextCompression",
+  "确认动作": "runtime.tool.proposeAction",
+  "Confirm action": "runtime.tool.proposeAction",
+  "短篇生产": "runtime.tool.shortFiction",
+  "Short fiction": "runtime.tool.shortFiction",
+  "生成封面": "runtime.tool.generateCover",
+  "Cover generation": "runtime.tool.generateCover",
+  "剧本创作": "runtime.tool.createScript",
+  "Script creation": "runtime.tool.createScript",
+  "分镜创作": "runtime.tool.createStoryboard",
+  "Storyboard creation": "runtime.tool.createStoryboard",
+  "互动影游": "runtime.tool.createInteractiveFilm",
+  "Interactive film": "runtime.tool.createInteractiveFilm",
+  "编辑互动世界": "runtime.tool.editWorld",
+  "Edit interactive world": "runtime.tool.editWorld",
+  "启动互动世界": "runtime.tool.startWorld",
+  "Start interactive world": "runtime.tool.startWorld",
+  "重做互动回合": "runtime.tool.reviseTurn",
+  "Redo interactive turn": "runtime.tool.reviseTurn",
+  "推进互动世界": "runtime.tool.advanceWorld",
+  "Advance interactive world": "runtime.tool.advanceWorld",
+  "剧情多线推演": "runtime.tool.createForecast",
+  "Narrative forecast": "runtime.tool.createForecast",
+  "核验剧情推演": "runtime.tool.recheckForecast",
+  "Recheck forecast": "runtime.tool.recheckForecast",
+  "采用候选分支": "runtime.tool.selectBranch",
+  "Select candidate branch": "runtime.tool.selectBranch",
+  "生成基础设定": "progress.generateFoundation",
+  "Generate foundation": "progress.generateFoundation",
+  "保存书籍配置": "progress.saveBookConfig",
+  "Save book config": "progress.saveBookConfig",
+  "写入基础设定文件": "progress.writeFoundationFiles",
+  "Write foundation files": "progress.writeFoundationFiles",
+  "初始化控制文档": "progress.initializeControlDocs",
+  "Initialize control documents": "progress.initializeControlDocs",
+  "创建初始快照": "progress.createInitialSnapshot",
+  "Create initial snapshot": "progress.createInitialSnapshot",
+  "准备章节输入": "progress.prepareChapterInput",
+  "Prepare chapter input": "progress.prepareChapterInput",
+  "撰写章节草稿": "progress.draftChapter",
+  "Write chapter draft": "progress.draftChapter",
+  "落盘最终章节": "progress.saveFinalChapter",
+  "Save final chapter": "progress.saveFinalChapter",
+  "生成最终真相文件": "progress.generateFinalTruthFiles",
+  "Generate final truth files": "progress.generateFinalTruthFiles",
+  "校验真相文件变更": "progress.validateTruthChanges",
+  "Validate truth file changes": "progress.validateTruthChanges",
+  "同步记忆索引": "progress.syncMemoryIndex",
+  "Sync memory index": "progress.syncMemoryIndex",
+  "更新章节索引与快照": "progress.updateChapterIndexSnapshot",
+  "Update chapter index and snapshot": "progress.updateChapterIndexSnapshot",
+  "更新索引与快照": "progress.updateChapterIndexSnapshot",
+  "Update index and snapshot": "progress.updateChapterIndexSnapshot",
+  "加载修订上下文": "interactive.context.title",
+  "Load revision context": "interactive.context.title",
+  "修订章节": "interactive.audit.chapterRevision",
+  "Revise chapter": "interactive.audit.chapterRevision",
+  "落盘修订结果": "interactive.audit.fixed",
+  "Save revision result": "interactive.audit.fixed",
+  "审计章节": "book.audit",
+  "Audit chapter": "book.audit",
+};
+
+function localizeRuntimeLabel(label: string): string {
+  const key = RUNTIME_LABEL_KEYS[label];
+  return key ? t(key) : label;
+}
 
 // -- Status rendering helpers --
 
@@ -996,7 +1091,7 @@ function PipelineExecution({
       <CollapsibleTrigger className="w-full flex items-center justify-between gap-2 px-3 py-2.5 rounded-xl hover:bg-card/80 transition-colors cursor-pointer">
         <div className="flex items-center gap-2 min-w-0">
           <span className="text-[16px] leading-6 font-medium text-foreground truncate">
-            {exec.label}
+            {localizeRuntimeLabel(exec.label)}
             {bookId && <span className="text-muted-foreground font-normal"> · {bookId}</span>}
           </span>
         </div>
@@ -1045,7 +1140,7 @@ function PipelineExecution({
                 >
                   <StageIcon status={stage.status} />
                   <div className="min-w-0 flex-1">
-                    <div className="truncate">{stage.label}</div>
+                    <div className="truncate">{localizeRuntimeLabel(stage.label)}</div>
                     {stage.progress && (
                       <div className="mt-0.5 text-[10px] text-muted-foreground/70">
                         {formatProgress(stage.progress)}

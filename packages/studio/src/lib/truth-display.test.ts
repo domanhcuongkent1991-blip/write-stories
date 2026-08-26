@@ -276,3 +276,17 @@ describe("English UI (app language = en)", () => {
     expect(foundationFileLabel("outline/story_frame.md")).toBe("故事基石");
   });
 });
+
+describe("Vietnamese UI fallback", () => {
+  afterEach(() => {
+    setAppLanguage("zh");
+  });
+
+  it("keeps raw Chinese document text unchanged and uses English foundation labels", () => {
+    setAppLanguage("vi");
+    const zhDoc = "## 各卷OKR（Objective + Key Results）\nKR1：账户达到80万。";
+
+    expect(relabelOkrJargon(zhDoc)).toBe(zhDoc);
+    expect(foundationFileLabel("outline/story_frame.md")).toBe("Story Foundation");
+  });
+});
