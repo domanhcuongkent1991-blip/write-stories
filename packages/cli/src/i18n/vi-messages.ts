@@ -355,11 +355,6 @@ export const VI_MESSAGES = {
   "short.coverError": "Bìa: đã bỏ qua ({detail})",
   "short.failure": "Lượt truyện ngắn thất bại: {detail}",
   "update.current": "Phiên bản hiện tại: {version}",
-  "update.checking": "Đang kiểm tra npm registry...",
-  "update.currentLatest": "Đã là phiên bản mới nhất ({version}).",
-  "update.newer": "Đang chạy phiên bản phát triển mới hơn ({current} > {remote}). Đã bỏ qua.",
-  "update.updating": "Đang cập nhật: {current} → {remote}",
-  "update.updated": "Đã cập nhật lên {version}.",
-  "update.failure": "Cập nhật thất bại: {detail}",
-  "update.manual": "Cũng có thể cập nhật thủ công: npm install -g @actalk/inkos@latest",
+  "update.sourceBuild": "Đây là bản dựng từ mã nguồn hoặc fork; tính năng tự cập nhật đã bị tắt.",
+  "update.reviewedGit": "Hãy cập nhật checkout mã nguồn bằng các thay đổi Git đã được rà soát.",
 } satisfies Partial<Record<CliMessageKey, string>>;

@@ -530,13 +530,8 @@ export const CLI_MESSAGES = {
   "short.coverError": { zh: "封面：已跳过（{detail}）", en: "Cover: skipped ({detail})" },
   "short.failure": { zh: "短篇任务失败：{detail}", en: "Short run failed: {detail}" },
   "update.current": { zh: "当前版本：{version}", en: "Current version: {version}" },
-  "update.checking": { zh: "正在检查 npm registry...", en: "Checking npm registry..." },
-  "update.currentLatest": { zh: "已经是最新版本（{version}）。", en: "Already up to date ({version})." },
-  "update.newer": { zh: "当前开发版本更新（{current} > {remote}），已跳过。", en: "You're running a newer development version ({current} > {remote}). Skipping." },
-  "update.updating": { zh: "正在更新：{current} → {remote}", en: "Updating: {current} → {remote}" },
-  "update.updated": { zh: "已更新到 {version}。", en: "Updated to {version}." },
-  "update.failure": { zh: "更新失败：{detail}", en: "Update failed: {detail}" },
-  "update.manual": { zh: "也可以手动更新：npm install -g @actalk/inkos@latest", en: "You can also update manually: npm install -g @actalk/inkos@latest" },
+  "update.sourceBuild": { zh: "这是源代码或 fork 构建，已禁用自更新。", en: "This is a source or fork build; self-update is disabled." },
+  "update.reviewedGit": { zh: "请通过经过审核的 Git 更改来更新源代码检出。", en: "Update the source checkout through reviewed Git changes." },
 } as const;
 
 export type CliMessageKey = keyof typeof CLI_MESSAGES;
