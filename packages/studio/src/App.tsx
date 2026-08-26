@@ -29,7 +29,7 @@ import { useSSE } from "./hooks/use-sse";
 import { useSessionEvents } from "./hooks/use-session-events";
 import { useTheme } from "./hooks/use-theme";
 import { useI18n } from "./hooks/use-i18n";
-import { setAppLanguage, tr } from "./lib/app-language";
+import { setAppLanguage } from "./lib/app-language";
 import { getUiLocalePreference, type UiLocale } from "./lib/ui-locale";
 import { postApi, useApi } from "./hooks/use-api";
 import { Sun, Moon } from "lucide-react";
@@ -72,9 +72,9 @@ export function App() {
   const isDark = theme === "dark";
 
   // 全局语言同步：app-language 是模块级单例，供用不了 hook 的代码（lib 纯函数、
-  // store slice）读取。这里在渲染期同步赋值，让子组件在同一次渲染里调用 tr() 时
+  // store slice）读取。这里在渲染期同步赋值，让子组件在同一次渲染里调用内联翻译函数时
   // 就读到正确语言（只用 effect 的话，effect 要等本次渲染提交后才执行，本次渲染
-  // 里的 tr() 会读到旧语言）。赋值是幂等的模块变量写入，StrictMode 重复渲染无影
+  // 里的内联翻译函数会读到旧语言）。赋值是幂等的模块变量写入，StrictMode 重复渲染无影
   // 响；下面的 effect 在语言加载完成和切换时再设置一次，保证提交后的值也正确。
   setAppLanguage(locale);
   useEffect(() => {
@@ -402,12 +402,12 @@ export function App() {
             </div>
           )}
           {route.page === "film-studio" && (
-            <Suspense fallback={<div className="p-6 text-sm">{tr("加载创作向导…", "Loading creation wizard…")}</div>}>
+            <Suspense fallback={<div className="p-6 text-sm">{t("workflow.app.loadingCreationWizard")}</div>}>
               <FilmWizard projectId={route.projectId} nav={nav} theme={theme} t={t} sse={sse} />
             </Suspense>
           )}
           {route.page === "flow" && (
-            <Suspense fallback={<div className="p-6 text-sm">{tr("加载流程图…", "Loading flow view…")}</div>}>
+            <Suspense fallback={<div className="p-6 text-sm">{t("workflow.app.loadingFlowView")}</div>}>
               <FlowView projectId={route.projectId} nav={nav} theme={theme} t={t} />
             </Suspense>
           )}

@@ -3,8 +3,10 @@ import { cjk } from "@streamdown/cjk";
 import { AlertCircle, Loader2, Pencil, Save, X } from "lucide-react";
 import { Streamdown } from "streamdown";
 import { fetchJson } from "../../hooks/use-api";
-import { tr } from "../../lib/app-language";
+import { translateAppString } from "../../lib/app-language";
 import { useChatStore } from "../../store/chat";
+
+const t = translateAppString;
 
 interface ProjectArtifactPayload {
   readonly path: string;
@@ -105,7 +107,7 @@ export function ProjectArtifactDrawer() {
     <div className="fixed inset-0 z-[80] flex justify-end bg-background/35 backdrop-blur-[2px]">
       <button
         type="button"
-        aria-label={tr("关闭生成物预览", "Close artifact preview")}
+        aria-label={t("artifact.closePreview")}
         className="absolute inset-0 cursor-default"
         onClick={close}
       />
@@ -113,7 +115,7 @@ export function ProjectArtifactDrawer() {
         <header className="flex items-start justify-between gap-4 border-b border-border/45 px-6 py-5">
           <div className="min-w-0">
             <div className="text-[13px] font-medium uppercase tracking-[0.18em] text-muted-foreground/65">
-              {tr("生成物", "Artifact")}
+              {t("artifact.title")}
             </div>
             <h2 className="mt-1 truncate text-[22px] font-semibold text-foreground">
               {displayName(path)}
@@ -133,7 +135,7 @@ export function ProjectArtifactDrawer() {
                 className="inline-flex items-center gap-2 rounded-lg border border-border/60 bg-secondary/35 px-3 py-2 text-[14px] font-medium text-foreground transition hover:border-primary/45 hover:bg-primary/10"
               >
                 <Pencil size={15} />
-                {tr("编辑", "Edit")}
+                {t("common.edit")}
               </button>
             )}
             {editing && (
@@ -147,7 +149,7 @@ export function ProjectArtifactDrawer() {
                   disabled={saving}
                   className="rounded-lg border border-border/60 px-3 py-2 text-[14px] font-medium text-muted-foreground transition hover:bg-secondary/50 disabled:opacity-60"
                 >
-                  {tr("取消", "Cancel")}
+                  {t("common.cancel")}
                 </button>
                 <button
                   type="button"
@@ -156,7 +158,7 @@ export function ProjectArtifactDrawer() {
                   className="inline-flex items-center gap-2 rounded-lg bg-primary px-3 py-2 text-[14px] font-semibold text-primary-foreground shadow-sm transition hover:bg-primary/90 disabled:opacity-60"
                 >
                   {saving ? <Loader2 size={15} className="animate-spin" /> : <Save size={15} />}
-                  {tr("保存", "Save")}
+                  {t("common.save")}
                 </button>
               </>
             )}
@@ -164,7 +166,7 @@ export function ProjectArtifactDrawer() {
               type="button"
               onClick={close}
               className="rounded-lg border border-border/50 p-2 text-muted-foreground transition hover:bg-secondary/60 hover:text-foreground"
-              aria-label={tr("关闭", "Close")}
+              aria-label={t("common.close")}
             >
               <X size={18} />
             </button>
@@ -182,7 +184,7 @@ export function ProjectArtifactDrawer() {
           {loading ? (
             <div className="flex h-full items-center justify-center text-muted-foreground">
               <Loader2 size={22} className="mr-2 animate-spin" />
-              {tr("正在读取生成物...", "Loading artifact...")}
+              {t("artifact.loading")}
             </div>
           ) : editing ? (
             <textarea
@@ -205,7 +207,7 @@ export function ProjectArtifactDrawer() {
             )
           ) : (
             <div className="rounded-xl border border-dashed border-border/55 px-4 py-8 text-center text-[14px] text-muted-foreground">
-              {tr("没有可预览内容。", "Nothing to preview.")}
+              {t("artifact.empty")}
             </div>
           )}
         </div>

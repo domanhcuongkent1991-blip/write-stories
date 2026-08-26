@@ -20,7 +20,8 @@ import type { ComponentProps, ReactNode } from "react";
 import { isValidElement } from "react";
 
 import { CodeBlock } from "./code-block";
-import { tr } from "@/lib/app-language";
+import { translateAppString } from "@/lib/app-language";
+import type { StringKey } from "@/i18n/catalog";
 
 export type ToolProps = ComponentProps<typeof Collapsible>;
 
@@ -45,16 +46,14 @@ export type ToolHeaderProps = {
     }
 );
 
-// [zh, en] tuples resolved through tr() at render time so the badge follows
-// the current app language instead of the language active at module load.
-const statusLabels: Record<ToolPart["state"], readonly [string, string]> = {
-  "approval-requested": ["等待确认", "Awaiting approval"],
-  "approval-responded": ["已响应", "Responded"],
-  "input-available": ["执行中", "Running"],
-  "input-streaming": ["处理中", "Processing"],
-  "output-available": ["已完成", "Completed"],
-  "output-denied": ["已拒绝", "Denied"],
-  "output-error": ["出错", "Error"],
+const statusLabelKeys: Record<ToolPart["state"], StringKey> = {
+  "approval-requested": "workflow.tool.awaitingApproval",
+  "approval-responded": "workflow.tool.responded",
+  "input-available": "workflow.tool.running",
+  "input-streaming": "workflow.tool.processing",
+  "output-available": "workflow.tool.completed",
+  "output-denied": "workflow.tool.denied",
+  "output-error": "workflow.tool.error",
 };
 
 const statusIcons: Record<ToolPart["state"], ReactNode> = {
@@ -70,7 +69,7 @@ const statusIcons: Record<ToolPart["state"], ReactNode> = {
 export const getStatusBadge = (status: ToolPart["state"]) => (
   <Badge className="gap-1.5 rounded-full text-xs" variant="secondary">
     {statusIcons[status]}
-    {tr(statusLabels[status][0], statusLabels[status][1])}
+    {translateAppString(statusLabelKeys[status])}
   </Badge>
 );
 

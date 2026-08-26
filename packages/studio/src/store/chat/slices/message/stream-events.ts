@@ -1,7 +1,7 @@
 import type { StateCreator } from "zustand";
 import type { ChatStore, Message, MessageActions, MessagePart, PipelineStage, ToolExecution } from "../../types";
 import { shouldRefreshSidebarForTool } from "../../message-policy";
-import { tr } from "../../../../lib/app-language";
+import { translateAppString } from "../../../../lib/app-language";
 import {
   deriveFlat,
   extractToolDetails,
@@ -643,23 +643,23 @@ export function attachSessionStreamListeners({
 
 function compressionLabel(category: ContextCompressionCategory): string {
   return category === "session_context"
-    ? tr("整理会话记忆", "Organize session memory")
-    : tr("压缩故事上下文", "Compress story context");
+    ? translateAppString("chat.compression.organizeSession")
+    : translateAppString("chat.compression.storyContext");
 }
 
 function compressionSourceSummary(sources: readonly string[] | undefined): string {
   if (!sources || sources.length === 0) return "";
   const preview = sources.slice(0, 3).join(", ");
   const suffix = sources.length > 3 ? ` +${sources.length - 3}` : "";
-  return `${tr("来源", "sources")} ${sources.length}: ${preview}${suffix}`;
+  return `${translateAppString("chat.compression.sources")} ${sources.length}: ${preview}${suffix}`;
 }
 
 function compressionProgress(data: ContextCompressionEventPayload): PipelineStage["progress"] | undefined {
   if (data.phase !== "start") return undefined;
   const parts = [
-    data.protectedTokens !== undefined ? `${tr("保护", "protected")} ${data.protectedTokens}` : "",
-    data.compressibleTokens !== undefined ? `${tr("可压缩", "compressible")} ${data.compressibleTokens}` : "",
-    data.budgetTokens !== undefined ? `${tr("预算", "budget")} ${data.budgetTokens}` : "",
+    data.protectedTokens !== undefined ? `${translateAppString("chat.compression.protected")} ${data.protectedTokens}` : "",
+    data.compressibleTokens !== undefined ? `${translateAppString("chat.compression.compressible")} ${data.compressibleTokens}` : "",
+    data.budgetTokens !== undefined ? `${translateAppString("chat.compression.budget")} ${data.budgetTokens}` : "",
     compressionSourceSummary(data.sources),
   ].filter(Boolean);
   return {
@@ -705,7 +705,7 @@ function applyContextCompressionToExecution(
       ...execution,
       stages,
       status: "error",
-      error: data.message ?? `${compressionLabel(category)}${tr("失败", " failed")}`,
+      error: data.message ?? `${compressionLabel(category)}${translateAppString("chat.compression.failedSuffix")}`,
     };
   }
   return { ...execution, stages };
@@ -722,7 +722,7 @@ function applyContextCompressionToParts(
     running.stages = upsertCompressionStage(running.stages, category, phase, data);
     if (phase === "error") {
       running.status = "error";
-      running.error = data.message ?? `${compressionLabel(category)}${tr("失败", " failed")}`;
+      running.error = data.message ?? `${compressionLabel(category)}${translateAppString("chat.compression.failedSuffix")}`;
     }
     return;
   }
@@ -744,6 +744,6 @@ function applyContextCompressionToParts(
   execution.label = compressionLabel(category);
   execution.stages = upsertCompressionStage(execution.stages, category, phase, data);
   if (phase !== "start") execution.completedAt = Date.now();
-  if (phase === "error") execution.error = data.message ?? `${compressionLabel(category)}${tr("失败", " failed")}`;
+  if (phase === "error") execution.error = data.message ?? `${compressionLabel(category)}${translateAppString("chat.compression.failedSuffix")}`;
   if (!existing) parts.push({ type: "tool", execution });
 }

@@ -117,7 +117,7 @@ export function ChapterWorkspacePanel({
   };
 
   const restoreVersion = (versionId: string) => {
-    if (!window.confirm(t("reader.restoreConfirm"))) return;
+    if (!globalThis["confirm"](t("reader.restoreConfirm"))) return;
     void runAction("restore", async () => {
       await fetchJson(
         `/books/${bookId}/chapters/${chapterNumber}/versions/${versionId}/restore`,
@@ -130,7 +130,7 @@ export function ChapterWorkspacePanel({
   };
 
   const deleteChapter = () => {
-    if (!window.confirm(t("reader.deleteChapterConfirm"))) return;
+    if (!globalThis["confirm"](t("reader.deleteChapterConfirm"))) return;
     void runAction("delete", async () => {
       await fetchJson(`/books/${bookId}/chapters/${chapterNumber}`, { method: "DELETE" });
       onChapterDeleted();

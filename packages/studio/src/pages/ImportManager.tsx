@@ -4,7 +4,6 @@ import type { Theme } from "../hooks/use-theme";
 import type { TFunction } from "../hooks/use-i18n";
 import { useI18n } from "../hooks/use-i18n";
 import { useColors } from "../hooks/use-colors";
-import { tr } from "../lib/app-language";
 import { FileInput, BookCopy, Feather, BookMarked, Upload, Wand2 } from "lucide-react";
 import { waitForStudioBookReady } from "../lib/book-ready";
 
@@ -106,7 +105,7 @@ export function ImportManager({ nav, theme, t, initialTab }: { nav: Nav; theme: 
           filename: canonFile.name,
         });
       }
-      setStatus(tr("母本导入成功", "Canon imported successfully"));
+      setStatus(t("workflow.import.canonSuccess"));
     } catch (e) {
       setStatus(`Error: ${e instanceof Error ? e.message : String(e)}`);
     }
@@ -241,7 +240,7 @@ export function ImportManager({ nav, theme, t, initialTab }: { nav: Nav; theme: 
         {tab === "canon" && (
           <>
             <p className="text-sm text-muted-foreground">
-              {tr("母本可以来自已有 InkOS 书籍，也可以直接上传外部 TXT、Markdown 或 PDF 小说。", "Use an existing InkOS book or upload an external TXT, Markdown, or PDF novel as canon.")}
+              {t("workflow.import.canonHint")}
             </p>
             <div className="inline-flex rounded-lg border border-border bg-secondary/20 p-1">
               {(["book", "file"] as const).map((sourceType) => (
@@ -251,7 +250,7 @@ export function ImportManager({ nav, theme, t, initialTab }: { nav: Nav; theme: 
                   onClick={() => setCanonSourceType(sourceType)}
                   className={`rounded-md px-3 py-1.5 text-sm ${canonSourceType === sourceType ? "bg-card text-foreground shadow-sm" : "text-muted-foreground"}`}
                 >
-                  {sourceType === "book" ? tr("已有书籍", "Existing book") : tr("上传外部母本", "Upload external canon")}
+                  {sourceType === "book" ? t("workflow.import.existingBook") : t("workflow.import.uploadCanon")}
                 </button>
               ))}
             </div>
@@ -265,7 +264,7 @@ export function ImportManager({ nav, theme, t, initialTab }: { nav: Nav; theme: 
               <label className="flex cursor-pointer items-center gap-3 rounded-lg border border-dashed border-border bg-secondary/20 px-4 py-4 text-sm hover:bg-secondary/30">
                 <Upload size={18} className="text-primary" />
                 <span className="min-w-0 flex-1 truncate">
-                  {canonFile?.name ?? tr("选择 TXT、Markdown 或 PDF 文件", "Choose a TXT, Markdown, or PDF file")}
+                  {canonFile?.name ?? t("workflow.import.chooseFile")}
                 </span>
                 <input
                   type="file"
@@ -296,21 +295,21 @@ export function ImportManager({ nav, theme, t, initialTab }: { nav: Nav; theme: 
             <div className="grid grid-cols-3 gap-3">
               <select value={ffMode} onChange={(e) => setFfMode(e.target.value)}
                 className="px-3 py-2 rounded-lg bg-secondary/30 border border-border text-sm">
-                <option value="canon">{tr("原著向", "Canon-compliant")}</option>
-                <option value="au">{tr("架空 AU", "Alternate Universe (AU)")}</option>
-                <option value="ooc">{tr("性格偏离 OOC", "Out of Character (OOC)")}</option>
-                <option value="cp">{tr("配对 CP", "Pairing (CP)")}</option>
+                <option value="canon">{t("workflow.import.modeCanon")}</option>
+                <option value="au">{t("workflow.import.modeAu")}</option>
+                <option value="ooc">{t("workflow.import.modeOoc")}</option>
+                <option value="cp">{t("workflow.import.modeCp")}</option>
               </select>
               <select value={ffGenre} onChange={(e) => setFfGenre(e.target.value)}
                 className="px-3 py-2 rounded-lg bg-secondary/30 border border-border text-sm">
-                <option value="other">{tr("其他", "Other")}</option>
-                <option value="xuanhuan">{tr("玄幻", "Xuanhuan Fantasy")}</option>
-                <option value="urban">{tr("都市", "Urban")}</option>
-                <option value="xianxia">{tr("仙侠", "Xianxia")}</option>
+                <option value="other">{t("workflow.import.genreOther")}</option>
+                <option value="xuanhuan">{t("workflow.import.genreXuanhuan")}</option>
+                <option value="urban">{t("workflow.import.genreUrban")}</option>
+                <option value="xianxia">{t("workflow.import.genreXianxia")}</option>
               </select>
               <select value={ffLang} onChange={(e) => setFfLang(e.target.value as "zh" | "en")}
                 className="px-3 py-2 rounded-lg bg-secondary/30 border border-border text-sm">
-                <option value="zh">{tr("中文", "Chinese")}</option>
+                <option value="zh">{t("workflow.import.chinese")}</option>
                 <option value="en">English</option>
               </select>
             </div>
@@ -358,14 +357,14 @@ export function ImportManager({ nav, theme, t, initialTab }: { nav: Nav; theme: 
             <div className="grid grid-cols-2 gap-3">
               <select value={imGenre} onChange={(e) => setImGenre(e.target.value)}
                 className="px-3 py-2 rounded-lg bg-secondary/30 border border-border text-sm">
-                <option value="other">{tr("其他", "Other")}</option>
-                <option value="xuanhuan">{tr("玄幻", "Xuanhuan Fantasy")}</option>
-                <option value="urban">{tr("都市", "Urban")}</option>
-                <option value="xianxia">{tr("仙侠", "Xianxia")}</option>
+                <option value="other">{t("workflow.import.genreOther")}</option>
+                <option value="xuanhuan">{t("workflow.import.genreXuanhuan")}</option>
+                <option value="urban">{t("workflow.import.genreUrban")}</option>
+                <option value="xianxia">{t("workflow.import.genreXianxia")}</option>
               </select>
               <select value={imLang} onChange={(e) => setImLang(e.target.value as "zh" | "en")}
                 className="px-3 py-2 rounded-lg bg-secondary/30 border border-border text-sm">
-                <option value="zh">{tr("中文", "Chinese")}</option>
+                <option value="zh">{t("workflow.import.chinese")}</option>
                 <option value="en">English</option>
               </select>
             </div>

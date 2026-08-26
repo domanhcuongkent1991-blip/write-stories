@@ -3,7 +3,19 @@ import { createStore } from "zustand/vanilla";
 import type { ChatStore } from "../../types";
 import { initialChatState } from "../../initialState";
 import { createCreateSlice } from "../create/action";
-import { createMessageSlice } from "./action";
+import { createMessageSlice, resolveAgentInstruction } from "./action";
+import { setAppLanguage } from "../../../../lib/app-language";
+
+describe("raw agent instruction boundary", () => {
+  it("does not translate explicit or attachment-only agent content into the UI locale", () => {
+    setAppLanguage("vi");
+
+    expect(resolveAgentInstruction("  nguyên văn  ")).toBe("nguyên văn");
+    expect(resolveAgentInstruction("   ")).toBe("Please read the files I uploaded.");
+
+    setAppLanguage("zh");
+  });
+});
 
 const { fetchJson } = vi.hoisted(() => ({
   fetchJson: vi.fn(),

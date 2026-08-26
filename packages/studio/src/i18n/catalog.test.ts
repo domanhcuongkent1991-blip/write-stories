@@ -1,6 +1,8 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
+  BASELINE_1_8_KEYS,
   BASE_STRINGS,
+  findPlaceholderMismatches,
   formatLocalizedString,
   getPlaceholderNames,
   translateString,
@@ -39,20 +41,29 @@ describe("Studio localization catalog", () => {
   });
 
   it("provides direct Vietnamese copy for every 1.8.0 baseline key", () => {
-    const missingKeys = (Object.keys(BASE_STRINGS) as StringKey[])
+    const missingKeys = BASELINE_1_8_KEYS
       .filter((key) => !(key in VI_CATALOG));
 
     expect(missingKeys).toEqual([]);
   });
 
   it("preserves every named placeholder in Vietnamese copy", () => {
-    const mismatches = (Object.keys(BASE_STRINGS) as StringKey[])
-      .filter((key) => {
-        const expected = getPlaceholderNames(BASE_STRINGS[key].en);
-        const actual = getPlaceholderNames(VI_CATALOG[key] ?? "");
-        return JSON.stringify(actual) !== JSON.stringify(expected);
-      });
+    expect(findPlaceholderMismatches(BASE_STRINGS, VI_CATALOG)).toEqual([]);
+  });
 
-    expect(mismatches).toEqual([]);
+  it("covers baseline action feedback that was previously hard-coded", () => {
+    expect(VI_CATALOG).toMatchObject({
+      "truth.saveFailed": "Không thể lưu tệp dữ kiện",
+      "dash.writeFailed": "Không thể viết chương tiếp theo",
+      "reader.saveFailed": "Không thể lưu chương",
+      "reader.approveFailed": "Không thể duyệt chương",
+      "reader.rejectFailed": "Không thể từ chối chương",
+      "book.auditFailed": "Không thể kiểm tra sách",
+      "book.exportFailed": "Không thể xuất sách",
+      "genre.copiedToProject": "Đã sao chép {id} vào genres/ của dự án",
+      "genre.createFailed": "Không thể tạo thể loại",
+      "genre.updateFailed": "Không thể cập nhật thể loại",
+      "genre.deleteFailed": "Không thể xóa thể loại",
+    });
   });
 });

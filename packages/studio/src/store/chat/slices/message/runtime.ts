@@ -8,36 +8,35 @@ import type {
   ToolExecution,
 } from "../../types";
 import { localizeKnownRuntimeMessage } from "../../../../lib/error-copy";
-import { tr } from "../../../../lib/app-language";
+import { translateAppString } from "../../../../lib/app-language";
+import type { StringKey } from "../../../../i18n/catalog";
 
 const NULL_BOOK_KEY = "__null__";
 
-// [zh, en] tuples resolved through tr() at call time so labels follow the
-// current app language instead of the language active at module load.
-const AGENT_LABELS: Record<string, readonly [string, string]> = {
-  architect: ["建书", "Create book"],
-  writer: ["写作", "Write"],
-  auditor: ["审计", "Audit"],
-  reviser: ["修订", "Revise"],
-  exporter: ["导出", "Export"],
+const AGENT_LABEL_KEYS: Record<string, StringKey> = {
+  architect: "runtime.agent.architect",
+  writer: "runtime.agent.writer",
+  auditor: "runtime.agent.auditor",
+  reviser: "runtime.agent.reviser",
+  exporter: "runtime.agent.exporter",
 };
 
-const TOOL_LABELS: Record<string, readonly [string, string]> = {
-  read: ["读取文件", "Read file"],
-  edit: ["编辑文件", "Edit file"],
-  grep: ["搜索", "Search"],
-  ls: ["列目录", "List directory"],
-  context_compression: ["整理上下文", "Organize context"],
-  propose_action: ["确认动作", "Confirm action"],
-  short_fiction_run: ["短篇生产", "Short fiction run"],
-  generate_cover: ["生成封面", "Generate cover"],
-  script_create: ["剧本创作", "Create script"],
-  storyboard_create: ["分镜创作", "Create storyboard"],
-  interactive_film_create: ["互动影游", "Interactive film"],
-  play_edit: ["编辑互动世界", "Edit interactive world"],
-  play_start: ["启动互动世界", "Start interactive world"],
-  play_revise: ["重做互动回合", "Redo play turn"],
-  play_step: ["推进互动世界", "Advance interactive world"],
+const TOOL_LABEL_KEYS: Record<string, StringKey> = {
+  read: "runtime.tool.read",
+  edit: "runtime.tool.edit",
+  grep: "runtime.tool.grep",
+  ls: "runtime.tool.ls",
+  context_compression: "runtime.tool.contextCompression",
+  propose_action: "runtime.tool.proposeAction",
+  short_fiction_run: "runtime.tool.shortFiction",
+  generate_cover: "runtime.tool.generateCover",
+  script_create: "runtime.tool.createScript",
+  storyboard_create: "runtime.tool.createStoryboard",
+  interactive_film_create: "runtime.tool.createInteractiveFilm",
+  play_edit: "runtime.tool.editWorld",
+  play_start: "runtime.tool.startWorld",
+  play_revise: "runtime.tool.reviseTurn",
+  play_step: "runtime.tool.advanceWorld",
 };
 
 export function bookKey(bookId: string | null | undefined): string {
@@ -51,11 +50,11 @@ export function extractErrorMessage(error: string | { code?: string; message?: s
 
 export function resolveToolLabel(tool: string, agent?: string): string {
   if (tool === "sub_agent" && agent) {
-    const label = AGENT_LABELS[agent];
-    return label ? tr(label[0], label[1]) : agent;
+    const key = AGENT_LABEL_KEYS[agent];
+    return key ? translateAppString(key) : agent;
   }
-  const label = TOOL_LABELS[tool];
-  return label ? tr(label[0], label[1]) : tool;
+  const key = TOOL_LABEL_KEYS[tool];
+  return key ? translateAppString(key) : tool;
 }
 
 export function summarizeResult(result: unknown): string {

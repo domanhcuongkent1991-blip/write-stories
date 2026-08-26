@@ -3,7 +3,7 @@ import { fetchJson } from "../hooks/use-api";
 import { useServiceStore } from "../store/service";
 import { Eye, EyeOff, Loader2, ArrowLeft, Plus, Trash2, X } from "lucide-react";
 import { ServiceQuickLinks } from "../components/ServiceQuickLinks";
-import { tr } from "../lib/app-language";
+import { translateAppString } from "../lib/app-language";
 import {
   deleteServiceConfig,
   matchServiceConfigEntryForDetail,
@@ -16,6 +16,8 @@ import {
   type ServiceDetailModelInfo as ModelInfo,
   type ServiceDetailVerifiedProbe as VerifiedProbe,
 } from "./service-detail-state";
+
+const t = translateAppString;
 
 interface Nav {
   toServices: () => void;
@@ -88,7 +90,7 @@ export function ServiceDetailPage({ serviceId, nav }: { serviceId: string; nav: 
 
   const resolvedCustomName = persistedCustomName || customName.trim() || "Custom";
   const effectiveServiceId = isCustom ? `custom:${resolvedCustomName}` : serviceId;
-  const label = isCustom ? (customName || persistedCustomName || tr("自定义服务", "Custom service")) : (svc?.label ?? serviceId);
+  const label = isCustom ? (customName || persistedCustomName || t("services.customService")) : (svc?.label ?? serviceId);
   const storeModels = useServiceStore((s) => s.modelsByService[effectiveServiceId]);
 
   useEffect(() => {
@@ -143,11 +145,11 @@ export function ServiceDetailPage({ serviceId, nav }: { serviceId: string; nav: 
   const handleTest = async () => {
     const trimmedKey = apiKey.trim();
     if (!trimmedKey && !isCustom && !apiKeyOptional) {
-      setStatus({ state: "error", message: tr("请先输入 API Key", "Enter an API key first") });
+      setStatus({ state: "error", message: t("serviceDetail.apiKeyRequired") });
       return;
     }
     if (isCustom && !baseUrl.trim()) {
-      setStatus({ state: "error", message: tr("请先填写 Base URL", "Enter a base URL first") });
+      setStatus({ state: "error", message: t("serviceDetail.baseUrlRequired") });
       return;
     }
     setApiKey(trimmedKey);
@@ -184,17 +186,17 @@ export function ServiceDetailPage({ serviceId, nav }: { serviceId: string; nav: 
         setStoreModels(effectiveServiceId, mergedModels); // Write to global store
       } else {
         setVerifiedProbe(null);
-        setStatus({ state: "error", message: result.error ?? tr("连接失败", "Connection failed") });
+        setStatus({ state: "error", message: result.error ?? t("serviceDetail.connectionFailed") });
         clearStoreModels(effectiveServiceId);
       }
     } catch (e) {
       setVerifiedProbe(null);
-      setStatus({ state: "error", message: e instanceof Error ? e.message : tr("连接失败", "Connection failed") });
+      setStatus({ state: "error", message: e instanceof Error ? e.message : t("serviceDetail.connectionFailed") });
     }
   };
 
   const handleDelete = async () => {
-    if (!window.confirm(tr(`删除“${label}”的配置和密钥？`, `Delete the config and key for “${label}”?`))) return;
+    if (!globalThis["confirm"](t("serviceDetail.deleteConfirm", { label }))) return;
     setStatus({ state: "saving" });
     try {
       await deleteServiceConfig(effectiveServiceId);
@@ -202,7 +204,7 @@ export function ServiceDetailPage({ serviceId, nav }: { serviceId: string; nav: 
       await refreshServices();
       nav.toServices();
     } catch (e) {
-      setStatus({ state: "error", message: e instanceof Error ? e.message : tr("删除失败", "Delete failed") });
+      setStatus({ state: "error", message: e instanceof Error ? e.message : t("serviceDetail.deleteFailed") });
     }
   };
 
@@ -210,7 +212,7 @@ export function ServiceDetailPage({ serviceId, nav }: { serviceId: string; nav: 
     const trimmedKey = apiKey.trim();
     setApiKey(trimmedKey);
     if (isCustom && !baseUrl.trim()) {
-      setStatus({ state: "error", message: tr("请先填写 Base URL", "Enter a base URL first") });
+      setStatus({ state: "error", message: t("serviceDetail.baseUrlRequired") });
       return;
     }
     setStatus({ state: "saving" });
@@ -245,7 +247,7 @@ export function ServiceDetailPage({ serviceId, nav }: { serviceId: string; nav: 
       await refreshServices();
       nav.toServices();
     } catch (e) {
-      setStatus({ state: "error", message: e instanceof Error ? e.message : tr("保存失败", "Save failed") });
+      setStatus({ state: "error", message: e instanceof Error ? e.message : t("serviceDetail.saveFailed") });
     }
   };
 
@@ -273,7 +275,7 @@ export function ServiceDetailPage({ serviceId, nav }: { serviceId: string; nav: 
         className="inline-flex items-center gap-2 rounded-lg border border-border/50 bg-card/60 px-3 py-2 text-sm font-medium text-foreground hover:bg-secondary/50 transition-colors"
       >
         <ArrowLeft size={14} />
-        {tr("返回服务商管理", "Back to providers")}
+        {t("serviceDetail.backToProviders")}
       </button>
 
       {/* Title + status */}
@@ -281,7 +283,7 @@ export function ServiceDetailPage({ serviceId, nav }: { serviceId: string; nav: 
         <h1 className="font-serif text-2xl">{label}</h1>
         {isConnected && (
           <span className="text-[10px] px-2 py-0.5 rounded-full bg-emerald-500/10 text-emerald-500 font-medium">
-            {tr("已连接", "Connected")}
+            {t("nav.connected")}
           </span>
         )}
       </div>
@@ -291,9 +293,9 @@ export function ServiceDetailPage({ serviceId, nav }: { serviceId: string; nav: 
         {/* Custom fields */}
         {isCustom && (
         <div className="grid grid-cols-2 gap-4">
-            <Field label={tr("服务名称", "Service name")}>
+            <Field label={t("serviceDetail.serviceName")}>
               <input type="text" value={customName} onChange={(e) => setCustomName(e.target.value)}
-                placeholder={tr("例如：本地 Ollama", "e.g. local Ollama")} className="w-full rounded-lg border border-border/60 bg-background px-3 py-2 text-sm" />
+                placeholder={t("serviceDetail.localOllamaExample")} className="w-full rounded-lg border border-border/60 bg-background px-3 py-2 text-sm" />
             </Field>
             <Field label="Base URL">
               <input type="text" value={baseUrl} onChange={(e) => setBaseUrl(e.target.value)}
@@ -303,11 +305,11 @@ export function ServiceDetailPage({ serviceId, nav }: { serviceId: string; nav: 
         )}
 
         {/* API Key */}
-        <Field label={apiKeyOptional ? tr("API Key（可选）", "API key (optional)") : "API Key"}>
+        <Field label={apiKeyOptional ? t("serviceDetail.apiKeyOptional") : "API Key"}>
           <div className="relative">
             <input
               type={showKey ? "text" : "password"} value={apiKey}
-              onChange={(e) => setApiKey(e.target.value)} placeholder={apiKeyOptional ? tr("本地服务可留空", "Optional for local service") : "sk-..."}
+              onChange={(e) => setApiKey(e.target.value)} placeholder={apiKeyOptional ? t("serviceDetail.localServiceOptional") : "sk-..."}
               className="w-full rounded-lg border border-border/60 bg-background px-3 py-2 pr-10 text-sm font-mono"
             />
             <button type="button" onClick={() => setShowKey((v) => !v)}
@@ -322,29 +324,31 @@ export function ServiceDetailPage({ serviceId, nav }: { serviceId: string; nav: 
           <button onClick={handleTest} disabled={isBusy}
             className="flex items-center gap-1.5 px-3.5 py-2 text-xs rounded-lg border border-border/60 hover:bg-secondary/50 transition-colors disabled:opacity-50">
             {status.state === "testing" && <Loader2 size={12} className="animate-spin" />}
-            {tr("测试连接", "Test connection")}
+            {t("serviceDetail.testConnection")}
           </button>
           <button onClick={handleSave} disabled={isBusy}
             className="flex items-center gap-1.5 px-3.5 py-2 text-xs rounded-lg bg-primary text-primary-foreground hover:bg-primary/90 transition-colors disabled:opacity-50">
             {status.state === "saving" && <Loader2 size={12} className="animate-spin" />}
-            {tr("保存", "Save")}
+            {t("common.save")}
           </button>
           {(isConnected || isCustom) && (
             <button onClick={handleDelete} disabled={isBusy}
               className="flex items-center gap-1.5 px-3.5 py-2 text-xs rounded-lg border border-destructive/30 text-destructive hover:bg-destructive/10 transition-colors disabled:opacity-50">
               <Trash2 size={12} />
-              {tr("删除配置", "Delete config")}
+              {t("serviceDetail.deleteConfig")}
             </button>
           )}
           {/* Status feedback */}
           {status.state === "connected" && (
             <span className="text-xs text-emerald-500">
-              {tr(`连接成功，${models.length} 个模型`, `Connected, ${models.length} models`)}
+              {t("serviceDetail.connectedModels", { count: models.length })}
               {detectedModel
-                ? tr(
-                    `，已自动匹配 ${detectedModel}${detectedConfig ? ` / ${detectedConfig.apiFormat === "responses" ? "Responses" : "Chat"} / ${detectedConfig.stream ? "流式" : "非流式"}` : ""}`,
-                    `, auto-matched ${detectedModel}${detectedConfig ? ` / ${detectedConfig.apiFormat === "responses" ? "Responses" : "Chat"} / ${detectedConfig.stream ? "streaming" : "non-streaming"}` : ""}`,
-                  )
+                ? t("serviceDetail.autoMatched", {
+                    model: detectedModel,
+                    details: detectedConfig
+                      ? ` / ${detectedConfig.apiFormat === "responses" ? "Responses" : "Chat"} / ${t(detectedConfig.stream ? "serviceDetail.streamingMode" : "serviceDetail.nonStreamingMode")}`
+                      : "",
+                  })
                 : ""}
             </span>
           )}
@@ -352,12 +356,12 @@ export function ServiceDetailPage({ serviceId, nav }: { serviceId: string; nav: 
             <span className="text-xs text-destructive">{status.message}</span>
           )}
           {status.state === "saved" && (
-            <span className="text-xs text-emerald-500">{tr("已保存", "Saved")}</span>
+            <span className="text-xs text-emerald-500">{t("serviceDetail.saved")}</span>
           )}
         </div>
 
         <div className="grid grid-cols-2 gap-4">
-          <Field label={tr("协议类型", "Protocol")}>
+          <Field label={t("serviceDetail.protocol")}>
             <select
               value={apiFormat}
               onChange={(e) => setApiFormat(e.target.value as "chat" | "responses")}
@@ -368,14 +372,14 @@ export function ServiceDetailPage({ serviceId, nav }: { serviceId: string; nav: 
             </select>
           </Field>
 
-          <Field label={tr("流式响应", "Streaming")}>
+          <Field label={t("serviceDetail.streaming")}>
             <label className="flex h-10 items-center gap-2 rounded-lg border border-border/60 bg-background px-3 text-sm">
               <input
                 type="checkbox"
                 checked={stream}
                 onChange={(e) => setStream(e.target.checked)}
               />
-              <span>{stream ? tr("开启", "On") : tr("关闭", "Off")}</span>
+              <span>{stream ? t("serviceDetail.on") : t("serviceDetail.off")}</span>
             </label>
           </Field>
         </div>
@@ -383,7 +387,7 @@ export function ServiceDetailPage({ serviceId, nav }: { serviceId: string; nav: 
         {/* Models */}
         <div className="space-y-2">
           <p className="text-xs text-muted-foreground/70 font-medium uppercase tracking-wider">
-            {tr(`模型目录（${models.length}）`, `Model catalog (${models.length})`)}
+            {t("serviceDetail.modelCatalog", { count: models.length })}
           </p>
           <div className="flex gap-2">
             <input
@@ -396,7 +400,7 @@ export function ServiceDetailPage({ serviceId, nav }: { serviceId: string; nav: 
                   handleAddModel();
                 }
               }}
-              placeholder={tr("输入模型 ID，例如 gemini-3.1-pro", "Enter a model ID, e.g. gemini-3.1-pro")}
+              placeholder={t("serviceDetail.modelIdPlaceholder")}
               className="min-w-0 flex-1 rounded-lg border border-border/60 bg-background px-3 py-2 text-sm font-mono"
             />
             <button
@@ -406,11 +410,11 @@ export function ServiceDetailPage({ serviceId, nav }: { serviceId: string; nav: 
               className="inline-flex items-center gap-1.5 rounded-lg border border-border/60 px-3 py-2 text-xs hover:bg-secondary/50 disabled:opacity-40"
             >
               <Plus size={13} />
-              {tr("添加", "Add")}
+              {t("serviceDetail.add")}
             </button>
           </div>
           <p className="text-xs text-muted-foreground/60">
-            {tr("测试连接发现的模型和手动添加的模型都会在保存后持久化；内置目录只作为兜底。", "Discovered and manually added models are persisted on save; the built-in catalog is only a fallback.")}
+            {t("serviceDetail.modelPersistenceHint")}
           </p>
           {hasModelCatalog && (
           <div className="space-y-2">
@@ -422,7 +426,7 @@ export function ServiceDetailPage({ serviceId, nav }: { serviceId: string; nav: 
                     <button
                       type="button"
                       onClick={() => handleRemoveModel(m.id)}
-                      aria-label={tr(`移除模型 ${m.id}`, `Remove model ${m.id}`)}
+                      aria-label={t("serviceDetail.removeModel", { id: m.id })}
                       className="rounded-sm opacity-60 hover:opacity-100"
                     >
                       <X size={11} />
@@ -431,7 +435,7 @@ export function ServiceDetailPage({ serviceId, nav }: { serviceId: string; nav: 
                 ))}
               </div>
             ) : (
-              <p className="text-xs text-muted-foreground/60">{tr("点击“测试连接”查看可用模型", "Click “Test connection” to list available models")}</p>
+              <p className="text-xs text-muted-foreground/60">{t("serviceDetail.emptyCatalogHint")}</p>
             )}
           </div>
           )}
@@ -440,7 +444,7 @@ export function ServiceDetailPage({ serviceId, nav }: { serviceId: string; nav: 
         {/* Advanced params */}
         <details className="group pt-2 border-t border-border/20">
           <summary className="text-xs text-muted-foreground/60 cursor-pointer select-none hover:text-muted-foreground transition-colors py-2">
-            {tr("高级参数", "Advanced")}
+            {t("serviceDetail.advanced")}
           </summary>
           <div className="space-y-4 pt-2">
             <Field label="temperature">

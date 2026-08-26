@@ -71,7 +71,8 @@ export function ChapterReader({ bookId, chapterNumber, nav, theme, t }: {
       refetch();
       setWorkspaceRevision((revision) => revision + 1);
     } catch (e) {
-      alert(e instanceof Error ? e.message : "Save failed");
+      const detail = e instanceof Error ? e.message : String(e);
+      globalThis["alert"](`${t("reader.saveFailed")}: ${detail}`);
     } finally {
       setSaving(false);
     }
@@ -101,7 +102,8 @@ export function ChapterReader({ bookId, chapterNumber, nav, theme, t }: {
       await postApi(`/books/${bookId}/chapters/${chapterNumber}/approve`);
       nav.toBook(bookId);
     } catch (e) {
-      alert(e instanceof Error ? e.message : "Approve failed");
+      const detail = e instanceof Error ? e.message : String(e);
+      globalThis["alert"](`${t("reader.approveFailed")}: ${detail}`);
     }
   };
 
@@ -110,7 +112,8 @@ export function ChapterReader({ bookId, chapterNumber, nav, theme, t }: {
       await postApi(`/books/${bookId}/chapters/${chapterNumber}/reject`);
       nav.toBook(bookId);
     } catch (e) {
-      alert(e instanceof Error ? e.message : "Reject failed");
+      const detail = e instanceof Error ? e.message : String(e);
+      globalThis["alert"](`${t("reader.rejectFailed")}: ${detail}`);
     }
   };
 

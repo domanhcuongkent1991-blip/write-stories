@@ -4,8 +4,10 @@ import { useChatStore } from "../../store/chat";
 import { fetchJson } from "../../hooks/use-api";
 import { SidebarCard } from "./SidebarCard";
 import { cn } from "../../lib/utils";
-import { tr } from "../../lib/app-language";
 import { roleFromPath, type RoleRef } from "../../lib/truth-display";
+import { translateAppString } from "../../lib/app-language";
+
+const t = translateAppString;
 
 interface CharacterInfo {
   name: string;
@@ -53,11 +55,10 @@ function getRoleColor(role: string): string {
   return "bg-zinc-500/15 text-zinc-600 dark:text-zinc-400";
 }
 
-// label 在渲染时经 tr() 取当前语言，不能在模块加载时就固定成一种语言。
-const TIER_BADGE: Record<RoleRef["tier"], { zh: string; en: string; color: string }> = {
-  major: { zh: "主要", en: "Major", color: "bg-amber-500/15 text-amber-600 dark:text-amber-400" },
-  minor: { zh: "次要", en: "Minor", color: "bg-blue-500/15 text-blue-600 dark:text-blue-400" },
-};
+const TIER_BADGE = {
+  major: { labelKey: "sidebarCharacters.major", color: "bg-amber-500/15 text-amber-600 dark:text-amber-400" },
+  minor: { labelKey: "sidebarCharacters.minor", color: "bg-blue-500/15 text-blue-600 dark:text-blue-400" },
+} as const;
 
 // Phase 5 layout: one file per character under roles/. Each entry opens the
 // full (humanized) character sheet — no raw matrix parsing needed.
@@ -74,7 +75,7 @@ function RoleEntry({ role }: { readonly role: RoleRef }) {
         {role.name}
       </span>
       <span className={cn("text-[12px] px-1.5 py-0.5 rounded-full shrink-0", badge.color)}>
-        {tr(badge.zh, badge.en)}
+        {t(badge.labelKey)}
       </span>
     </button>
   );
@@ -106,10 +107,10 @@ function CharacterCard({ char }: { readonly char: CharacterInfo }) {
       {expanded && (
         <div className="px-2.5 pb-2.5 space-y-1">
           {tags && (
-            <p className="text-[14px] leading-6 text-muted-foreground"><span className="text-muted-foreground/60">{tr("标签", "Tags")}</span> {tags}</p>
+            <p className="text-[14px] leading-6 text-muted-foreground"><span className="text-muted-foreground/60">{t("sidebarCharacters.tags")}</span> {tags}</p>
           )}
           {current && (
-            <p className="text-[14px] leading-6 text-muted-foreground"><span className="text-muted-foreground/60">{tr("当前", "Current")}</span> {current}</p>
+            <p className="text-[14px] leading-6 text-muted-foreground"><span className="text-muted-foreground/60">{t("sidebarCharacters.current")}</span> {current}</p>
           )}
           {Object.entries(char.fields)
             .filter(([k]) => !["定位", "Role", "标签", "Tags", "当前", "Current"].includes(k))
@@ -177,7 +178,7 @@ export function CharacterSection({ bookId }: CharacterSectionProps) {
   if (roles.length === 0 && legacyChars.length === 0) return null;
 
   return (
-    <SidebarCard title={tr("角色", "Characters")}>
+    <SidebarCard title={t("sidebarFoundation.characters")}>
       <div className="space-y-1.5">
         {roles.length > 0
           ? roles.map((role) => <RoleEntry key={role.path} role={role} />)

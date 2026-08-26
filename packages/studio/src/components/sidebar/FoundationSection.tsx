@@ -3,8 +3,10 @@ import { FileText } from "lucide-react";
 import { useChatStore } from "../../store/chat";
 import { fetchJson } from "../../hooks/use-api";
 import { SidebarCard } from "./SidebarCard";
-import { tr } from "../../lib/app-language";
+import { translateAppString } from "../../lib/app-language";
 import { foundationFileLabel, FOUNDATION_FILE_ORDER } from "../../lib/truth-display";
+
+const t = translateAppString;
 
 interface TruthFileInfo {
   name: string;
@@ -37,7 +39,7 @@ export function FoundationSection({ bookId }: FoundationSectionProps) {
   if (available.length === 0) return null;
 
   return (
-    <SidebarCard title={tr("核心文件", "Core Files")}>
+    <SidebarCard title={t("sidebarFoundation.coreFiles")}>
       <ul className="space-y-1">
         {available.map((item) => (
           <li key={item.name}>

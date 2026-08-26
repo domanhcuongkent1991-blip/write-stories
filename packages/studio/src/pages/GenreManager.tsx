@@ -221,7 +221,7 @@ export function GenreManager({ nav, theme, t }: { nav: Nav; theme: Theme; t: TFu
 
   const handleCopy = async (id: string) => {
     await postApi(`/genres/${id}/copy`);
-    alert(`Copied ${id} to project genres/`);
+    globalThis["alert"](t("genre.copiedToProject", { id }));
     refetch();
   };
 
@@ -269,7 +269,8 @@ export function GenreManager({ nav, theme, t }: { nav: Nav; theme: Theme; t: TFu
       setSelected(form.id);
       await refetch();
     } catch (e) {
-      alert(e instanceof Error ? e.message : "Failed to create genre");
+      const detail = e instanceof Error ? e.message : String(e);
+      globalThis["alert"](`${t("genre.createFailed")}: ${detail}`);
     }
   };
 
@@ -297,7 +298,8 @@ export function GenreManager({ nav, theme, t }: { nav: Nav; theme: Theme; t: TFu
       setFormMode("hidden");
       await refetch();
     } catch (e) {
-      alert(e instanceof Error ? e.message : "Failed to update genre");
+      const detail = e instanceof Error ? e.message : String(e);
+      globalThis["alert"](`${t("genre.updateFailed")}: ${detail}`);
     }
   };
 
@@ -309,7 +311,8 @@ export function GenreManager({ nav, theme, t }: { nav: Nav; theme: Theme; t: TFu
       setSelected(null);
       await refetch();
     } catch (e) {
-      alert(e instanceof Error ? e.message : "Failed to delete genre");
+      const detail = e instanceof Error ? e.message : String(e);
+      globalThis["alert"](`${t("genre.deleteFailed")}: ${detail}`);
     }
   };
 

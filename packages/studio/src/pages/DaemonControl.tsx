@@ -31,7 +31,8 @@ export function DaemonControl({ nav, theme, t, sse }: { nav: Nav; theme: Theme; 
       await postApi("/daemon/start");
       refetch();
     } catch (e) {
-      alert(e instanceof Error ? e.message : "Failed");
+      const detail = e instanceof Error ? e.message : String(e);
+      globalThis["alert"](`${t("daemon.startFailed")}: ${detail}`);
     } finally {
       setLoading(false);
     }
@@ -43,7 +44,8 @@ export function DaemonControl({ nav, theme, t, sse }: { nav: Nav; theme: Theme; 
       await postApi("/daemon/stop");
       refetch();
     } catch (e) {
-      alert(e instanceof Error ? e.message : "Failed");
+      const detail = e instanceof Error ? e.message : String(e);
+      globalThis["alert"](`${t("daemon.stopFailed")}: ${detail}`);
     } finally {
       setLoading(false);
     }

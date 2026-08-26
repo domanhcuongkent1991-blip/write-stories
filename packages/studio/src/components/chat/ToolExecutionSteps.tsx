@@ -14,13 +14,15 @@ import {
   Check,
 } from "lucide-react";
 import { buildApiUrl } from "../../hooks/use-api";
-import { tr } from "../../lib/app-language";
+import { translateAppString } from "../../lib/app-language";
 import { chatSelectors, useChatStore } from "../../store/chat";
 import { usePreferencesStore } from "../../store/preferences";
 import {
   NarrativeForecastPreview,
   getNarrativeForecastPreviewDetails,
 } from "./NarrativeForecastPreview";
+
+const t = translateAppString;
 
 // -- Status rendering helpers --
 
@@ -30,28 +32,28 @@ function ExecStatusBadge({ status }: { status: ToolExecution["status"] }) {
       return (
         <span className="inline-flex items-center gap-1 text-xs text-primary">
           <Loader2 size={12} className="animate-spin" />
-          <span>{tr("执行中", "Running")}</span>
+          <span>{t("interactive.tool.running")}</span>
         </span>
       );
     case "processing":
       return (
         <span className="inline-flex items-center gap-1 text-xs text-muted-foreground">
           <Loader2 size={12} className="animate-spin" style={{ animationDuration: "2s" }} />
-          <span>{tr("处理结果", "Processing result")}</span>
+          <span>{t("interactive.tool.processingResult")}</span>
         </span>
       );
     case "completed":
       return (
         <span className="inline-flex items-center gap-1 text-xs text-green-600 dark:text-green-400">
           <CheckCircle2 size={12} />
-          <span>{tr("已完成", "Completed")}</span>
+          <span>{t("interactive.tool.completed")}</span>
         </span>
       );
     case "error":
       return (
         <span className="inline-flex items-center gap-1 text-xs text-destructive">
           <XCircle size={12} />
-          <span>{tr("失败", "Failed")}</span>
+          <span>{t("interactive.tool.failed")}</span>
         </span>
       );
   }
@@ -70,7 +72,7 @@ function StageIcon({ status }: { status: PipelineStage["status"] }) {
 
 function formatProgress(progress: NonNullable<PipelineStage["progress"]>): string {
   const secs = Math.round(progress.elapsedMs / 1000);
-  const statusLabel = progress.status === "thinking" ? tr("思考中", "Thinking") : progress.status ?? "";
+  const statusLabel = progress.status === "thinking" ? t("interactive.tool.thinking") : progress.status ?? "";
   const chars = progress.totalChars > 0
     ? progress.chineseChars > 0 ? `${progress.totalChars}字` : `${progress.totalChars} chars`
     : "";
@@ -211,7 +213,7 @@ function SkillUsagePreview({ exec }: { exec: ToolExecution }) {
   if (skills.length === 0) return null;
   return (
     <div className="mx-3 mb-2 flex flex-wrap items-center gap-1.5 text-xs text-muted-foreground">
-      <span className="font-semibold text-foreground/80">{tr("专业 Skill", "Professional skills")}</span>
+      <span className="font-semibold text-foreground/80">{t("interactive.context.skills")}</span>
       {skills.map((skill) => (
         <span key={skill} className="rounded-full border border-border/50 bg-background/60 px-2 py-0.5 font-mono text-[11px]">
           {skill}
@@ -287,28 +289,30 @@ function ChapterContextTracePreview({ exec }: { exec: ToolExecution }) {
   if (traces.length === 0) return null;
   return (
     <div className="mx-3 mb-3 mt-1 rounded-xl border border-border/50 bg-background/55 px-3 py-2.5 text-xs">
-      <div className="font-semibold text-foreground">{tr("本轮参考依据", "Context used this turn")}</div>
+      <div className="font-semibold text-foreground">{t("interactive.context.title")}</div>
       <div className="mt-2 space-y-2">
         {traces.map((trace) => (
           <details key={`${trace.chapterNumber ?? 0}:${trace.tracePath}`} className="rounded-lg border border-border/40 px-2.5 py-2">
             <summary className="cursor-pointer select-none font-medium text-foreground">
-              {trace.chapterNumber ? tr(`第 ${trace.chapterNumber} 章`, `Chapter ${trace.chapterNumber}`) : tr("章节", "Chapter")}
+              {trace.chapterNumber
+                ? t("interactive.context.chapterNumber", { number: trace.chapterNumber })
+                : t("interactive.context.chapter")}
               {trace.retrievalEngine ? ` · ${trace.retrievalEngine}` : ""}
             </summary>
             <div className="mt-2 space-y-1.5 text-muted-foreground">
               <div>
-                {tr("预算", "Budget")}: {trace.totalSelectedTokens ?? 0}
-                {` · ${tr("保护", "protected")} ${trace.protectedTokens ?? 0}`}
-                {` · ${tr("可压缩", "compressible")} ${trace.compressibleTokens ?? 0}`}
+                {t("interactive.context.budget")}: {trace.totalSelectedTokens ?? 0}
+                {` · ${t("interactive.context.protected")} ${trace.protectedTokens ?? 0}`}
+                {` · ${t("interactive.context.compressible")} ${trace.compressibleTokens ?? 0}`}
               </div>
               <div>
-                {tr("检索", "Retrieval")}: {trace.retrievalCandidateCount} {tr("个 BM25 候选", "BM25 candidates")}
-                {trace.semanticSelectedCount > 0 ? ` · ${trace.semanticSelectedCount} ${tr("个语义选择", "semantic selections")}` : ""}
+                {t("interactive.context.retrieval")}: {trace.retrievalCandidateCount} {t("interactive.context.bm25Candidates")}
+                {trace.semanticSelectedCount > 0 ? ` · ${trace.semanticSelectedCount} ${t("interactive.context.semanticSelections")}` : ""}
               </div>
               {trace.compressedSources.length > 0 && (
-                <div>{tr("语义压缩", "Semantic compaction")}: {trace.compressedSources.join(" · ")}</div>
+                <div>{t("interactive.context.semanticCompaction")}: {trace.compressedSources.join(" · ")}</div>
               )}
-              <div>{tr("完整来源", "All sources")}:</div>
+              <div>{t("interactive.context.allSources")}:</div>
               <ul className="space-y-0.5 font-mono text-[11px]">
                 {trace.selectedSources.map((source) => <li key={source}>{source}</li>)}
               </ul>
@@ -405,7 +409,7 @@ function ChapterAuditIssues({
         <div key={`${issue.category}:${index}`} className="rounded-lg border border-border/40 bg-background/55 px-2.5 py-2 text-[12px] leading-5 text-muted-foreground">
           <div className="font-medium text-foreground">[{issue.severity}] {issue.category}</div>
           <div>{issue.description}</div>
-          {issue.suggestion && <div className="mt-0.5">{tr("建议", "Suggestion")}{tr("：", ": ")}{issue.suggestion}</div>}
+          {issue.suggestion && <div className="mt-0.5">{t("interactive.audit.suggestion")}{t("interactive.tool.separator")}{issue.suggestion}</div>}
         </div>
       ))}
     </div>
@@ -423,14 +427,16 @@ function ChapterRevisionPreview({ exec }: { exec: ToolExecution }) {
     >
       <div className="flex flex-wrap items-center justify-between gap-2">
         <div className="text-[15px] font-semibold text-foreground">
-          {details.chapterNumber ? tr(`第 ${details.chapterNumber} 章修订`, `Chapter ${details.chapterNumber} revision`) : tr("章节修订", "Chapter revision")}
+          {details.chapterNumber
+            ? t("interactive.audit.chapterRevisionNumber", { number: details.chapterNumber })
+            : t("interactive.audit.chapterRevision")}
         </div>
         <div className={`rounded-full px-2 py-0.5 text-[12px] font-semibold ${passed ? "bg-emerald-500/15 text-emerald-600" : "bg-amber-500/15 text-amber-600"}`}>
           {!details.applied
-            ? tr("保留原稿", "Original kept")
+            ? t("interactive.audit.originalKept")
             : details.auditPassed
-              ? tr("审稿通过", "Audit passed")
-              : tr("仍需复核", "Review required")}
+              ? t("interactive.audit.passed")
+              : t("interactive.audit.reviewRequired")}
         </div>
       </div>
       {details.skippedReason && (
@@ -438,11 +444,11 @@ function ChapterRevisionPreview({ exec }: { exec: ToolExecution }) {
       )}
       {details.fixedIssues.length > 0 && (
         <div className="mt-2 text-[13px] leading-5 text-muted-foreground">
-          <span className="font-medium text-foreground">{tr("已处理", "Fixed")}{tr("：", ": ")}</span>
+          <span className="font-medium text-foreground">{t("interactive.audit.fixed")}{t("interactive.tool.separator")}</span>
           {details.fixedIssues.join("；")}
         </div>
       )}
-      <ChapterAuditIssues issues={details.auditIssues} title={tr("剩余审稿问题", "Remaining audit issues")} />
+      <ChapterAuditIssues issues={details.auditIssues} title={t("interactive.audit.remainingIssues")} />
     </div>
   );
 }
@@ -458,14 +464,16 @@ function ChapterStateResyncPreview({ exec }: { exec: ToolExecution }) {
     >
       <div className="flex flex-wrap items-center justify-between gap-2">
         <div className="text-[15px] font-semibold text-foreground">
-          {details.chapterNumber ? tr(`第 ${details.chapterNumber} 章状态已同步`, `Chapter ${details.chapterNumber} state resynced`) : tr("章节状态已同步", "Chapter state resynced")}
+          {details.chapterNumber
+            ? t("interactive.audit.stateResyncedNumber", { number: details.chapterNumber })
+            : t("interactive.audit.stateResynced")}
         </div>
         <div className={`rounded-full px-2 py-0.5 text-[12px] font-semibold ${passed ? "bg-emerald-500/15 text-emerald-600" : "bg-amber-500/15 text-amber-600"}`}>
-          {passed ? tr("审稿通过", "Audit passed") : tr("仍需修订", "Revision required")}
+          {passed ? t("interactive.audit.passed") : t("interactive.audit.revisionRequired")}
         </div>
       </div>
       {details.summary && <div className="mt-2 text-[13px] leading-5 text-muted-foreground">{details.summary}</div>}
-      <ChapterAuditIssues issues={details.auditIssues} title={tr("审稿问题", "Audit issues")} />
+      <ChapterAuditIssues issues={details.auditIssues} title={t("interactive.audit.issues")} />
     </div>
   );
 }
@@ -513,14 +521,14 @@ function ScriptStoryboardResultPreview({ exec, onOpenFilmStudio }: { exec: ToolE
     && details.kind !== "interactive_film_created"
   )) return null;
   const maybeRows: Array<readonly [string, string] | null> = [
-    details.specPath ? [tr("规格", "Spec"), details.specPath] : null,
-    details.storyGraphPath ? [tr("剧情图谱", "Story graph"), details.storyGraphPath] : null,
-    details.storyTreePath ? [tr("剧情树", "Story tree"), details.storyTreePath] : null,
-    details.flagsPath ? [tr("变量旗标", "Flags"), details.flagsPath] : null,
-    details.scriptPath ? [tr("剧本", "Script"), details.scriptPath] : null,
-    details.storyboardPath ? [tr("分镜", "Storyboard"), details.storyboardPath] : null,
-    details.imagePromptsPath ? [tr("图像提示词", "Image prompts"), details.imagePromptsPath] : null,
-    details.assetsManifestPath ? [tr("图片资产", "Image assets"), details.assetsManifestPath] : null,
+    details.specPath ? [t("interactive.tool.spec"), details.specPath] : null,
+    details.storyGraphPath ? [t("interactive.tool.storyGraph"), details.storyGraphPath] : null,
+    details.storyTreePath ? [t("interactive.tool.storyTree"), details.storyTreePath] : null,
+    details.flagsPath ? [t("interactive.tool.flags"), details.flagsPath] : null,
+    details.scriptPath ? [t("interactive.tool.script"), details.scriptPath] : null,
+    details.storyboardPath ? [t("interactive.tool.storyboard"), details.storyboardPath] : null,
+    details.imagePromptsPath ? [t("interactive.tool.imagePrompts"), details.imagePromptsPath] : null,
+    details.assetsManifestPath ? [t("interactive.tool.imageAssets"), details.assetsManifestPath] : null,
   ];
   const rows = maybeRows.filter((row): row is readonly [string, string] => Boolean(row));
   if (rows.length === 0 && !(details.kind === "interactive_film_created" && details.projectId)) return null;
@@ -529,10 +537,10 @@ function ScriptStoryboardResultPreview({ exec, onOpenFilmStudio }: { exec: ToolE
       <div className="flex items-center justify-between gap-3">
         <div className="text-[16px] leading-6 font-semibold text-primary">
           {details.kind === "script_created"
-            ? tr("剧本已生成", "Script generated")
+            ? t("interactive.tool.scriptGenerated")
             : details.kind === "storyboard_created"
-              ? tr("分镜已生成", "Storyboard generated")
-              : tr("互动影游已生成", "Interactive film generated")}
+              ? t("interactive.tool.storyboardGenerated")
+              : t("interactive.tool.filmGenerated")}
         </div>
         {details.kind === "interactive_film_created" && details.projectId && onOpenFilmStudio && (
           <button
@@ -541,7 +549,7 @@ function ScriptStoryboardResultPreview({ exec, onOpenFilmStudio }: { exec: ToolE
             onClick={() => onOpenFilmStudio(details.projectId!)}
             className="shrink-0 rounded-lg bg-primary px-3 py-1 text-[13px] font-semibold text-primary-foreground hover:opacity-90 transition-opacity"
           >
-            {tr("打开创作向导 →", "Open creation wizard →")}
+            {t("interactive.tool.openWizard")}
           </button>
         )}
       </div>
@@ -555,10 +563,10 @@ function ScriptStoryboardResultPreview({ exec, onOpenFilmStudio }: { exec: ToolE
               className="group flex w-full items-start justify-between gap-3 rounded-lg border border-transparent px-2 py-1.5 text-left transition hover:border-primary/25 hover:bg-background/65"
             >
               <span className="min-w-0 text-[13px] leading-5 text-muted-foreground break-all">
-                <span className="font-medium text-foreground">{label}{tr("：", ": ")}</span>{path}
+                <span className="font-medium text-foreground">{label}{t("interactive.tool.separator")}</span>{path}
               </span>
               <span className="mt-0.5 shrink-0 rounded-md border border-primary/25 bg-primary/10 px-1.5 py-0.5 text-[11px] font-semibold text-primary opacity-80 transition group-hover:opacity-100">
-                {tr("查看", "View")}
+                {t("interactive.tool.view")}
               </span>
             </button>
           ))}
@@ -577,14 +585,14 @@ function ShortFictionResultPreview({ exec }: { exec: ToolExecution }) {
     if (!coverError) return null;
     return (
       <div className="mx-3 mb-3 mt-1 rounded-xl border border-destructive/20 bg-destructive/5 px-3 py-2 text-xs text-destructive">
-        {tr("封面未生成：", "Cover not generated: ")}{coverError}
+        {t("interactive.tool.coverNotGenerated")}{coverError}
       </div>
     );
   }
 
   const coverUrl = buildApiUrl(`/project/files/${encodeProjectPath(coverPath)}`);
   if (!coverUrl) return null;
-  const title = details?.title ?? details?.storyId ?? tr("短篇封面", "Short fiction cover");
+  const title = details?.title ?? details?.storyId ?? t("interactive.tool.shortCover");
 
   return (
     <div className="mx-3 mb-3 mt-1 overflow-hidden rounded-xl border border-border/40 bg-background/70">
@@ -708,13 +716,13 @@ function PlaySceneImagePreview({ details }: { details: PlayToolDetails }) {
     <div className="mt-3 overflow-hidden rounded-xl border border-border/40 bg-background/80">
       <img
         src={readyUrl}
-        alt={tr("本幕配图", "Scene illustration")}
+        alt={t("interactive.tool.sceneIllustration")}
         className="block max-h-[420px] w-full object-contain bg-muted/20"
         loading="lazy"
       />
       {details.turn != null && (
         <div className="border-t border-border/40 px-3 py-2.5 text-[14px] leading-6 text-muted-foreground">
-          {tr(`第 ${Math.trunc(details.turn)} 幕配图`, `Scene ${Math.trunc(details.turn)} illustration`)}
+          {t("interactive.tool.sceneIllustrationTurn", { turn: Math.trunc(details.turn) })}
         </div>
       )}
     </div>
@@ -765,9 +773,9 @@ export function getProposedActionContractRows(details: ProposedActionDetails): R
   if (details.action !== "play_start" || !playStart) return [];
   const rows: Array<{ label: string; value: string }> = [];
   const worldContract = playStart.worldContract?.trim();
-  if (worldContract) rows.push({ label: tr("世界契约", "World contract"), value: worldContract });
+  if (worldContract) rows.push({ label: t("interactive.tool.worldContract"), value: worldContract });
   const visualContract = playStart.visualContract?.trim();
-  if (visualContract) rows.push({ label: tr("视觉契约", "Visual contract"), value: visualContract });
+  if (visualContract) rows.push({ label: t("interactive.tool.visualContract"), value: visualContract });
   return rows;
 }
 
@@ -794,7 +802,7 @@ function ProposedActionPreview({
   const contractRows = getProposedActionContractRows(details);
   return (
     <div className="mx-3 mb-3 mt-1 rounded-xl border border-primary/25 bg-primary/5 px-4 py-3.5">
-      <div className="text-[17px] leading-6 font-semibold text-foreground">{details.title ?? tr("确认执行", "Confirm action")}</div>
+      <div className="text-[17px] leading-6 font-semibold text-foreground">{details.title ?? t("interactive.tool.confirmAction")}</div>
       {details.summary && (
         <div className="mt-1.5 whitespace-pre-wrap break-words text-[15px] leading-7 text-muted-foreground">{details.summary}</div>
       )}
@@ -814,10 +822,10 @@ function ProposedActionPreview({
       {resolution === "confirmed" ? (
         <div className="mt-3 flex items-center gap-1.5 text-[15px] leading-6 font-medium text-primary">
           <Check size={15} className="shrink-0" />
-          {tr("已执行", "Executed")}
+          {t("interactive.tool.executed")}
         </div>
       ) : resolution === "rejected" ? (
-        <div className="mt-3 text-[15px] leading-6 font-medium text-muted-foreground">{tr("已取消", "Cancelled")}</div>
+        <div className="mt-3 text-[15px] leading-6 font-medium text-muted-foreground">{t("interactive.tool.cancelled")}</div>
       ) : (
         <div className="mt-3 flex flex-wrap gap-2">
           <button
@@ -827,7 +835,7 @@ function ProposedActionPreview({
             disabled={!onProposedAction || streaming || locked}
             className="rounded-lg bg-primary px-3.5 py-2 text-[15px] leading-6 font-medium text-primary-foreground disabled:opacity-50"
           >
-            {streaming ? tr("执行中…", "Running…") : tr("继续执行", "Continue")}
+            {streaming ? t("interactive.tool.runningEllipsis") : t("interactive.tool.continue")}
           </button>
           <button
             type="button"
@@ -835,7 +843,7 @@ function ProposedActionPreview({
             disabled={!onRejectProposedAction || streaming || locked}
             className="rounded-lg border border-border/60 bg-background/80 px-3.5 py-2 text-[15px] leading-6 font-medium text-muted-foreground disabled:opacity-50"
           >
-            {tr("取消", "Cancel")}
+            {t("common.cancel")}
           </button>
         </div>
       )}
@@ -848,12 +856,12 @@ function PlayResultPreview({ exec }: { exec: ToolExecution }) {
   const details = getPlayToolDetails(exec);
   if (!details?.sceneText) return null;
   const label = details.kind === "play_world_started"
-    ? tr("互动世界已启动", "Interactive world started")
+    ? t("interactive.tool.playWorldStarted")
     : details.kind === "play_turn_revised"
-      ? tr("互动回合已重做", "Play turn redone")
+      ? t("interactive.tool.playTurnRedone")
       : details.kind === "play_variant_restored"
-        ? tr("已切换互动回合版本", "Switched play turn variant")
-        : tr("互动世界已推进", "Interactive world advanced");
+        ? t("interactive.tool.playVariantSwitched")
+        : t("interactive.tool.playWorldAdvanced");
   return (
     <div className="mx-3 mb-3 mt-1 rounded-xl border border-primary/20 bg-primary/5 px-3 py-3">
       <div className="mb-2 text-[16px] leading-6 font-semibold text-primary">
@@ -870,18 +878,18 @@ function PlayEditPreview({ exec }: { exec: ToolExecution }) {
   const details = getPlayEditDetails(exec);
   if (!details) return null;
   const changes = [
-    details.updatedWorldContract ? tr("世界契约", "World contract") : "",
-    details.updatedVisualContract ? tr("视觉契约", "Visual contract") : "",
-    details.updatedPremise ? tr("世界前提", "World premise") : "",
+    details.updatedWorldContract ? t("interactive.tool.worldContract") : "",
+    details.updatedVisualContract ? t("interactive.tool.visualContract") : "",
+    details.updatedPremise ? t("interactive.tool.worldPremise") : "",
     details.updatedEntities && details.updatedEntities > 0
-      ? tr(`${details.updatedEntities} 张卡片`, `${details.updatedEntities} cards`)
+      ? t("interactive.tool.cards", { count: details.updatedEntities })
       : "",
   ].filter(Boolean);
   return (
     <div className="mx-3 mb-3 mt-1 rounded-xl border border-primary/20 bg-primary/5 px-3 py-2.5">
-      <div className="text-[16px] leading-6 font-semibold text-primary">{tr("互动世界设定已更新", "Interactive world settings updated")}</div>
+      <div className="text-[16px] leading-6 font-semibold text-primary">{t("interactive.tool.settingsUpdated")}</div>
       <div className="mt-1 text-xs leading-5 text-muted-foreground">
-        {changes.length > 0 ? changes.join(" · ") : tr("已写入当前世界。", "Written to the current world.")}
+        {changes.length > 0 ? changes.join(" · ") : t("interactive.tool.writtenWorld")}
       </div>
     </div>
   );
@@ -943,7 +951,7 @@ export function PipelineResultDetails({ result, defaultOpen }: { result: string;
       className="mx-3 mb-3 mt-1 rounded-lg border border-border/40 bg-background/60 px-2.5 py-2 text-xs"
     >
       <summary className="cursor-pointer select-none font-medium text-muted-foreground hover:text-foreground">
-        {tr("查看操作结果", "View result")}
+        {t("interactive.tool.viewResult")}
       </summary>
       <div className="mt-2 max-h-80 overflow-auto whitespace-pre-wrap break-words leading-5 text-foreground">
         {result}
@@ -1125,7 +1133,7 @@ function UtilityToolsGroup({ execs }: { execs: ToolExecution[] }) {
     <Collapsible open={open} onOpenChange={setOpen}>
       <CollapsibleTrigger className="flex items-center gap-2 px-2 py-1 rounded-lg hover:bg-muted/50 transition-colors cursor-pointer text-xs text-muted-foreground">
         <Wrench size={12} />
-        <span>{tr(`${execs.length} 个文件操作`, `${execs.length} file operation${execs.length === 1 ? "" : "s"}`)}</span>
+        <span>{t(execs.length === 1 ? "interactive.tool.fileOperation" : "interactive.tool.fileOperations", { count: execs.length })}</span>
         {allDone && !hasError && <CheckCircle2 size={10} className="text-green-600 dark:text-green-400" />}
         {hasError && <XCircle size={10} className="text-destructive" />}
         {!allDone && <Loader2 size={10} className="animate-spin text-primary" />}

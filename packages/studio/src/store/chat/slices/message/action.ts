@@ -11,7 +11,7 @@ import type {
   SessionSummary,
 } from "../../types";
 import { fetchJson } from "../../../../hooks/use-api";
-import { tr } from "../../../../lib/app-language";
+import { tr, translateAppString } from "../../../../lib/app-language";
 import { isConfirmedProductionSend } from "../../message-policy";
 import { attachSessionStreamListeners } from "./stream-events";
 import {
@@ -69,12 +69,18 @@ function formatAttachmentSize(size: number): string {
 
 function formatUserMessageForDisplay(text: string, attachments: ReadonlyArray<ChatAttachmentPayload>): string {
   if (attachments.length === 0) return text;
-  const heading = tr("附件：", "Attachments:");
+  const heading = translateAppString("chat.attachments");
   const lines = text ? [text, "", heading] : [heading];
   for (const attachment of attachments) {
     lines.push(`- ${attachment.filename} (${attachment.mediaType || "application/octet-stream"}, ${formatAttachmentSize(attachment.size)})`);
   }
   return lines.join("\n");
+}
+
+export function resolveAgentInstruction(input: string): string {
+  const trimmed = input.trim();
+  // Raw protocol boundary: UI locale must never change content sent to the agent.
+  return trimmed || tr("请阅读我上传的文件。", "Please read the files I uploaded.");
 }
 
 export const createMessageSlice: StateCreator<ChatStore, [], [], MessageActions> = (set, get) => {
@@ -356,7 +362,7 @@ export const createMessageSlice: StateCreator<ChatStore, [], [], MessageActions>
   abortSession: async (sessionId, scope = "all") => {
     const session = get().sessions[sessionId];
     const stoppedAt = Date.now();
-    const stoppedMessage = tr("已由用户停止", "Stopped by user");
+    const stoppedMessage = translateAppString("chat.stoppedByUser");
     const chatOnly = scope === "chat";
     const messages = markRunningToolsFailed(
       session?.messages ?? [],
@@ -468,7 +474,9 @@ export const createMessageSlice: StateCreator<ChatStore, [], [], MessageActions>
     // 只挡"聊天轮流式中"：后台生产任务运行期间（isStreaming=true 但
     // isChatStreaming=false）允许继续发消息，聊天与任务并行。
     if ((!trimmed && attachments.length === 0) || !session || session.isChatStreaming) return;
-    const userInstruction = trimmed || tr("请阅读我上传的文件。", "Please read the files I uploaded.");
+    // Raw agent payload boundary: keep the legacy zh/en writing instruction.
+    // UI locale VI must not rewrite content that is sent to the agent.
+    const userInstruction = resolveAgentInstruction(trimmed);
     const activeBookId = options?.activeBookId ?? session.bookId ?? undefined;
     const sessionKind: ChatSessionKind = options?.sessionKind
       ?? session.sessionKind
@@ -491,7 +499,7 @@ export const createMessageSlice: StateCreator<ChatStore, [], [], MessageActions>
 
     if (!get().selectedModel) {
       get().addUserMessage(sessionId, formatUserMessageForDisplay(userInstruction, attachments));
-      get().addErrorMessage(sessionId, tr("请先选择一个模型", "Select a model first"));
+      get().addErrorMessage(sessionId, translateAppString("chat.selectModelFirst"));
       rememberFailedSend();
       return;
     }
@@ -666,10 +674,7 @@ export const createMessageSlice: StateCreator<ChatStore, [], [], MessageActions>
         if (hasStream) {
           get().finalizeStream(sessionId, streamTs, "", toolCall);
         } else {
-          const emptyMessage = tr(
-            "模型未返回文本内容。请检查协议类型（chat/responses）、流式开关或上游服务兼容性。",
-            "The model returned no text. Check the protocol type (chat/responses), the streaming toggle, or upstream service compatibility.",
-          );
+          const emptyMessage = translateAppString("chat.emptyModelResponse");
           get().addErrorMessage(sessionId, emptyMessage);
           // 空响应同样算这轮失败；用户主动停止的轮 isChatStreaming 已是 false，不记录。
           if (get().sessions[sessionId]?.isChatStreaming) rememberFailedSend();

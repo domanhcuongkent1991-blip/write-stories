@@ -1,6 +1,7 @@
 import type { MessagePart, ToolExecution, PipelineStage } from "./types";
 import { localizeKnownRuntimeMessage } from "../../lib/error-copy";
-import { tr } from "../../lib/app-language";
+import { translateAppString } from "../../lib/app-language";
+import type { StringKey } from "../../i18n/catalog";
 import { summarizeToolResult } from "../../shared/tool-result";
 
 // -- Event types for the builder --
@@ -32,55 +33,53 @@ export interface ContextCompressionStreamEvent {
 
 // -- Label helpers --
 
-// [zh, en] tuples resolved through tr() at call time so labels follow the
-// current app language instead of the language active at module load.
-const AGENT_LABELS: Record<string, readonly [string, string]> = {
-  architect: ["建书", "Create book"], writer: ["写作", "Write"], auditor: ["审计", "Audit"],
-  reviser: ["修订", "Revise"], exporter: ["导出", "Export"],
+const AGENT_LABEL_KEYS: Record<string, StringKey> = {
+  architect: "runtime.agent.architect", writer: "runtime.agent.writer", auditor: "runtime.agent.auditor",
+  reviser: "runtime.agent.reviser", exporter: "runtime.agent.exporter",
 };
-const TOOL_LABELS: Record<string, readonly [string, string]> = {
-  read: ["读取文件", "Read file"], edit: ["编辑文件", "Edit file"], grep: ["搜索", "Search"], ls: ["列目录", "List directory"],
-  context_compression: ["整理上下文", "Organize context"],
-  propose_action: ["确认动作", "Confirm action"],
-  short_fiction_run: ["短篇生产", "Short fiction run"],
-  generate_cover: ["生成封面", "Generate cover"],
-  play_edit: ["编辑互动世界", "Edit interactive world"],
-  play_start: ["启动互动世界", "Start interactive world"],
-  play_revise: ["重做互动回合", "Redo play turn"],
-  play_step: ["推进互动世界", "Advance interactive world"],
-  create_narrative_forecast: ["剧情多线推演", "Narrative forecast"],
-  get_narrative_forecast: ["核验剧情推演", "Recheck forecast"],
-  select_narrative_branch: ["采用候选分支", "Select candidate branch"],
+const TOOL_LABEL_KEYS: Record<string, StringKey> = {
+  read: "runtime.tool.read", edit: "runtime.tool.edit", grep: "runtime.tool.grep", ls: "runtime.tool.ls",
+  context_compression: "runtime.tool.contextCompression",
+  propose_action: "runtime.tool.proposeAction",
+  short_fiction_run: "runtime.tool.shortFiction",
+  generate_cover: "runtime.tool.generateCover",
+  play_edit: "runtime.tool.editWorld",
+  play_start: "runtime.tool.startWorld",
+  play_revise: "runtime.tool.reviseTurn",
+  play_step: "runtime.tool.advanceWorld",
+  create_narrative_forecast: "runtime.tool.createForecast",
+  get_narrative_forecast: "runtime.tool.recheckForecast",
+  select_narrative_branch: "runtime.tool.selectBranch",
 };
 
 function resolveToolLabel(tool: string, agent?: string): string {
   if (tool === "sub_agent" && agent) {
-    const label = AGENT_LABELS[agent];
-    return label ? tr(label[0], label[1]) : agent;
+    const key = AGENT_LABEL_KEYS[agent];
+    return key ? translateAppString(key) : agent;
   }
-  const label = TOOL_LABELS[tool];
-  return label ? tr(label[0], label[1]) : tool;
+  const key = TOOL_LABEL_KEYS[tool];
+  return key ? translateAppString(key) : tool;
 }
 
 function compressionLabel(category: ContextCompressionCategory): string {
   return category === "session_context"
-    ? tr("整理会话记忆", "Organize session memory")
-    : tr("压缩故事上下文", "Compress story context");
+    ? translateAppString("chat.compression.organizeSession")
+    : translateAppString("chat.compression.storyContext");
 }
 
 function compressionSourceSummary(sources: readonly string[] | undefined): string {
   if (!sources || sources.length === 0) return "";
   const preview = sources.slice(0, 3).join(", ");
   const suffix = sources.length > 3 ? ` +${sources.length - 3}` : "";
-  return `${tr("来源", "sources")} ${sources.length}: ${preview}${suffix}`;
+  return `${translateAppString("chat.compression.sources")} ${sources.length}: ${preview}${suffix}`;
 }
 
 function compressionProgress(event: ContextCompressionStreamEvent): PipelineStage["progress"] | undefined {
   if (event.phase !== "start") return undefined;
   const parts = [
-    event.protectedTokens !== undefined ? `${tr("保护", "protected")} ${event.protectedTokens}` : "",
-    event.compressibleTokens !== undefined ? `${tr("可压缩", "compressible")} ${event.compressibleTokens}` : "",
-    event.budgetTokens !== undefined ? `${tr("预算", "budget")} ${event.budgetTokens}` : "",
+    event.protectedTokens !== undefined ? `${translateAppString("chat.compression.protected")} ${event.protectedTokens}` : "",
+    event.compressibleTokens !== undefined ? `${translateAppString("chat.compression.compressible")} ${event.compressibleTokens}` : "",
+    event.budgetTokens !== undefined ? `${translateAppString("chat.compression.budget")} ${event.budgetTokens}` : "",
     compressionSourceSummary(event.sources),
   ].filter(Boolean);
   return {
@@ -114,7 +113,7 @@ function applyContextCompressionEvent(parts: MessagePart[], event: ContextCompre
     runningTool.stages = upsertCompressionStage(runningTool.stages, event);
     if (event.phase === "error") {
       runningTool.status = "error";
-      runningTool.error = event.message ?? `${compressionLabel(event.category)}${tr("失败", " failed")}`;
+      runningTool.error = event.message ?? `${compressionLabel(event.category)}${translateAppString("chat.compression.failedSuffix")}`;
     }
     return;
   }
@@ -136,7 +135,7 @@ function applyContextCompressionEvent(parts: MessagePart[], event: ContextCompre
   execution.label = compressionLabel(event.category);
   execution.stages = upsertCompressionStage(execution.stages, event);
   if (event.phase !== "start") execution.completedAt = Date.now();
-  if (event.phase === "error") execution.error = event.message ?? `${compressionLabel(event.category)}${tr("失败", " failed")}`;
+  if (event.phase === "error") execution.error = event.message ?? `${compressionLabel(event.category)}${translateAppString("chat.compression.failedSuffix")}`;
   if (!existing) parts.push({ type: "tool", execution });
 }
 

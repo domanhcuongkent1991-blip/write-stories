@@ -155,7 +155,8 @@ export function BookDetail({
       await postApi(`/books/${bookId}/write-next`);
     } catch (e) {
       setWriteRequestPending(false);
-      alert(e instanceof Error ? e.message : "Failed");
+      const detail = e instanceof Error ? e.message : String(e);
+      globalThis["alert"](`${t("book.writeFailed")}: ${detail}`);
     }
   };
 
@@ -165,7 +166,8 @@ export function BookDetail({
       await postApi(`/books/${bookId}/draft`);
     } catch (e) {
       setDraftRequestPending(false);
-      alert(e instanceof Error ? e.message : "Failed");
+      const detail = e instanceof Error ? e.message : String(e);
+      globalThis["alert"](`${t("book.draftFailed")}: ${detail}`);
     }
   };
 
@@ -194,7 +196,8 @@ export function BookDetail({
       }
       nav.toDashboard();
     } catch (e) {
-      alert(e instanceof Error ? e.message : "Delete failed");
+      const detail = e instanceof Error ? e.message : String(e);
+      globalThis["alert"](`${t("book.deleteFailed")}: ${detail}`);
     } finally {
       setDeleting(false);
     }
@@ -217,7 +220,8 @@ export function BookDetail({
       });
       refetch();
     } catch (e) {
-      alert(e instanceof Error ? e.message : "Rewrite failed");
+      const detail = e instanceof Error ? e.message : String(e);
+      globalThis["alert"](`${t("book.rewriteFailed")}: ${detail}`);
     } finally {
       setRewritingChapters((prev) => prev.filter((n) => n !== chapterNum));
     }
@@ -240,7 +244,8 @@ export function BookDetail({
       });
       refetch();
     } catch (e) {
-      alert(e instanceof Error ? e.message : "Revision failed");
+      const detail = e instanceof Error ? e.message : String(e);
+      globalThis["alert"](`${t("book.revisionFailed")}: ${detail}`);
     } finally {
       setRevisingChapters((prev) => prev.filter((n) => n !== chapterNum));
     }
@@ -263,7 +268,8 @@ export function BookDetail({
       });
       refetch();
     } catch (e) {
-      alert(e instanceof Error ? e.message : "Sync failed");
+      const detail = e instanceof Error ? e.message : String(e);
+      globalThis["alert"](`${t("book.syncFailed")}: ${detail}`);
     } finally {
       setSyncingChapters((prev) => prev.filter((n) => n !== chapterNum));
     }
@@ -284,7 +290,8 @@ export function BookDetail({
       });
       refetch();
     } catch (e) {
-      alert(e instanceof Error ? e.message : "Save failed");
+      const detail = e instanceof Error ? e.message : String(e);
+      globalThis["alert"](`${t("book.saveFailed")}: ${detail}`);
     } finally {
       setSavingSettings(false);
     }
@@ -302,7 +309,7 @@ export function BookDetail({
       }
     }
     if (failed > 0) {
-      alert(`${failed}/${reviewable.length} approve(s) failed`);
+      globalThis["alert"](t("book.approveManyFailed", { failed, total: reviewable.length }));
     }
     refetch();
   };
@@ -310,10 +317,11 @@ export function BookDetail({
   const runBookAction = async (key: string, action: () => Promise<string>) => {
     setBookActionPending(key);
     try {
-      alert(await action());
+      globalThis["alert"](await action());
       refetch();
     } catch (e) {
-      alert(e instanceof Error ? e.message : "Action failed");
+      const detail = e instanceof Error ? e.message : String(e);
+      globalThis["alert"](`${t("book.actionFailed")}: ${detail}`);
     } finally {
       setBookActionPending(null);
     }
@@ -629,9 +637,10 @@ export function BookDetail({
                     headers: { "Content-Type": "application/json" },
                     body: JSON.stringify({ format: exportFormat, approvedOnly: exportApprovedOnly }),
                   });
-                  alert(`${t("common.exportSuccess")}\n${data.path}\n(${data.chapters} ${t("dash.chapters")})`);
+                  globalThis["alert"](`${t("common.exportSuccess")}\n${data.path}\n(${data.chapters} ${t("dash.chapters")})`);
                 } catch (e) {
-                  alert(e instanceof Error ? e.message : "Export failed");
+                  const detail = e instanceof Error ? e.message : String(e);
+                  globalThis["alert"](`${t("book.exportFailed")}: ${detail}`);
                 }
               }}
               className="flex items-center gap-2 px-4 py-2 text-xs font-bold bg-secondary/50 text-muted-foreground rounded-lg hover:text-foreground hover:bg-secondary transition-all border border-border/50"
@@ -730,7 +739,10 @@ export function BookDetail({
                           <button
                             onClick={async () => {
                               try { await postApi(`/books/${bookId}/chapters/${ch.number}/approve`); refetch(); }
-                              catch (e) { alert(e instanceof Error ? e.message : "Approve failed"); }
+                              catch (e) {
+                                const detail = e instanceof Error ? e.message : String(e);
+                                globalThis["alert"](`${t("reader.approveFailed")}: ${detail}`);
+                              }
                             }}
                             className="p-2 rounded-lg bg-emerald-500/10 text-emerald-600 hover:bg-emerald-500 hover:text-white transition-all shadow-sm"
                             title={t("book.approve")}
@@ -740,7 +752,10 @@ export function BookDetail({
                           <button
                             onClick={async () => {
                               try { await postApi(`/books/${bookId}/chapters/${ch.number}/reject`); refetch(); }
-                              catch (e) { alert(e instanceof Error ? e.message : "Reject failed"); }
+                              catch (e) {
+                                const detail = e instanceof Error ? e.message : String(e);
+                                globalThis["alert"](`${t("reader.rejectFailed")}: ${detail}`);
+                              }
                             }}
                             className="p-2 rounded-lg bg-destructive/10 text-destructive hover:bg-destructive hover:text-white transition-all shadow-sm"
                             title={t("book.reject")}
@@ -753,10 +768,15 @@ export function BookDetail({
                         onClick={async () => {
                           try {
                             const auditResult = await fetchJson<{ passed?: boolean; issues?: unknown[] }>(`/books/${bookId}/audit/${ch.number}`, { method: "POST" });
-                            alert(auditResult.passed ? "Audit passed" : `Audit failed: ${auditResult.issues?.length ?? 0} issues`);
+                            globalThis["alert"](
+                              auditResult.passed
+                                ? t("book.auditPassed")
+                                : t("book.auditIssues", { count: auditResult.issues?.length ?? 0 }),
+                            );
                             refetch();
                           } catch (e) {
-                            alert(e instanceof Error ? e.message : "Audit failed");
+                            const detail = e instanceof Error ? e.message : String(e);
+                            globalThis["alert"](`${t("book.auditFailed")}: ${detail}`);
                           }
                         }}
                         className="p-2 rounded-lg bg-secondary text-muted-foreground hover:text-primary hover:bg-primary/10 transition-all shadow-sm"

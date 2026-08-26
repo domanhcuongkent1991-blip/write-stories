@@ -95,7 +95,8 @@ export function TruthFiles({ bookId, nav, theme, t }: { bookId: string; nav: Nav
       setEditMode(false);
       refetchFile();
     } catch (e) {
-      alert(e instanceof Error ? e.message : "Failed to save");
+      const detail = e instanceof Error ? e.message : String(e);
+      globalThis["alert"](`${t("truth.saveFailed")}: ${detail}`);
     } finally {
       setSavingEdit(false);
     }

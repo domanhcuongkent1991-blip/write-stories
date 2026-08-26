@@ -1,37 +1,39 @@
 import { ExternalLink } from "lucide-react";
-import { tr } from "../lib/app-language";
+import { translateAppString } from "../lib/app-language";
+import type { StringKey } from "../i18n/catalog";
+
+const t = translateAppString;
 
 interface ServiceQuickLink {
   readonly label: string;
   readonly href: string;
 }
 
-// 标签在调用时通过 tr() 解析语言，所以这里存 zh/en 对而不是最终字符串。
-const SERVICE_QUICK_LINKS: Record<string, ReadonlyArray<{ zh: string; en: string; href: string }>> = {
+const SERVICE_QUICK_LINKS: Record<string, ReadonlyArray<{ labelKey: StringKey; href: string }>> = {
   kimicode: [
-    { zh: "官网", en: "Website", href: "https://www.kimi.com?aff=inkos" },
+    { labelKey: "workflow.serviceLinks.website", href: "https://www.kimi.com?aff=inkos" },
   ],
   kimiCodingPlan: [
-    { zh: "官网", en: "Website", href: "https://www.kimi.com?aff=inkos" },
+    { labelKey: "workflow.serviceLinks.website", href: "https://www.kimi.com?aff=inkos" },
   ],
   kkaiapi: [
-    { zh: "官网", en: "Website", href: "https://kkaiapi.com/" },
-    { zh: "API 文档", en: "API docs", href: "https://kkaiapi.com/docs" },
-    { zh: "模型/价格", en: "Models & pricing", href: "https://kkaiapi.com/models" },
+    { labelKey: "workflow.serviceLinks.website", href: "https://kkaiapi.com/" },
+    { labelKey: "workflow.serviceLinks.apiDocs", href: "https://kkaiapi.com/docs" },
+    { labelKey: "workflow.serviceLinks.modelsPricing", href: "https://kkaiapi.com/models" },
   ],
   moonshot: [
-    { zh: "开放平台", en: "Developer platform", href: "https://platform.kimi.com?aff=inkos" },
+    { labelKey: "workflow.serviceLinks.developerPlatform", href: "https://platform.kimi.com?aff=inkos" },
   ],
   openrouter: [
-    { zh: "API Keys", en: "API Keys", href: "https://openrouter.ai/keys" },
-    { zh: "模型", en: "Models", href: "https://openrouter.ai/models" },
-    { zh: "文档", en: "Docs", href: "https://openrouter.ai/docs/api-reference/overview" },
+    { labelKey: "workflow.serviceLinks.apiKeys", href: "https://openrouter.ai/keys" },
+    { labelKey: "workflow.serviceLinks.models", href: "https://openrouter.ai/models" },
+    { labelKey: "workflow.serviceLinks.docs", href: "https://openrouter.ai/docs/api-reference/overview" },
   ],
 };
 
 export function getServiceQuickLinks(serviceId: string): ReadonlyArray<ServiceQuickLink> {
   return (SERVICE_QUICK_LINKS[serviceId] ?? []).map((link) => ({
-    label: tr(link.zh, link.en),
+    label: t(link.labelKey),
     href: link.href,
   }));
 }
@@ -57,7 +59,7 @@ export function ServiceQuickLinks({
         className,
       ].filter(Boolean).join(" ")}
     >
-      {!compact && <span className="mr-0.5">{tr("配置入口", "Quick links")}</span>}
+      {!compact && <span className="mr-0.5">{t("workflow.serviceLinks.title")}</span>}
       {links.map((link) => (
         <a
           key={link.href}
