@@ -60,6 +60,13 @@ async function extractPackedPackageJson(packageDir: string, packDir: string) {
 }
 
 describe.sequential("publish packaging", () => {
+  it("pins the workspace package manager exactly", async () => {
+    const rootPackage = JSON.parse(
+      await readFile(resolve(workspaceRoot, "package.json"), "utf-8"),
+    );
+    expect(rootPackage.packageManager).toBe("pnpm@9.15.9");
+  });
+
   it("rewrites workspace package versions for canary publishing", async () => {
     const tempRoot = await mkdtemp(join(tmpdir(), "inkos-version-script-"));
     const tempPackagesDir = join(tempRoot, "packages");
