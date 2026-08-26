@@ -3,34 +3,9 @@ import { createStore } from "zustand/vanilla";
 import type { ChatStore } from "../../types";
 import { initialChatState } from "../../initialState";
 import { createCreateSlice } from "../create/action";
-import { createMessageSlice, resolveAgentInstruction } from "./action";
+import { createMessageSlice } from "./action";
 import { setAppLanguage } from "../../../../lib/app-language";
 import { setWritingLanguage } from "../../../../lib/writing-language";
-
-describe("raw agent instruction boundary", () => {
-  afterEach(() => {
-    setAppLanguage("zh");
-    setWritingLanguage("zh");
-  });
-
-  it.each([
-    ["zh", "zh", "请阅读我上传的文件。"],
-    ["en", "zh", "请阅读我上传的文件。"],
-    ["vi", "zh", "请阅读我上传的文件。"],
-    ["zh", "en", "Please read the files I uploaded."],
-    ["en", "en", "Please read the files I uploaded."],
-    ["vi", "en", "Please read the files I uploaded."],
-  ] as const)(
-    "uses UI locale %s independently of writing language %s",
-    (uiLocale, writingLanguage, expected) => {
-      setAppLanguage(uiLocale);
-      setWritingLanguage(writingLanguage);
-
-      expect(resolveAgentInstruction("   ")).toBe(expected);
-      expect(resolveAgentInstruction("  nguyên văn  ")).toBe("nguyên văn");
-    },
-  );
-});
 
 const { fetchJson } = vi.hoisted(() => ({
   fetchJson: vi.fn(),
@@ -83,7 +58,40 @@ describe("chat message actions", () => {
 
   afterEach(() => {
     (globalThis as any).EventSource = originalEventSource;
+    setAppLanguage("zh");
+    setWritingLanguage("zh");
   });
+
+  it.each([
+    ["zh", "zh", "请阅读我上传的文件。"],
+    ["en", "zh", "请阅读我上传的文件。"],
+    ["vi", "zh", "请阅读我上传的文件。"],
+    ["zh", "en", "Please read the files I uploaded."],
+    ["en", "en", "Please read the files I uploaded."],
+    ["vi", "en", "Please read the files I uploaded."],
+  ] as const)(
+    "sends attachment-only instruction using writing language %s independently of UI locale %s",
+    async (uiLocale, writingLanguage, expected) => {
+      const store = createTestStore();
+      const sessionId = store.getState().createDraftSession(null, "chat");
+      store.getState().setSelectedModel("deepseek-v4-flash", "kkaiapi");
+      setAppLanguage(uiLocale);
+      setWritingLanguage(writingLanguage);
+      fetchJson
+        .mockResolvedValueOnce({ session: { sessionId, bookId: null, sessionKind: "chat" } })
+        .mockResolvedValueOnce({ response: "ok", session: { sessionId, sessionKind: "chat" } });
+
+      await store.getState().sendMessage(sessionId, "   ", {
+        attachments: [{ id: "attachment-1", filename: "notes.txt", mediaType: "text/plain", size: 10, dataUrl: "data:text/plain;base64,bm90ZXM=" }],
+      });
+
+      const agentCall = fetchJson.mock.calls.find(([path]) => path === "/agent");
+      expect(agentCall).toBeDefined();
+      const body = JSON.parse((agentCall?.[1] as { body: string }).body);
+      expect(body.instruction).toBe(expected);
+      expect(store.getState().sessions[sessionId]?.messages[0]?.content).toContain(expected);
+    },
+  );
 
   it("aborts only the previous chat round when activating another session", async () => {
     const store = createTestStore();

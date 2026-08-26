@@ -35,6 +35,37 @@ interface Nav {
   toFilm: (id: string) => void;
 }
 
+interface FlowEditHandlersInput {
+  readonly graph: StoryGraph;
+  readonly editing: boolean;
+  readonly post: (body: { delta: unknown }) => Promise<void>;
+}
+
+export function createFlowEditHandlers({ graph, editing, post }: FlowEditHandlersInput) {
+  const onConnect = async (conn: { source: string | null; target: string | null }) => {
+    if (!editing || !conn.source || !conn.target || conn.source === conn.target) return;
+    const src = graph.nodes.find((node) => node.id === conn.source);
+    if (!src) return;
+    await post(addChoiceDelta(src, {
+      id: genChoiceId(),
+      text: resolveNewGraphContent("choice"),
+      targetNodeId: conn.target,
+    }));
+  };
+
+  const onAddNode = async () => {
+    await post(addNodeDelta({
+      id: genNodeId(),
+      type: "normal",
+      title: resolveNewGraphContent("node"),
+      choices: [],
+      position: { x: 80, y: 80 },
+    } as never));
+  };
+
+  return { onConnect, onAddNode };
+}
+
 // v12: define Node type with data shape, then use NodeProps<StoryNode>
 type StoryNode = Node<{ label: string; nodeType: string }, "story">;
 type StoryEdge = Edge;
@@ -218,13 +249,7 @@ export default function FlowView({
     await post(moveNodeDelta(orig, Math.round(node.position.x), Math.round(node.position.y)));
   };
 
-  const onConnect = async (conn: { source: string | null; target: string | null }) => {
-    if (!editing || !graph || !conn.source || !conn.target) return;
-    if (conn.source === conn.target) return;
-    const src = graph.nodes.find((g) => g.id === conn.source);
-    if (!src) return;
-    await post(addChoiceDelta(src, { id: genChoiceId(), text: resolveNewGraphContent("choice"), targetNodeId: conn.target }));
-  };
+  const { onConnect, onAddNode } = createFlowEditHandlers({ graph: graph!, editing, post });
 
   const onNodesDelete = async (deleted: Array<{ id: string }>) => {
     if (!editing) return;
@@ -246,18 +271,6 @@ export default function FlowView({
       const src = graph.nodes.find((g) => g.id === source);
       if (src) await post(removeChoicesDelta(src, choiceIds));
     }
-  };
-
-  const onAddNode = async () => {
-    await post(
-      addNodeDelta({
-        id: genNodeId(),
-        type: "normal",
-        title: resolveNewGraphContent("node"),
-        choices: [],
-        position: { x: 80, y: 80 },
-      } as never),
-    );
   };
 
   if (loading) return <div className={c.muted}>{t("common.loading")}</div>;

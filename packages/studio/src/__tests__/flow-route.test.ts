@@ -1,6 +1,6 @@
-import { afterEach, describe, it, expect } from "vitest";
+import { afterEach, describe, it, expect, vi } from "vitest";
 import { parseHash, routeToHash } from "../hooks/use-hash-route";
-import { resolveNewGraphContent } from "../pages/FlowView";
+import { createFlowEditHandlers } from "../pages/FlowView";
 import { setAppLanguage } from "../lib/app-language";
 import { setWritingLanguage } from "../lib/writing-language";
 
@@ -21,13 +21,32 @@ describe("flow route", () => {
     ["en", "en", "New choice", "New node"],
     ["vi", "en", "New choice", "New node"],
   ] as const)(
-    "uses UI locale %s independently of writing language %s",
+    "uses UI locale %s independently of writing language %s in production edit handlers",
     (uiLocale, writingLanguage, expectedChoice, expectedNode) => {
       setAppLanguage(uiLocale);
       setWritingLanguage(writingLanguage);
 
-      expect(resolveNewGraphContent("choice")).toBe(expectedChoice);
-      expect(resolveNewGraphContent("node")).toBe(expectedNode);
+      const post = vi.fn().mockResolvedValue(undefined);
+      const graph = {
+        title: "demo",
+        nodes: [{
+          id: "source",
+          type: "normal",
+          title: "Source",
+          choices: [],
+          position: { x: 0, y: 0 },
+        }],
+      } as never;
+      const { onConnect, onAddNode } = createFlowEditHandlers({ graph, editing: true, post });
+
+      return Promise.all([
+        onConnect({ source: "source", target: "target" }),
+        onAddNode(),
+      ]).then(() => {
+        const deltas = post.mock.calls.map(([body]) => body.delta as { nodes: { upsert: Array<any> } });
+        expect(deltas[0]?.nodes.upsert[0]?.choices[0]?.text).toBe(expectedChoice);
+        expect(deltas[1]?.nodes.upsert[0]?.title).toBe(expectedNode);
+      });
     },
   );
 });

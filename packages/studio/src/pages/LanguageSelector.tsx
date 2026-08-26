@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { formatLocalizedString } from "../i18n/catalog";
 import type { UiLocale } from "../lib/ui-locale";
 import type { WritingLanguage } from "../lib/writing-language";
@@ -9,6 +9,48 @@ interface LanguageSelectorProps {
   readonly onSelectWritingLanguage: (language: WritingLanguage) => void | Promise<void>;
 }
 
+export interface WritingLanguageSelectionController {
+  select: (language: WritingLanguage) => void;
+  cancel: () => void;
+}
+
+export function createWritingLanguageSelectionController(
+  onSelect: (language: WritingLanguage) => void | Promise<void>,
+  setSelected: (language: WritingLanguage | null) => void,
+  setPending: (pending: boolean) => void,
+  schedule: (callback: () => void, delay: number) => ReturnType<typeof setTimeout> = setTimeout,
+  cancelScheduled: (timer: ReturnType<typeof setTimeout>) => void = clearTimeout,
+): WritingLanguageSelectionController {
+  let pending = false;
+  let timer: ReturnType<typeof setTimeout> | null = null;
+  let disposed = false;
+
+  const cancel = () => {
+    if (timer !== null) cancelScheduled(timer);
+    timer = null;
+    disposed = true;
+    pending = false;
+  };
+
+  const select = (language: WritingLanguage) => {
+    if (pending || disposed) return;
+    pending = true;
+    setPending(true);
+    setSelected(language);
+    timer = schedule(() => {
+      timer = null;
+      void Promise.resolve(onSelect(language)).catch(() => {
+        if (disposed) return;
+        pending = false;
+        setPending(false);
+        setSelected(null);
+      });
+    }, 400);
+  };
+
+  return { select, cancel };
+}
+
 export function LanguageSelector({
   uiLocale,
   onUiLocaleChange,
@@ -16,15 +58,23 @@ export function LanguageSelector({
 }: LanguageSelectorProps) {
   const [hovering, setHovering] = useState<WritingLanguage | null>(null);
   const [selected, setSelected] = useState<WritingLanguage | null>(null);
+  const [pending, setPending] = useState(false);
+  const controllerRef = useRef<WritingLanguageSelectionController | null>(null);
   const t = (key: Parameters<typeof formatLocalizedString>[0]) => (
     formatLocalizedString(key, uiLocale)
   );
 
-  const handleWritingLanguageSelect = (language: WritingLanguage) => {
-    setSelected(language);
-    // Brief pause for the selection animation before transitioning
-    setTimeout(() => void onSelectWritingLanguage(language), 400);
-  };
+  if (controllerRef.current === null) {
+    controllerRef.current = createWritingLanguageSelectionController(
+      onSelectWritingLanguage,
+      setSelected,
+      setPending,
+    );
+  }
+
+  useEffect(() => () => {
+    controllerRef.current?.cancel();
+  }, []);
 
   return (
     <div className="min-h-screen bg-background flex flex-col items-center justify-center px-8">
@@ -39,7 +89,7 @@ export function LanguageSelector({
 
       <div className="mb-8 flex gap-0.5 rounded-lg bg-muted/50 p-0.5" aria-label={t("languageSelector.interfaceLanguage")}>
         {(["zh", "en", "vi"] as const).map((locale) => (
-          <button
+        <button
             key={locale}
             type="button"
             onClick={() => onUiLocaleChange(locale)}
@@ -58,7 +108,8 @@ export function LanguageSelector({
       <div className="flex gap-8 mb-16">
         <button
           data-writing-language="zh"
-          onClick={() => handleWritingLanguageSelect("zh")}
+          onClick={() => controllerRef.current?.select("zh")}
+          disabled={pending}
           onMouseEnter={() => setHovering("zh")}
           onMouseLeave={() => setHovering(null)}
           className={`group w-80 border rounded-lg p-10 text-left transition-all duration-300 ${
@@ -78,9 +129,10 @@ export function LanguageSelector({
           </div>
         </button>
 
-        <button
+          <button
           data-writing-language="en"
-          onClick={() => handleWritingLanguageSelect("en")}
+          onClick={() => controllerRef.current?.select("en")}
+          disabled={pending}
           onMouseEnter={() => setHovering("en")}
           onMouseLeave={() => setHovering(null)}
           className={`group w-80 border rounded-lg p-10 text-left transition-all duration-300 ${
