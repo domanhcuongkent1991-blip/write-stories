@@ -6,6 +6,20 @@ import { expect, test, type Page } from "@playwright/test";
 const testFileDirectory = dirname(fileURLToPath(import.meta.url));
 const projectConfigPath = resolve(testFileDirectory, "../../../test-project/inkos.json");
 const storageKey = "inkos:studio:ui-locale";
+const VI_CREATE_LABELS = [
+  "Tiểu thuyết dài",
+  "Truyện ngắn",
+  "Kịch bản",
+  "Phân cảnh",
+  "Phim tương tác",
+  "Đồng nhân",
+  "Ngoại truyện",
+  "Viết mô phỏng",
+  "Viết tiếp",
+  "Dịch thuật",
+  "Tương tác phân nhánh",
+  "Thế giới mở",
+];
 
 let originalProjectConfig = "";
 
@@ -83,5 +97,69 @@ test("first run separates UI locale from writing language", async ({ page }) => 
   await expect(projectResponse.json()).resolves.toMatchObject({
     language: "en",
     languageExplicit: true,
+  });
+});
+
+test("create menu is one readable vertical list in Vietnamese", async ({ page }, testInfo) => {
+  await writeProjectLanguage("en");
+  await page.setViewportSize({ width: 1280, height: 600 });
+  await page.goto("/");
+  await page.getByRole("button", { name: "VI", exact: true }).click();
+
+  const sidebar = page.locator("aside").first();
+  const menu = page.getByTestId("sidebar-create-menu");
+  const buttons = menu.getByRole("button");
+
+  await expect(buttons).toHaveCount(12);
+  await expect(buttons).toHaveText(VI_CREATE_LABELS);
+  for (const label of VI_CREATE_LABELS) {
+    await expect(menu.getByRole("button", { name: label, exact: true })).toBeEnabled();
+  }
+
+  const sidebarBox = await sidebar.boundingBox();
+  expect(Math.round(sidebarBox?.width ?? 0)).toBe(260);
+
+  const rows = await buttons.evaluateAll((elements) => elements.map((element) => {
+    const label = element.querySelector<HTMLElement>("[data-create-label]");
+    if (!label) throw new Error("CreateItem label marker is missing");
+    const rect = element.getBoundingClientRect();
+    const style = getComputedStyle(label);
+    return {
+      top: rect.top,
+      bottom: rect.bottom,
+      left: rect.left,
+      labelScrollWidth: label.scrollWidth,
+      labelClientWidth: label.clientWidth,
+      textOverflow: style.textOverflow,
+      whiteSpace: style.whiteSpace,
+    };
+  }));
+
+  for (let index = 1; index < rows.length; index += 1) {
+    expect(rows[index]!.top).toBeGreaterThanOrEqual(rows[index - 1]!.bottom);
+  }
+  expect(new Set(rows.map((row) => Math.round(row.left))).size).toBe(1);
+  expect(rows.every((row) => row.labelScrollWidth <= row.labelClientWidth)).toBe(true);
+  expect(rows.every((row) => row.textOverflow !== "ellipsis")).toBe(true);
+  expect(rows.every((row) => row.whiteSpace !== "nowrap")).toBe(true);
+
+  const downstreamHeaders = [
+    page.getByRole("button", { name: "Tác phẩm của tôi", exact: true }),
+    page.getByRole("button", { name: "Phim tương tác", exact: true }).last(),
+    page.getByRole("button", { name: "Phiên làm việc", exact: true }),
+  ];
+  for (const height of [600, 768, 900]) {
+    await page.setViewportSize({ width: 1280, height });
+    expect(await sidebar.evaluate((element) => element.scrollWidth <= element.clientWidth)).toBe(true);
+    for (const header of downstreamHeaders) {
+      await header.scrollIntoViewIfNeeded();
+      await expect(header).toBeVisible();
+    }
+  }
+
+  await menu.scrollIntoViewIfNeeded();
+  await testInfo.attach("sidebar-create-menu-vi-260px", {
+    body: await sidebar.screenshot(),
+    contentType: "image/png",
   });
 });

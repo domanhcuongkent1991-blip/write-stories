@@ -303,14 +303,14 @@ export function Sidebar({ nav, activePage, sse, t }: {
 
       {/* Main Navigation */}
       <div className="flex-1 overflow-y-auto px-4 py-2 space-y-6">
-        {/* InkOS Create Section — always visible, two columns. */}
+        {/* InkOS Create Section — always visible, one readable column. */}
         <div>
           <div className="px-3 mb-2.5">
             <span className="text-[16px] leading-6 uppercase tracking-[0.1em] text-muted-foreground font-bold">
               {t("nav.createSection")}
             </span>
           </div>
-          <div className="grid grid-cols-2 gap-1">
+          <div data-testid="sidebar-create-menu" className="grid grid-cols-1 gap-1">
             <CreateItem icon={<BookPlus size={16} />} label={t("nav.createNovel")} active={activePage === "book-create"} onClick={handleOpenBookCreate} />
             <CreateItem icon={<ScrollText size={16} />} label={t("nav.createShort")} onClick={() => launchProjectMode("short")} />
             <CreateItem icon={<Clapperboard size={16} />} label={t("nav.createScript")} onClick={() => launchProjectMode("script")} />
@@ -790,14 +790,16 @@ function CreateItem({ icon, label, active, onClick }: {
     <button
       type="button"
       onClick={onClick}
-      className={`flex min-w-0 items-center gap-2 rounded-lg px-2.5 py-2.5 text-left text-[16px] leading-6 transition-all ${
+      className={`flex w-full min-w-0 items-start gap-2 rounded-lg px-2.5 py-2.5 text-left text-[16px] leading-6 transition-all ${
         active
           ? "border border-border bg-secondary text-foreground font-medium shadow-sm"
           : "text-muted-foreground hover:bg-secondary/50 hover:text-foreground"
       }`}
     >
-      <span className={`shrink-0 ${active ? "text-primary" : ""}`}>{icon}</span>
-      <span className="truncate">{label}</span>
+      <span className={`mt-1 shrink-0 ${active ? "text-primary" : ""}`}>{icon}</span>
+      <span data-create-label className="min-w-0 flex-1 whitespace-normal break-words">
+        {label}
+      </span>
     </button>
   );
 }
