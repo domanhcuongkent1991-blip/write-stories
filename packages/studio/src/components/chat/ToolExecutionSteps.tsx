@@ -78,6 +78,16 @@ const RUNTIME_LABEL_KEYS: Readonly<Record<string, StringKey>> = {
   "Recheck forecast": "runtime.tool.recheckForecast",
   "采用候选分支": "runtime.tool.selectBranch",
   "Select candidate branch": "runtime.tool.selectBranch",
+  "翻译项目": "translation.projects",
+  "Translation": "translation.projects",
+  "同人创作": "import.fanfic",
+  "Fanfiction": "import.fanfic",
+  "导入续写": "nav.createContinuation",
+  "Continuation import": "nav.createContinuation",
+  "番外创作": "import.spinoff",
+  "Side story": "import.spinoff",
+  "仿写创作": "import.imitation",
+  "Style imitation": "import.imitation",
   "生成基础设定": "progress.generateFoundation",
   "Generate foundation": "progress.generateFoundation",
   "保存书籍配置": "progress.saveBookConfig",
@@ -1003,6 +1013,11 @@ function isPipelineTool(tool: string): boolean {
     || tool === "resync_chapter_state"
     || tool === "context_compression"
     || tool === "propose_action"
+    || tool === "translation_create"
+    || tool === "fanfic_create"
+    || tool === "continuation_import"
+    || tool === "spinoff_create"
+    || tool === "imitation_create"
     || tool === "short_fiction_run"
     || tool === "script_create"
     || tool === "storyboard_create"

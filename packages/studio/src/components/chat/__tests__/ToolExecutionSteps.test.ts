@@ -740,6 +740,35 @@ describe("runtime labels follow UI locale", () => {
     expect(html).toContain(expectedStage);
     expect(html).toContain(rawResult);
   });
+
+  it.each([
+    ["zh", ["翻译项目", "同人创作", "续写创作", "番外创作", "仿写创作"]],
+    ["en", ["Translation Projects", "Fanfic", "Continuation", "Side-story", "Imitation"]],
+    ["vi", ["Dự án dịch", "Sáng tác đồng nhân", "Viết tiếp", "Sáng tác ngoại truyện", "Viết mô phỏng"]],
+  ] as const)("localizes derivative tool families in %s without changing raw results", (locale, expectedLabels) => {
+    setAppLanguage(locale);
+    const tools = [
+      ["translation_create", "翻译项目"],
+      ["fanfic_create", "同人创作"],
+      ["continuation_import", "导入续写"],
+      ["spinoff_create", "番外创作"],
+      ["imitation_create", "仿写创作"],
+    ] as const;
+    const executions = tools.map(([tool, label], index) => makeExec({
+      id: `${tool}-${locale}`,
+      tool,
+      status: "running",
+      label,
+      result: `Raw payload ${index}: 保持原样 / keep exact`,
+    }));
+
+    const html = renderToStaticMarkup(React.createElement(ToolExecutionSteps, { executions }));
+
+    for (const label of expectedLabels) expect(html).toContain(label);
+    for (let index = 0; index < tools.length; index += 1) {
+      expect(html).toContain(`Raw payload ${index}: 保持原样 / keep exact`);
+    }
+  });
 });
 
 describe("UtilityExecutionRow", () => {
