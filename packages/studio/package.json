@@ -27,6 +27,7 @@
     "build:server": "tsc -p tsconfig.server.json",
     "preview": "vite preview",
     "test": "vitest run",
+    "check:i18n": "tsx ../../scripts/check-i18n-drift.ts",
     "test:e2e": "playwright test",
     "typecheck": "tsc --noEmit && tsc -p tsconfig.server.json --noEmit"
   },
