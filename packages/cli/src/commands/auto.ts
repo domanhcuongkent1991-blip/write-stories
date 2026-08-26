@@ -12,6 +12,7 @@ import {
   formatWriteNextResultLines,
 } from "../localization.js";
 import { resolveCliLocale, resolveWritingLanguage } from "../locale.js";
+import { formatCliMessage } from "../i18n/messages.js";
 import { sendCommandNotification } from "../notify-helper.js";
 
 export const autoCommand = new Command("auto")
@@ -50,12 +51,13 @@ export const autoCommand = new Command("auto")
       notifyBookName = book.title ?? bookId;
       const migrationHint = await getLegacyMigrationHint(root, bookId);
       if (migrationHint && !opts.json) {
-        log(`[migration] ${migrationHint}`);
+        log(formatCliMessage(locale, "common.migration", { hint: migrationHint }));
       }
 
       const startChapter = await state.getNextChapterNumber(bookId);
       if (startChapter > targetChapter) {
         if (opts.json) {
+          // i18n-raw: structured JSON results must remain locale-independent.
           log(JSON.stringify([], null, 2));
         } else {
           log(formatAutoWriteAlreadyComplete(locale, bookId, startChapter - 1, targetChapter));
@@ -102,7 +104,7 @@ export const autoCommand = new Command("auto")
           })) {
             log(line);
           }
-          log("");
+          log(formatCliMessage(locale, "common.blank"));
         }
 
         if (result.status === "state-degraded") {
@@ -113,6 +115,7 @@ export const autoCommand = new Command("auto")
       }
 
       if (opts.json) {
+        // i18n-raw: structured JSON results must remain locale-independent.
         log(JSON.stringify(results, null, 2));
       } else {
         log(formatWriteNextComplete(locale));
@@ -142,9 +145,10 @@ export const autoCommand = new Command("auto")
         });
       }
       if (opts.json) {
+        // i18n-raw: structured JSON errors preserve the original detail.
         log(JSON.stringify({ error: String(e) }));
       } else {
-        logError(`Auto-write failed: ${e}`);
+        logError(formatCliMessage(locale, "auto.failure", { detail: String(e) }));
       }
       process.exit(1);
     }

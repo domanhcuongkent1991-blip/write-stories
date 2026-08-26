@@ -2,7 +2,7 @@ import { Command } from "commander";
 import { access, readFile, rm } from "node:fs/promises";
 import { createInterface } from "node:readline";
 import { join, resolve } from "node:path";
-import { deriveBookIdFromTitle, normalizePlatformOrOther, PipelineRunner, StateManager, type BookConfig } from "@actalk/inkos-core";
+import { deriveBookIdFromTitle, formatLengthCount, normalizePlatformOrOther, PipelineRunner, resolveLengthCountingMode, StateManager, type BookConfig } from "@actalk/inkos-core";
 import {
   formatBookBackupCreated,
   formatBookBackupListEmpty,
@@ -16,6 +16,7 @@ import {
 import { resolveCliLocale, resolveWritingLanguage } from "../locale.js";
 import { createBookBackup, listBookBackups, restoreBookBackup } from "../book-backup.js";
 import { loadConfig, buildPipelineConfig, findProjectRoot, resolveBookId, log, logError } from "../utils.js";
+import { formatCurrentCliMessage } from "../i18n/messages.js";
 
 export const bookCommand = new Command("book")
   .description("Manage books");
@@ -76,6 +77,7 @@ bookCommand
       await pipeline.initBook(book);
 
       if (opts.json) {
+        // i18n-raw: structured book data must remain locale-independent.
         log(JSON.stringify({
           bookId,
           title: book.title,
@@ -88,14 +90,15 @@ bookCommand
         log(formatBookCreateCreated(locale, bookId));
         log(formatBookCreateLocation(locale, bookId));
         log(formatBookCreateFoundationReady(locale));
-        log("");
+        log(formatCurrentCliMessage("common.blank"));
         log(formatBookCreateNextStep(locale, bookId));
       }
     } catch (e) {
       if (opts.json) {
+        // i18n-raw: structured JSON errors preserve the original detail.
         log(JSON.stringify({ error: String(e) }));
       } else {
-        logError(`Failed to create book: ${e}`);
+        logError(formatCurrentCliMessage("book.createFailure", { detail: String(e) }));
       }
       process.exit(1);
     }
@@ -125,13 +128,15 @@ bookCommand
 
       if (Object.keys(updates).length === 0) {
         if (opts.json) {
+          // i18n-raw: structured book data must remain locale-independent.
           log(JSON.stringify(book, null, 2));
         } else {
-          log(`Book: ${book.title} (${bookId})`);
-          log(`  Words/chapter: ${book.chapterWordCount}`);
-          log(`  Target chapters: ${book.targetChapters}`);
-          log(`  Status: ${book.status}`);
-          log(`  Genre: ${book.genre} | Platform: ${book.platform}`);
+          const length = formatLengthCount(book.chapterWordCount, resolveLengthCountingMode(resolveWritingLanguage(book.language)));
+          log(formatCurrentCliMessage("book.info", { title: book.title, bookId }));
+          log(formatCurrentCliMessage("book.chapterLength", { length }));
+          log(formatCurrentCliMessage("book.targetChapters", { count: book.targetChapters }));
+          log(formatCurrentCliMessage("book.status", { status: book.status }));
+          log(formatCurrentCliMessage("book.metadata", { genre: book.genre, platform: book.platform }));
         }
         return;
       }
@@ -144,17 +149,19 @@ bookCommand
       await state.saveBookConfig(bookId, updated);
 
       if (opts.json) {
+        // i18n-raw: structured book data must remain locale-independent.
         log(JSON.stringify(updated, null, 2));
       } else {
         for (const [key, value] of Object.entries(updates)) {
-          log(`  ${key}: ${(book as Record<string, unknown>)[key]} → ${value}`);
+          log(formatCurrentCliMessage("book.updatedField", { key, before: String((book as Record<string, unknown>)[key]), after: String(value) }));
         }
       }
     } catch (e) {
       if (opts.json) {
+        // i18n-raw: structured JSON errors preserve the original detail.
         log(JSON.stringify({ error: String(e) }));
       } else {
-        logError(`Failed to update book: ${e}`);
+        logError(formatCurrentCliMessage("book.updateFailure", { detail: String(e) }));
       }
       process.exit(1);
     }
@@ -172,9 +179,10 @@ bookCommand
 
       if (bookIds.length === 0) {
         if (opts.json) {
+          // i18n-raw: structured book lists must remain locale-independent.
           log(JSON.stringify({ books: [] }));
         } else {
-          log("No books found. Create one with: inkos book create --title '...'");
+          log(formatCurrentCliMessage("book.empty"));
         }
         return;
       }
@@ -193,18 +201,20 @@ bookCommand
         };
         books.push(info);
         if (!opts.json) {
-          log(`  ${id} | ${book.title} | ${book.genre}/${book.platform} | ${book.status} | chapters: ${nextChapter - 1}`);
+          log(formatCurrentCliMessage("book.listRow", { id, title: book.title, genre: book.genre, platform: book.platform, status: book.status, chapters: nextChapter - 1 }));
         }
       }
 
       if (opts.json) {
+        // i18n-raw: structured book lists must remain locale-independent.
         log(JSON.stringify({ books }, null, 2));
       }
     } catch (e) {
       if (opts.json) {
+        // i18n-raw: structured JSON errors preserve the original detail.
         log(JSON.stringify({ error: String(e) }));
       } else {
-        logError(`Failed to list books: ${e}`);
+        logError(formatCurrentCliMessage("book.listFailure", { detail: String(e) }));
       }
       process.exit(1);
     }
@@ -233,13 +243,13 @@ bookCommand
         const rl = createInterface({ input: process.stdin, output: process.stdout });
         const answer = await new Promise<string>((resolve) => {
           rl.question(
-            `Delete "${book.title}" (${bookId})? This will remove ${index.length} chapter(s) and all data. (y/N) `,
+            formatCurrentCliMessage("book.deleteConfirm", { title: book.title, bookId, chapters: index.length }),
             resolve,
           );
         });
         rl.close();
         if (answer.toLowerCase() !== "y") {
-          log("Cancelled.");
+          log(formatCurrentCliMessage("book.deleteCancelled"));
           return;
         }
       }
@@ -248,15 +258,17 @@ bookCommand
       await rm(bookDir, { recursive: true, force: true });
 
       if (opts.json) {
+        // i18n-raw: structured delete results must remain locale-independent.
         log(JSON.stringify({ deleted: bookId, chapters: index.length }));
       } else {
-        log(`Deleted "${book.title}" (${bookId}): ${index.length} chapter(s) removed.`);
+        log(formatCurrentCliMessage("book.deleted", { title: book.title, bookId, chapters: index.length }));
       }
     } catch (e) {
       if (opts.json) {
+        // i18n-raw: structured JSON errors preserve the original detail.
         log(JSON.stringify({ error: String(e) }));
       } else {
-        logError(`Failed to delete book: ${e}`);
+        logError(formatCurrentCliMessage("book.deleteFailure", { detail: String(e) }));
       }
       process.exit(1);
     }
@@ -278,11 +290,13 @@ bookCommand
       if (opts.list) {
         const backups = await listBookBackups(root, bookId);
         if (opts.json) {
+          // i18n-raw: structured backup data must remain locale-independent.
           log(JSON.stringify({ bookId, backups }, null, 2));
         } else if (backups.length === 0) {
           log(formatBookBackupListEmpty(locale, bookId));
         } else {
           for (const backup of backups) {
+            // i18n-raw: backup identifiers and timestamps are technical data.
             log(`  ${backup.id}  ${backup.createdAt}`);
           }
         }
@@ -291,15 +305,17 @@ bookCommand
 
       const result = await createBookBackup(root, bookId);
       if (opts.json) {
+        // i18n-raw: structured backup data must remain locale-independent.
         log(JSON.stringify({ bookId, backupId: result.backupId }, null, 2));
       } else {
         log(formatBookBackupCreated(locale, bookId, result.backupId));
       }
     } catch (e) {
       if (opts.json) {
+        // i18n-raw: structured JSON errors preserve the original detail.
         log(JSON.stringify({ error: String(e) }));
       } else {
-        logError(`Failed to back up book: ${e}`);
+        logError(formatCurrentCliMessage("book.backupFailure", { detail: String(e) }));
       }
       process.exit(1);
     }
@@ -319,6 +335,7 @@ bookCommand
       const result = await restoreBookBackup(root, bookId, backupId);
 
       if (opts.json) {
+        // i18n-raw: structured restore results must remain locale-independent.
         log(JSON.stringify(result, null, 2));
       } else {
         log(formatBookRestoreDone(locale, {
@@ -329,9 +346,10 @@ bookCommand
       }
     } catch (e) {
       if (opts.json) {
+        // i18n-raw: structured JSON errors preserve the original detail.
         log(JSON.stringify({ error: String(e) }));
       } else {
-        logError(`Failed to restore book: ${e}`);
+        logError(formatCurrentCliMessage("book.restoreFailure", { detail: String(e) }));
       }
       process.exit(1);
     }

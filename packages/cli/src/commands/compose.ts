@@ -1,6 +1,7 @@
 import { Command } from "commander";
 import { PipelineRunner } from "@actalk/inkos-core";
 import { buildPipelineConfig, findProjectRoot, loadConfig, log, logError, resolveBookId, resolveContext } from "../utils.js";
+import { formatCurrentCliMessage } from "../i18n/messages.js";
 
 export const composeCommand = new Command("compose")
   .description("Compose chapter runtime artifacts");
@@ -30,19 +31,21 @@ composeCommand
       const result = await pipeline.composeChapter(bookId, context);
 
       if (opts.json) {
+        // i18n-raw: structured compose artifacts must remain locale-independent.
         log(JSON.stringify(result, null, 2));
       } else {
-        log(`Composed chapter ${result.chapterNumber} for "${bookId}"`);
-        log(`  Intent: ${result.intentPath}`);
-        log(`  Context: ${result.contextPath}`);
-        log(`  Rule stack: ${result.ruleStackPath}`);
-        log(`  Trace: ${result.tracePath}`);
+        log(formatCurrentCliMessage("compose.complete", { chapterNumber: result.chapterNumber, bookId }));
+        log(formatCurrentCliMessage("compose.intent", { path: result.intentPath }));
+        log(formatCurrentCliMessage("compose.context", { path: result.contextPath }));
+        log(formatCurrentCliMessage("compose.ruleStack", { path: result.ruleStackPath }));
+        log(formatCurrentCliMessage("compose.trace", { path: result.tracePath }));
       }
     } catch (e) {
       if (opts.json) {
+        // i18n-raw: structured JSON errors preserve the original detail.
         log(JSON.stringify({ error: String(e) }));
       } else {
-        logError(`Failed to compose chapter: ${e}`);
+        logError(formatCurrentCliMessage("compose.failure", { detail: String(e) }));
       }
       process.exit(1);
     }

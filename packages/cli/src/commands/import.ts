@@ -10,6 +10,7 @@ import {
   formatImportChaptersResume,
 } from "../localization.js";
 import { resolveCliLocale, resolveWritingLanguage } from "../locale.js";
+import { formatCliMessage } from "../i18n/messages.js";
 
 export const importCommand = new Command("import")
   .description("Import external data into a book");
@@ -36,6 +37,7 @@ importCommand
       await pipeline.importCanon(targetBookId, opts.from);
 
       if (opts.json) {
+        // i18n-raw: structured canon import result must remain locale-independent.
         log(JSON.stringify({
           targetBookId,
           parentBookId: opts.from,
@@ -48,9 +50,10 @@ importCommand
       }
     } catch (e) {
       if (opts.json) {
+        // i18n-raw: structured JSON errors preserve the original detail.
         log(JSON.stringify({ error: String(e) }));
       } else {
-        logError(`Canon import failed: ${e}`);
+        logError(formatCliMessage(locale, "import.canonFailure", { detail: String(e) }));
       }
       process.exit(1);
     }
@@ -103,6 +106,7 @@ importCommand
       });
 
       if (opts.json) {
+        // i18n-raw: structured chapter import result must remain locale-independent.
         log(JSON.stringify(result, null, 2));
       } else {
         for (const line of formatImportChaptersComplete(locale, writingLanguage, {
@@ -116,9 +120,10 @@ importCommand
       }
     } catch (e) {
       if (opts.json) {
+        // i18n-raw: structured JSON errors preserve the original detail.
         log(JSON.stringify({ error: String(e) }));
       } else {
-        logError(`Chapter import failed: ${e}`);
+        logError(formatCliMessage(locale, "import.chapterFailure", { detail: String(e) }));
       }
       process.exit(1);
     }

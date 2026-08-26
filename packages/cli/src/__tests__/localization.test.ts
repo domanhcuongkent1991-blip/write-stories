@@ -1,4 +1,8 @@
 import { describe, expect, it } from "vitest";
+import { Command } from "commander";
+import { CLI_MESSAGES, formatCliMessage } from "../i18n/messages.js";
+import { applyCliHelpLocale } from "../i18n/help.js";
+import { VI_MESSAGES } from "../i18n/vi-messages.js";
 import {
   formatAutoWriteAlreadyComplete,
   formatAutoWriteStart,
@@ -28,6 +32,47 @@ import {
 } from "../localization.js";
 
 const CHINESE_CHARS = /[一-鿿]/;
+
+describe("CLI stable-key catalog", () => {
+  it("formats Vietnamese messages and preserves technical placeholders", () => {
+    expect(formatCliMessage("vi", "write.complete")).toBe("Hoàn tất.");
+    expect(formatCliMessage("vi", "audit.start", { bookId: "alpha" })).toContain("alpha");
+    expect(formatCliMessage("vi", "doctor.invalidApiKey")).toContain("INKOS_LLM_API_KEY");
+    expect(formatCliMessage("vi", "chapter.deleteHint", { command: "inkos chapter delete" }))
+      .toContain("inkos chapter delete");
+  });
+
+  it("falls back to English and leaves missing values visible", () => {
+    expect(formatCliMessage("vi", "catalog.fallbackFixture")).toBe("English fallback fixture.");
+    expect(formatCliMessage("vi", "audit.start")).toContain("{bookId}");
+  });
+
+  it("keeps every translated placeholder aligned with the English source", () => {
+    const placeholders = (value: string) => [...value.matchAll(/\{([A-Za-z][A-Za-z0-9]*)\}/g)]
+      .map((match) => match[1])
+      .sort();
+
+    for (const [key, translated] of Object.entries(VI_MESSAGES)) {
+      expect(placeholders(translated), key).toEqual(placeholders(CLI_MESSAGES[key as keyof typeof CLI_MESSAGES].en));
+    }
+  });
+
+  it("localizes help by semantic command path without changing interfaces", () => {
+    const program = new Command("inkos").description("InkOS CLI");
+    const audit = program.command("audit")
+      .description("Audit a chapter")
+      .argument("[book-id]", "Book ID (auto-detected if only one book)")
+      .option("--json", "Output JSON");
+
+    applyCliHelpLocale(program, "vi");
+
+    expect(audit.name()).toBe("audit");
+    expect(audit.options[0]?.long).toBe("--json");
+    expect(audit.description()).toContain("Kiểm tra");
+    expect(audit.options[0]?.description).toBe("Xuất JSON");
+    expect(audit.registeredArguments[0]?.description).toContain("ID sách");
+  });
+});
 
 describe("CLI localization", () => {
   it("formats book-create summaries in both languages", () => {

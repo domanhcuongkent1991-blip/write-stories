@@ -9,6 +9,7 @@ import {
 } from "@actalk/inkos-core";
 import { findProjectRoot, log, logError } from "../utils.js";
 import { resolveWritingLanguage } from "../locale.js";
+import { formatCurrentCliMessage } from "../i18n/messages.js";
 
 export function buildGenreTemplate(
   params: {
@@ -79,18 +80,18 @@ genreCommand
       const genres = await listAvailableGenres(root);
 
       if (genres.length === 0) {
-        log("No genre profiles found.");
+        log(formatCurrentCliMessage("genre.empty"));
         return;
       }
 
-      log("Available genres:\n");
+      log(formatCurrentCliMessage("genre.available"));
       for (const g of genres) {
         const tag = g.source === "project" ? "[project]" : "[builtin]";
-        log(`  ${g.id.padEnd(12)} ${g.name.padEnd(8)} ${tag}`);
+        log(formatCurrentCliMessage("genre.row", { id: g.id.padEnd(12), name: g.name.padEnd(8), source: tag }));
       }
-      log(`\nTotal: ${genres.length} genre(s)`);
+      log(formatCurrentCliMessage("genre.total", { count: genres.length }));
     } catch (e) {
-      logError(`Failed to list genres: ${e}`);
+      logError(formatCurrentCliMessage("genre.listFailure", { detail: String(e) }));
       process.exit(1);
     }
   });
@@ -105,26 +106,26 @@ genreCommand
       const genres = await listAvailableGenres(root);
       const exactMatch = genres.some(g => g.id === id);
       if (!exactMatch) {
-        logError(`Genre "${id}" not found. Available: ${genres.map(g => g.id).join(", ")}`);
+        logError(formatCurrentCliMessage("genre.notFound", { id, available: genres.map(g => g.id).join(", ") }));
         process.exit(1);
       }
       const { profile, body } = await readGenreProfile(root, id);
 
-      log(`Genre: ${profile.name} (${profile.id})\n`);
-      log(`  Chapter types:      ${profile.chapterTypes.join(", ")}`);
-      log(`  Fatigue words:      ${profile.fatigueWords.join(", ")}`);
-      log(`  Numerical system:   ${profile.numericalSystem}`);
-      log(`  Power scaling:      ${profile.powerScaling}`);
-      log(`  Era research:       ${profile.eraResearch}`);
-      log(`  Pacing rule:        ${profile.pacingRule}`);
-      log(`  Satisfaction types: ${profile.satisfactionTypes.join(", ")}`);
-      log(`  Audit dimensions:   ${profile.auditDimensions.join(", ")}`);
+      log(formatCurrentCliMessage("genre.header", { name: profile.name, id: profile.id }));
+      log(formatCurrentCliMessage("genre.chapterTypes", { value: profile.chapterTypes.join(", ") }));
+      log(formatCurrentCliMessage("genre.fatigueWords", { value: profile.fatigueWords.join(", ") }));
+      log(formatCurrentCliMessage("genre.numerical", { value: profile.numericalSystem }));
+      log(formatCurrentCliMessage("genre.power", { value: profile.powerScaling }));
+      log(formatCurrentCliMessage("genre.era", { value: profile.eraResearch }));
+      log(formatCurrentCliMessage("genre.pacing", { value: profile.pacingRule }));
+      log(formatCurrentCliMessage("genre.satisfaction", { value: profile.satisfactionTypes.join(", ") }));
+      log(formatCurrentCliMessage("genre.audit", { value: profile.auditDimensions.join(", ") }));
 
       if (body) {
-        log(`\n--- Body ---\n${body}`);
+        log(formatCurrentCliMessage("genre.body", { body }));
       }
     } catch (e) {
-      logError(`Failed to show genre: ${e}`);
+      logError(formatCurrentCliMessage("genre.showFailure", { detail: String(e) }));
       process.exit(1);
     }
   });
@@ -147,7 +148,7 @@ genreCommand
       // Check if already exists
       try {
         await readFile(filePath, "utf-8");
-        logError(`Genre profile already exists: ${filePath}`);
+        logError(formatCurrentCliMessage("genre.exists", { path: filePath }));
         process.exit(1);
       } catch { /* file doesn't exist, good */ }
 
@@ -166,10 +167,10 @@ genreCommand
       );
 
       await writeFile(filePath, template, "utf-8");
-      log(`Created genre profile: ${filePath}`);
-      log(`Edit the file to customize chapter types, fatigue words, rules, etc.`);
+      log(formatCurrentCliMessage("genre.created", { path: filePath }));
+      log(formatCurrentCliMessage("genre.editHint"));
     } catch (e) {
-      logError(`Failed to create genre: ${e}`);
+      logError(formatCurrentCliMessage("genre.createFailure", { detail: String(e) }));
       process.exit(1);
     }
   });
@@ -189,7 +190,7 @@ genreCommand
       // Check if project override already exists
       try {
         await readFile(destPath, "utf-8");
-        logError(`Project genre profile already exists: ${destPath}`);
+        logError(formatCurrentCliMessage("genre.projectExists", { path: destPath }));
         process.exit(1);
       } catch { /* doesn't exist, good */ }
 
@@ -197,17 +198,17 @@ genreCommand
       try {
         content = await readFile(srcPath, "utf-8");
       } catch {
-        logError(`Built-in genre "${id}" not found. Use 'inkos genre list' to see available genres.`);
+        logError(formatCurrentCliMessage("genre.builtinMissing", { id }));
         process.exit(1);
         return;
       }
 
       await mkdir(genresDir, { recursive: true });
       await writeFile(destPath, content, "utf-8");
-      log(`Copied to: ${destPath}`);
-      log(`This project-level copy will override the built-in profile.`);
+      log(formatCurrentCliMessage("genre.copied", { path: destPath }));
+      log(formatCurrentCliMessage("genre.overrideHint"));
     } catch (e) {
-      logError(`Failed to copy genre: ${e}`);
+      logError(formatCurrentCliMessage("genre.copyFailure", { detail: String(e) }));
       process.exit(1);
     }
   });

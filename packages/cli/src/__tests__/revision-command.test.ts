@@ -24,6 +24,10 @@ vi.mock("@actalk/inkos-core", () => ({
     book: { writing?: { revisionGate?: "strict" | "lenient" | "always" } },
     projectWriting?: { revisionGate?: "strict" | "lenient" | "always" },
   ) => book.writing?.revisionGate ?? projectWriting?.revisionGate ?? "strict",
+  resolveLengthCountingMode: (language: "zh" | "en") => language === "en" ? "en_words" : "zh_chars",
+  formatLengthCount: (count: number, mode: "zh_chars" | "en_words") => (
+    mode === "en_words" ? `${count} words` : `${count}字`
+  ),
 }));
 
 vi.mock("../utils.js", () => ({

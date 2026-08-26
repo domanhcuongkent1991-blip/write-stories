@@ -1,6 +1,7 @@
 import { Command } from "commander";
 import { StateManager, formatLengthCount, readGenreProfile, resolveLengthCountingMode } from "@actalk/inkos-core";
 import { findProjectRoot, getLegacyMigrationHint, log, logError } from "../utils.js";
+import { formatCurrentCliMessage } from "../i18n/messages.js";
 
 export const statusCommand = new Command("status")
   .description("Show project status")
@@ -24,9 +25,9 @@ export const statusCommand = new Command("status")
       const booksData = [];
 
       if (!opts.json) {
-        log(`InkOS Project: ${root}`);
-        log(`Books: ${allBookIds.length}`);
-        log("");
+        log(formatCurrentCliMessage("status.project", { root }));
+        log(formatCurrentCliMessage("status.books", { count: allBookIds.length }));
+        log(formatCurrentCliMessage("common.blank"));
       }
 
       for (const id of bookIds) {
@@ -79,18 +80,21 @@ export const statusCommand = new Command("status")
         });
 
         if (!opts.json) {
-          log(`  ${book.title} (${id})`);
-          log(`    Status: ${book.status}`);
-          log(`    Platform: ${book.platform} | Genre: ${book.genre}`);
-          log(`    Chapters: ${persistedChapterCount} / ${book.targetChapters}`);
-          log(`    Words: ${totalWords.toLocaleString()} (avg ${avgWords}/ch)`);
-          log(`    Approved: ${approved} | Pending: ${pending} | Failed: ${failed} | Degraded: ${degraded}`);
+          log(formatCurrentCliMessage("status.book", { title: book.title, id }));
+          log(formatCurrentCliMessage("status.state", { status: book.status }));
+          log(formatCurrentCliMessage("status.metadata", { platform: book.platform, genre: book.genre }));
+          log(formatCurrentCliMessage("status.chapters", { current: persistedChapterCount, target: book.targetChapters }));
+          log(formatCurrentCliMessage("status.length", {
+            total: formatLengthCount(totalWords, countingMode),
+            average: formatLengthCount(avgWords, countingMode),
+          }));
+          log(formatCurrentCliMessage("status.reviewCounts", { approved, pending, failed, degraded }));
           if (migrationHint) {
-            log(`    Migration: ${migrationHint}`);
+            log(formatCurrentCliMessage("status.migration", { hint: migrationHint }));
           }
 
           if (opts.chapters && index.length > 0) {
-            log("");
+            log(formatCurrentCliMessage("common.blank"));
             for (const ch of index) {
               const icon = ch.status === "approved"
                 ? "+"
@@ -99,39 +103,47 @@ export const statusCommand = new Command("status")
                   : ch.status === "state-degraded"
                     ? "x"
                     : "~";
-              log(`    [${icon}] Ch.${ch.number} "${ch.title}" | ${formatLengthCount(ch.wordCount, countingMode)} | ${ch.status}`);
+              log(formatCurrentCliMessage("status.chapter", {
+                icon,
+                number: ch.number,
+                title: ch.title,
+                length: formatLengthCount(ch.wordCount, countingMode),
+                status: ch.status,
+              }));
               if ((ch.status === "audit-failed" || ch.status === "state-degraded") && ch.auditIssues.length > 0) {
                 const criticals = ch.auditIssues.filter((i: string) => i.startsWith("[critical]"));
                 const warnings = ch.auditIssues.filter((i: string) => i.startsWith("[warning]"));
                 if (criticals.length > 0) {
                   for (const issue of criticals) {
-                    log(`        ${issue}`);
+                    log(formatCurrentCliMessage("status.rawIssue", { issue }));
                   }
                 }
                 if (warnings.length > 0) {
                   if (ch.status === "state-degraded") {
                     for (const issue of warnings) {
-                      log(`        ${issue}`);
+                      log(formatCurrentCliMessage("status.rawIssue", { issue }));
                     }
                   } else {
-                    log(`        + ${warnings.length} warning(s)`);
+                    log(formatCurrentCliMessage("status.moreWarnings", { count: warnings.length }));
                   }
                 }
               }
             }
           }
-          log("");
+          log(formatCurrentCliMessage("common.blank"));
         }
       }
 
       if (opts.json) {
+        // i18n-raw: structured status data must remain locale-independent.
         log(JSON.stringify({ project: root, books: booksData }, null, 2));
       }
     } catch (e) {
       if (opts.json) {
+        // i18n-raw: structured JSON errors preserve the original detail.
         log(JSON.stringify({ error: String(e) }));
       } else {
-        logError(`Failed to get status: ${e}`);
+        logError(formatCurrentCliMessage("status.failure", { detail: String(e) }));
       }
       process.exit(1);
     }

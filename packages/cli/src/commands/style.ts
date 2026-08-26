@@ -3,6 +3,7 @@ import { StateManager, analyzeStyle, PipelineRunner } from "@actalk/inkos-core";
 import { loadConfig, buildPipelineConfig, findProjectRoot, resolveBookId, log, logError } from "../utils.js";
 import { readFile, writeFile, mkdir } from "node:fs/promises";
 import { join, resolve } from "node:path";
+import { formatCurrentCliMessage } from "../i18n/messages.js";
 
 export const styleCommand = new Command("style")
   .description("Style fingerprint analysis and import");
@@ -19,24 +20,25 @@ styleCommand
       const profile = analyzeStyle(text, opts.name ?? file);
 
       if (opts.json) {
+        // i18n-raw: structured style profile must remain locale-independent.
         log(JSON.stringify(profile, null, 2));
       } else {
-        log("Style Profile:");
-        log(`  Source: ${profile.sourceName ?? "unknown"}`);
-        log(`  Avg sentence length: ${profile.avgSentenceLength} chars`);
-        log(`  Sentence length std dev: ${profile.sentenceLengthStdDev}`);
-        log(`  Avg paragraph length: ${profile.avgParagraphLength} chars`);
-        log(`  Paragraph range: ${profile.paragraphLengthRange.min}-${profile.paragraphLengthRange.max} chars`);
-        log(`  Vocabulary diversity (TTR): ${profile.vocabularyDiversity}`);
+        log(formatCurrentCliMessage("style.profile"));
+        log(formatCurrentCliMessage("style.source", { source: profile.sourceName ?? "unknown" }));
+        log(formatCurrentCliMessage("style.avgSentence", { value: profile.avgSentenceLength }));
+        log(formatCurrentCliMessage("style.sentenceDeviation", { value: profile.sentenceLengthStdDev }));
+        log(formatCurrentCliMessage("style.avgParagraph", { value: profile.avgParagraphLength }));
+        log(formatCurrentCliMessage("style.paragraphRange", { min: profile.paragraphLengthRange.min, max: profile.paragraphLengthRange.max }));
+        log(formatCurrentCliMessage("style.diversity", { value: profile.vocabularyDiversity }));
         if (profile.topPatterns.length > 0) {
-          log(`  Top patterns: ${profile.topPatterns.join(", ")}`);
+          log(formatCurrentCliMessage("style.patterns", { patterns: profile.topPatterns.join(", ") }));
         }
         if (profile.rhetoricalFeatures.length > 0) {
-          log(`  Rhetorical features: ${profile.rhetoricalFeatures.join(", ")}`);
+          log(formatCurrentCliMessage("style.features", { features: profile.rhetoricalFeatures.join(", ") }));
         }
       }
     } catch (e) {
-      logError(`Analysis failed: ${e}`);
+      logError(formatCurrentCliMessage("style.analysisFailure", { detail: String(e) }));
       process.exit(1);
     }
   });
@@ -67,18 +69,19 @@ styleCommand
         "utf-8",
       );
 
-      if (!opts.json) log(`Statistical profile saved (TTR: ${profile.vocabularyDiversity})`);
+      if (!opts.json) log(formatCurrentCliMessage("style.saved", { value: profile.vocabularyDiversity }));
 
       // LLM-powered style guide generation
       if (!opts.statsOnly) {
-        if (!opts.json) log("Generating qualitative style guide via LLM...");
+        if (!opts.json) log(formatCurrentCliMessage("style.generatingGuide"));
         const config = await loadConfig();
         const pipeline = new PipelineRunner(buildPipelineConfig(config, root));
         await pipeline.generateStyleGuide(bookId, text, opts.name ?? file);
-        if (!opts.json) log("Style guide (style_guide.md) generated.");
+        if (!opts.json) log(formatCurrentCliMessage("style.guideGenerated"));
       }
 
       if (opts.json) {
+        // i18n-raw: structured style import result must remain locale-independent.
         log(JSON.stringify({
           bookId,
           file,
@@ -86,13 +89,14 @@ styleCommand
           styleGuide: opts.statsOnly ? null : `story/style_guide.md`,
         }, null, 2));
       } else {
-        log(`Style imported to "${bookId}" from "${file}"`);
+        log(formatCurrentCliMessage("style.imported", { bookId, file }));
       }
     } catch (e) {
       if (opts.json) {
+        // i18n-raw: structured JSON errors preserve the original detail.
         log(JSON.stringify({ error: String(e) }));
       } else {
-        logError(`Import failed: ${e}`);
+        logError(formatCurrentCliMessage("style.importFailure", { detail: String(e) }));
       }
       process.exit(1);
     }

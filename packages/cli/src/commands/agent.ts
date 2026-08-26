@@ -1,6 +1,7 @@
 import { Command } from "commander";
 import { PipelineRunner, runAgentSession } from "@actalk/inkos-core";
 import { buildPipelineConfig, loadConfig, createClient, findProjectRoot, resolveBookId, resolveContext, log, logError } from "../utils.js";
+import { formatCurrentCliMessage } from "../i18n/messages.js";
 
 export const agentCommand = new Command("agent")
   .description("Natural language agent mode (LLM orchestrates via tool-use)")
@@ -60,15 +61,18 @@ export const agentCommand = new Command("agent")
       );
 
       if (opts.json) {
+        // i18n-raw: structured JSON preserves agent output byte-for-byte.
         log(JSON.stringify({ result }));
       } else if (!opts.quiet && result.responseText.trim()) {
+        // i18n-raw: agent response content must never be translated.
         log(result.responseText);
       }
     } catch (e) {
       if (opts.json) {
+        // i18n-raw: structured JSON error values are locale-independent.
         log(JSON.stringify({ error: String(e) }));
       } else {
-        logError(`Agent failed: ${e}`);
+        logError(formatCurrentCliMessage("agent.failure", { detail: String(e) }));
       }
       process.exit(1);
     }

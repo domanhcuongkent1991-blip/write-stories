@@ -9,6 +9,7 @@ import {
   formatFanficSourceDirEmptyError,
   formatFanficSourceTooShortError,
 } from "../localization.js";
+import { formatCurrentCliMessage } from "../i18n/messages.js";
 
 export const fanficCommand = new Command("fanfic")
   .description("Fan fiction writing tools");
@@ -61,13 +62,14 @@ fanficCommand
         fanficMode: mode,
       };
 
-      if (!opts.json) log(`Creating fanfic "${book.title}" (${mode} mode, ${book.genre})...`);
-      if (!opts.json) log(`  Source: ${sourceName} (${sourceText.length} chars)`);
+      if (!opts.json) log(formatCurrentCliMessage("fanfic.creating", { title: book.title, mode, genre: book.genre }));
+      if (!opts.json) log(formatCurrentCliMessage("fanfic.source", { source: sourceName, length: sourceText.length }));
 
       const pipeline = new PipelineRunner(buildPipelineConfig(config, root));
       await pipeline.initFanficBook(book, sourceText, sourceName, mode);
 
       if (opts.json) {
+        // i18n-raw: structured fanfic creation data must remain locale-independent.
         log(JSON.stringify({
           bookId,
           title: book.title,
@@ -78,18 +80,19 @@ fanficCommand
           nextStep: `inkos write next ${bookId}`,
         }, null, 2));
       } else {
-        log(`Fanfic created: ${bookId}`);
-        log(`  Mode: ${mode}`);
-        log(`  Location: books/${bookId}/`);
-        log(`  fanfic_canon.md + foundation generated.`);
-        log("");
-        log(`Next: inkos write next ${bookId}`);
+        log(formatCurrentCliMessage("fanfic.created", { bookId }));
+        log(formatCurrentCliMessage("fanfic.mode", { mode }));
+        log(formatCurrentCliMessage("fanfic.location", { bookId }));
+        log(formatCurrentCliMessage("fanfic.foundation"));
+        log(formatCurrentCliMessage("common.blank"));
+        log(formatCurrentCliMessage("fanfic.next", { bookId }));
       }
     } catch (e) {
       if (opts.json) {
+        // i18n-raw: structured JSON errors preserve the original detail.
         log(JSON.stringify({ error: String(e) }));
       } else {
-        logError(`Failed to create fanfic: ${e}`);
+        logError(formatCurrentCliMessage("fanfic.createFailure", { detail: String(e) }));
       }
       process.exit(1);
     }
@@ -117,16 +120,19 @@ fanficCommand
       }
 
       if (opts.json) {
+        // i18n-raw: structured canon data must remain locale-independent.
         log(JSON.stringify({ bookId, fanficCanon: canon }, null, 2));
       } else {
-        log(`Fanfic Canon for "${bookId}":\n`);
+        log(formatCurrentCliMessage("fanfic.canonHeader", { bookId }));
+        // i18n-raw: canon is writing content and must remain byte-for-byte unchanged.
         log(canon);
       }
     } catch (e) {
       if (opts.json) {
+        // i18n-raw: structured JSON errors preserve the original detail.
         log(JSON.stringify({ error: String(e) }));
       } else {
-        logError(String(e));
+        logError(formatCurrentCliMessage("notify.failure", { detail: String(e) }));
       }
       process.exit(1);
     }
@@ -152,21 +158,23 @@ fanficCommand
       const sourceText = await readSourceMaterial(sourcePath);
       const sourceName = basename(sourcePath);
 
-      if (!opts.json) log(`Refreshing fanfic canon for "${bookId}" from ${sourceName}...`);
+      if (!opts.json) log(formatCurrentCliMessage("fanfic.refreshing", { bookId, source: sourceName }));
 
       const pipeline = new PipelineRunner(buildPipelineConfig(config, root));
       await pipeline.importFanficCanon(bookId, sourceText, sourceName, mode);
 
       if (opts.json) {
+        // i18n-raw: structured refresh metadata must remain locale-independent.
         log(JSON.stringify({ bookId, source: sourceName, refreshedAt: new Date().toISOString() }));
       } else {
-        log(`Canon refreshed from "${sourceName}".`);
+        log(formatCurrentCliMessage("fanfic.refreshed", { source: sourceName }));
       }
     } catch (e) {
       if (opts.json) {
+        // i18n-raw: structured JSON errors preserve the original detail.
         log(JSON.stringify({ error: String(e) }));
       } else {
-        logError(`Failed to refresh canon: ${e}`);
+        logError(formatCurrentCliMessage("fanfic.refreshFailure", { detail: String(e) }));
       }
       process.exit(1);
     }

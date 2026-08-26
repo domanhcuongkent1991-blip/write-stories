@@ -13,6 +13,7 @@ import {
   formatWriteNextResultLines,
 } from "../localization.js";
 import { resolveCliLocale, resolveWritingLanguage } from "../locale.js";
+import { formatCliMessage } from "../i18n/messages.js";
 import { sendCommandNotification } from "../notify-helper.js";
 
 export const writeCommand = new Command("write")
@@ -42,7 +43,7 @@ writeCommand
       notifyBookName = book.title ?? bookId;
       const migrationHint = await getLegacyMigrationHint(root, bookId);
       if (migrationHint && !opts.json) {
-        log(`[migration] ${migrationHint}`);
+        log(formatCliMessage(locale, "common.migration", { hint: migrationHint }));
       }
       const config = await loadConfig();
 
@@ -74,20 +75,19 @@ writeCommand
           })) {
             log(line);
           }
-          log("");
+          log(formatCliMessage(locale, "common.blank"));
         }
 
         if (result.status === "state-degraded") {
           if (!opts.json) {
-            log(locale === "zh"
-              ? "需要先修复 state，已停止后续连写。"
-              : "State repair required before continuing. Stopping batch.");
+            log(formatCliMessage(locale, "write.stateRepair"));
           }
           break;
         }
       }
 
       if (opts.json) {
+        // i18n-raw: structured JSON results must remain locale-independent.
         log(JSON.stringify(results, null, 2));
       } else {
         log(formatWriteNextComplete(locale));
@@ -117,9 +117,10 @@ writeCommand
         });
       }
       if (opts.json) {
+        // i18n-raw: structured JSON errors preserve the original detail.
         log(JSON.stringify({ error: String(e) }));
       } else {
-        logError(`Failed to write chapter: ${e}`);
+        logError(formatCliMessage(locale, "write.failure", { detail: String(e) }));
       }
       process.exit(1);
     }
@@ -161,7 +162,7 @@ writeCommand
         });
         rl.close();
         if (answer.toLowerCase() !== "y") {
-          log("Cancelled.");
+          log(formatCliMessage(locale, "write.cancelled"));
           return;
         }
       }
@@ -179,7 +180,7 @@ writeCommand
       });
       const migrationHint = await getLegacyMigrationHint(root, bookId);
       if (migrationHint && !opts.json) {
-        log(`[migration] ${migrationHint}`);
+          log(formatCliMessage(locale, "common.migration", { hint: migrationHint }));
       }
 
       // Remove existing chapter file
@@ -188,7 +189,7 @@ writeCommand
       const existing = files.filter((f) => f.startsWith(paddedNum) && f.endsWith(".md"));
       for (const f of existing) {
         await unlink(join(chaptersDir, f));
-        if (!opts.json) log(`Removed: ${f}`);
+        if (!opts.json) log(formatCliMessage(locale, "write.removed", { path: f }));
       }
 
       // Remove from index (and all chapters after it)
@@ -203,7 +204,7 @@ writeCommand
       });
       for (const f of laterFiles) {
         await unlink(join(chaptersDir, f));
-        if (!opts.json) log(`Removed later chapter: ${f}`);
+        if (!opts.json) log(formatCliMessage(locale, "write.removedLater", { path: f }));
       }
 
       // Restore state to previous chapter's end-state (chapter 1 uses snapshot-0 from initBook)
@@ -211,14 +212,14 @@ writeCommand
       if (!restored) {
         throw new Error(`Cannot rewrite chapter ${chapter}: failed to restore snapshot for chapter ${restoreFrom}`);
       }
-      if (!opts.json) log(`State restored from chapter ${restoreFrom} snapshot.`);
+      if (!opts.json) log(formatCliMessage(locale, "write.stateRestored", { chapter: restoreFrom }));
 
       const nextChapter = await state.getNextChapterNumber(bookId);
       if (nextChapter !== chapter) {
         throw new Error(`Cannot rewrite chapter ${chapter}: expected next chapter to be ${chapter}, but resolved to ${nextChapter}`);
       }
 
-      if (!opts.json) log(`Regenerating chapter ${chapter}...`);
+      if (!opts.json) log(formatCliMessage(locale, "write.regenerating", { chapter }));
 
       const wordCount = opts.words ? parseInt(opts.words, 10) : undefined;
 
@@ -231,6 +232,7 @@ writeCommand
       const result = await pipeline.writeNextChapter(bookId, wordCount);
 
       if (opts.json) {
+        // i18n-raw: structured JSON results must remain locale-independent.
         log(JSON.stringify(result, null, 2));
       } else {
         for (const line of formatWriteNextResultLines(locale, writingLanguage, {
@@ -258,9 +260,10 @@ writeCommand
         });
       }
       if (opts.json) {
+        // i18n-raw: structured JSON errors preserve the original detail.
         log(JSON.stringify({ error: String(e) }));
       } else {
-        logError(`Failed to rewrite chapter: ${e}`);
+        logError(formatCliMessage(locale, "write.rewriteFailure", { detail: String(e) }));
       }
       process.exit(1);
     }
@@ -300,6 +303,7 @@ writeCommand
       const result = await pipeline.resyncChapterArtifacts(bookId, chapter);
 
       if (opts.json) {
+        // i18n-raw: structured sync result must remain locale-independent.
         log(JSON.stringify(result, null, 2));
       } else {
         for (const line of formatWriteNextResultLines(locale, resolveWritingLanguage(book.language), {
@@ -316,9 +320,10 @@ writeCommand
       }
     } catch (e) {
       if (opts.json) {
+        // i18n-raw: structured JSON errors preserve the original detail.
         log(JSON.stringify({ error: String(e) }));
       } else {
-        logError(`Failed to sync chapter artifacts: ${e}`);
+        logError(formatCliMessage(locale, "write.syncFailure", { detail: String(e) }));
       }
       process.exit(1);
     }
@@ -355,6 +360,7 @@ writeCommand
       const result = await pipeline.repairChapterState(bookId, chapter);
 
       if (opts.json) {
+        // i18n-raw: structured repair result must remain locale-independent.
         log(JSON.stringify(result, null, 2));
       } else {
         for (const line of formatWriteNextResultLines(locale, resolveWritingLanguage(book.language), {
@@ -371,9 +377,10 @@ writeCommand
       }
     } catch (e) {
       if (opts.json) {
+        // i18n-raw: structured JSON errors preserve the original detail.
         log(JSON.stringify({ error: String(e) }));
       } else {
-        logError(`Failed to repair chapter state: ${e}`);
+        logError(formatCliMessage(locale, "write.repairFailure", { detail: String(e) }));
       }
       process.exit(1);
     }

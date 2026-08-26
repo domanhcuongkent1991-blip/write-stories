@@ -1,6 +1,8 @@
 import { Command } from "commander";
-import { StateManager, computeAnalytics } from "@actalk/inkos-core";
+import { StateManager, computeAnalytics, formatLengthCount, resolveLengthCountingMode } from "@actalk/inkos-core";
 import { loadConfig, findProjectRoot, resolveBookId, log, logError } from "../utils.js";
+import { formatCurrentCliMessage } from "../i18n/messages.js";
+import { resolveWritingLanguage } from "../locale.js";
 
 export const analyticsCommand = new Command("analytics")
   .alias("stats")
@@ -13,64 +15,68 @@ export const analyticsCommand = new Command("analytics")
       const root = findProjectRoot();
       const bookId = await resolveBookId(bookIdArg, root);
       const state = new StateManager(root);
+      const book = await state.loadBookConfig(bookId);
       const chapters = await state.loadChapterIndex(bookId);
+      const countingMode = resolveLengthCountingMode(resolveWritingLanguage(book.language));
 
       const analytics = computeAnalytics(bookId, chapters);
 
       if (opts.json) {
+        // i18n-raw: structured analytics must remain locale-independent.
         log(JSON.stringify(analytics, null, 2));
       } else {
-        log(`Analytics for "${bookId}":`);
-        log("");
-        log(`  Total chapters: ${analytics.totalChapters}`);
-        log(`  Total words: ${analytics.totalWords.toLocaleString()}`);
-        log(`  Avg words/chapter: ${analytics.avgWordsPerChapter.toLocaleString()}`);
-        log(`  Audit pass rate: ${analytics.auditPassRate}%`);
-        log("");
+        log(formatCurrentCliMessage("analytics.header", { bookId }));
+        log(formatCurrentCliMessage("common.blank"));
+        log(formatCurrentCliMessage("analytics.chapters", { count: analytics.totalChapters }));
+        log(formatCurrentCliMessage("analytics.totalLength", { length: formatLengthCount(analytics.totalWords, countingMode) }));
+        log(formatCurrentCliMessage("analytics.averageLength", { length: formatLengthCount(analytics.avgWordsPerChapter, countingMode) }));
+        log(formatCurrentCliMessage("analytics.auditRate", { rate: analytics.auditPassRate }));
+        log(formatCurrentCliMessage("common.blank"));
 
         if (Object.keys(analytics.statusDistribution).length > 0) {
-          log("  Status distribution:");
+          log(formatCurrentCliMessage("analytics.statusDistribution"));
           for (const [status, count] of Object.entries(analytics.statusDistribution)) {
-            log(`    ${status}: ${count}`);
+            log(formatCurrentCliMessage("analytics.statusRow", { status, count }));
           }
-          log("");
+          log(formatCurrentCliMessage("common.blank"));
         }
 
         if (analytics.tokenStats) {
-          log("  Token usage:");
-          log(`    Total tokens: ${analytics.tokenStats.totalTokens.toLocaleString()}`);
-          log(`    Prompt tokens: ${analytics.tokenStats.totalPromptTokens.toLocaleString()}`);
-          log(`    Completion tokens: ${analytics.tokenStats.totalCompletionTokens.toLocaleString()}`);
-          log(`    Avg tokens/chapter: ${analytics.tokenStats.avgTokensPerChapter.toLocaleString()}`);
+          log(formatCurrentCliMessage("analytics.tokenUsage"));
+          log(formatCurrentCliMessage("analytics.totalTokens", { count: analytics.tokenStats.totalTokens.toLocaleString() }));
+          log(formatCurrentCliMessage("analytics.promptTokens", { count: analytics.tokenStats.totalPromptTokens.toLocaleString() }));
+          log(formatCurrentCliMessage("analytics.completionTokens", { count: analytics.tokenStats.totalCompletionTokens.toLocaleString() }));
+          log(formatCurrentCliMessage("analytics.averageTokens", { count: analytics.tokenStats.avgTokensPerChapter.toLocaleString() }));
           if (analytics.tokenStats.recentTrend.length > 0) {
-            log("    Recent trend:");
+            log(formatCurrentCliMessage("analytics.recentTrend"));
             for (const { chapter, totalTokens } of analytics.tokenStats.recentTrend) {
-              log(`      Ch.${chapter}: ${totalTokens.toLocaleString()} tokens`);
+              log(formatCurrentCliMessage("analytics.trendRow", { chapter, count: totalTokens.toLocaleString() }));
             }
           }
-          log("");
+          log(formatCurrentCliMessage("common.blank"));
         }
 
         if (analytics.topIssueCategories.length > 0) {
-          log("  Most common issue categories:");
+          log(formatCurrentCliMessage("analytics.issueCategories"));
           for (const { category, count } of analytics.topIssueCategories) {
-            log(`    ${category}: ${count}`);
+            log(formatCurrentCliMessage("analytics.categoryRow", { category, count }));
           }
-          log("");
+          log(formatCurrentCliMessage("common.blank"));
         }
 
         if (analytics.chaptersWithMostIssues.length > 0) {
-          log("  Chapters with most issues:");
+          log(formatCurrentCliMessage("analytics.issueChapters"));
           for (const { chapter, issueCount } of analytics.chaptersWithMostIssues) {
-            log(`    Ch.${chapter}: ${issueCount} issues`);
+            log(formatCurrentCliMessage("analytics.issueChapterRow", { chapter, count: issueCount }));
           }
         }
       }
     } catch (e) {
       if (opts.json) {
+        // i18n-raw: structured JSON errors preserve the original detail.
         log(JSON.stringify({ error: String(e) }));
       } else {
-        logError(`Analytics failed: ${e}`);
+        logError(formatCurrentCliMessage("analytics.failure", { detail: String(e) }));
       }
       process.exit(1);
     }

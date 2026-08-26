@@ -1,6 +1,7 @@
 import { Command } from "commander";
 import { PipelineRunner } from "@actalk/inkos-core";
 import { buildPipelineConfig, findProjectRoot, loadConfig, log, logError, resolveBookId, resolveContext } from "../utils.js";
+import { formatCurrentCliMessage } from "../i18n/messages.js";
 
 export const planCommand = new Command("plan")
   .description("Plan chapter input artifacts");
@@ -30,23 +31,25 @@ planCommand
       const result = await pipeline.planChapter(bookId, context);
 
       if (opts.json) {
+        // i18n-raw: structured planning artifacts must remain locale-independent.
         log(JSON.stringify(result, null, 2));
       } else {
-        log(`Planned chapter ${result.chapterNumber} for "${bookId}"`);
-        log(`  Goal: ${result.goal}`);
-        log(`  Intent: ${result.intentPath}`);
+        log(formatCurrentCliMessage("plan.complete", { chapterNumber: result.chapterNumber, bookId }));
+        log(formatCurrentCliMessage("plan.goal", { goal: result.goal }));
+        log(formatCurrentCliMessage("plan.intent", { path: result.intentPath }));
         if (result.conflicts.length > 0) {
-          log("  Conflicts:");
+          log(formatCurrentCliMessage("plan.conflicts"));
           for (const conflict of result.conflicts) {
-            log(`    - ${conflict}`);
+            log(formatCurrentCliMessage("plan.conflict", { conflict }));
           }
         }
       }
     } catch (e) {
       if (opts.json) {
+        // i18n-raw: structured JSON errors preserve the original detail.
         log(JSON.stringify({ error: String(e) }));
       } else {
-        logError(`Failed to plan chapter: ${e}`);
+        logError(formatCurrentCliMessage("plan.failure", { detail: String(e) }));
       }
       process.exit(1);
     }

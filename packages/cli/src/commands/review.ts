@@ -1,6 +1,7 @@
 import { Command } from "commander";
 import { StateManager, formatLengthCount, readGenreProfile, resolveLengthCountingMode } from "@actalk/inkos-core";
 import { findProjectRoot, resolveBookId, log, logError } from "../utils.js";
+import { formatCurrentCliMessage } from "../i18n/messages.js";
 
 export const reviewCommand = new Command("review")
   .description("Review and approve chapters");
@@ -40,7 +41,7 @@ reviewCommand
         const countingMode = resolveLengthCountingMode(book.language ?? genreProfile.language);
 
         if (!opts.json) {
-          log(`\n${book.title} (${id}):`);
+          log(formatCurrentCliMessage("review.book", { title: book.title, id }));
         }
         for (const ch of pending) {
           allPending.push({
@@ -53,12 +54,15 @@ reviewCommand
             issues: ch.auditIssues,
           });
           if (!opts.json) {
-            log(
-              `  Ch.${ch.number} "${ch.title}" | ${formatLengthCount(ch.wordCount, countingMode)} | ${ch.status}`,
-            );
+            log(formatCurrentCliMessage("review.chapter", {
+              number: ch.number,
+              title: ch.title,
+              length: formatLengthCount(ch.wordCount, countingMode),
+              status: ch.status,
+            }));
             if (ch.auditIssues.length > 0) {
               for (const issue of ch.auditIssues) {
-                log(`    - ${issue}`);
+                log(formatCurrentCliMessage("review.rawIssue", { issue }));
               }
             }
           }
@@ -66,15 +70,17 @@ reviewCommand
       }
 
       if (opts.json) {
+        // i18n-raw: structured review data must remain locale-independent.
         log(JSON.stringify({ pending: allPending }, null, 2));
       } else if (allPending.length === 0) {
-        log("No chapters pending review.");
+        log(formatCurrentCliMessage("review.empty"));
       }
     } catch (e) {
       if (opts.json) {
+        // i18n-raw: structured JSON errors preserve the original detail.
         log(JSON.stringify({ error: String(e) }));
       } else {
-        logError(`Failed to list reviews: ${e}`);
+        logError(formatCurrentCliMessage("review.listFailure", { detail: String(e) }));
       }
       process.exit(1);
     }
@@ -130,15 +136,17 @@ reviewCommand
       await state.saveChapterIndex(bookId, index);
 
       if (opts.json) {
+        // i18n-raw: structured approval results must remain locale-independent.
         log(JSON.stringify({ bookId, chapter: chapterNum, status: "approved" }));
       } else {
-        log(`Chapter ${chapterNum} approved (state committed).`);
+        log(formatCurrentCliMessage("review.approved", { chapter: chapterNum }));
       }
     } catch (e) {
       if (opts.json) {
+        // i18n-raw: structured JSON errors preserve the original detail.
         log(JSON.stringify({ error: String(e) }));
       } else {
-        logError(`Failed to approve: ${e}`);
+        logError(formatCurrentCliMessage("review.approveFailure", { detail: String(e) }));
       }
       process.exit(1);
     }
@@ -170,15 +178,17 @@ reviewCommand
       await state.saveChapterIndex(bookId, updated);
 
       if (opts.json) {
+        // i18n-raw: structured approval results must remain locale-independent.
         log(JSON.stringify({ bookId, approvedCount: count }));
       } else {
-        log(`${count} chapter(s) approved.`);
+        log(formatCurrentCliMessage("review.approvedCount", { count }));
       }
     } catch (e) {
       if (opts.json) {
+        // i18n-raw: structured JSON errors preserve the original detail.
         log(JSON.stringify({ error: String(e) }));
       } else {
-        logError(`Failed to approve: ${e}`);
+        logError(formatCurrentCliMessage("review.approveFailure", { detail: String(e) }));
       }
       process.exit(1);
     }
@@ -216,9 +226,10 @@ reviewCommand
         await state.saveChapterIndex(bookId, updated);
 
         if (opts.json) {
+          // i18n-raw: structured rejection results must remain locale-independent.
           log(JSON.stringify({ bookId, chapter: chapterNum, status: "rejected", discarded: [] }));
         } else {
-          log(`Chapter ${chapterNum} rejected (state not rolled back).`);
+          log(formatCurrentCliMessage("review.rejectedNoRollback", { chapter: chapterNum }));
         }
         return;
       }
@@ -229,6 +240,7 @@ reviewCommand
       const discarded = await state.rollbackToChapter(bookId, rollbackTarget);
 
       if (opts.json) {
+        // i18n-raw: structured rejection results must remain locale-independent.
         log(JSON.stringify({
           bookId,
           chapter: chapterNum,
@@ -237,16 +249,20 @@ reviewCommand
           discarded,
         }));
       } else {
-        log(`Chapter ${chapterNum} rejected. State rolled back to chapter ${rollbackTarget}.`);
+        log(formatCurrentCliMessage("review.rejected", { chapter: chapterNum, target: rollbackTarget }));
         if (discarded.length > 1) {
-          log(`  Also discarded ${discarded.length - 1} subsequent chapter(s): ${discarded.filter((n) => n !== chapterNum).join(", ")}`);
+          log(formatCurrentCliMessage("review.discarded", {
+            count: discarded.length - 1,
+            chapters: discarded.filter((n) => n !== chapterNum).join(", "),
+          }));
         }
       }
     } catch (e) {
       if (opts.json) {
+        // i18n-raw: structured JSON errors preserve the original detail.
         log(JSON.stringify({ error: String(e) }));
       } else {
-        logError(`Failed to reject: ${e}`);
+        logError(formatCurrentCliMessage("review.rejectFailure", { detail: String(e) }));
       }
       process.exit(1);
     }

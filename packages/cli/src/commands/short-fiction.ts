@@ -23,6 +23,7 @@ import {
   type ShortFictionLanguage,
 } from "@actalk/inkos-core";
 import { buildPipelineConfig, findProjectRoot, loadConfig, log, logError } from "../utils.js";
+import { formatCurrentCliMessage, type CliMessageKey } from "../i18n/messages.js";
 
 export { extractResponsesImageBase64, resolveCoverApiKey } from "@actalk/inkos-core";
 
@@ -133,6 +134,7 @@ shortCommand
         coverModel: opts.coverModel,
         coverSize: opts.coverSize,
         coverApiKeyEnv: opts.coverApiKeyEnv,
+        // i18n-raw: workflow progress text is emitted by the production engine.
         onProgress: opts.json ? undefined : (message) => log(message),
       });
 
@@ -142,16 +144,17 @@ shortCommand
       };
 
       if (opts.json) {
+        // i18n-raw: structured short-fiction result must remain locale-independent.
         log(JSON.stringify(payload, null, 2));
       } else {
-        log(`Skills: ${activatedSkillIds(activatedSkills).join(", ")}`);
-        log(`Short run complete: ${result.storyId}`);
-        log(`Final: ${payload.finalMarkdownPath}`);
-        log(`Sales package: ${payload.salesPackagePath}`);
+        log(formatCurrentCliMessage("short.skills", { skills: activatedSkillIds(activatedSkills).join(", ") }));
+        log(formatCurrentCliMessage("short.complete", { storyId: result.storyId }));
+        log(formatCurrentCliMessage("short.final", { path: payload.finalMarkdownPath }));
+        log(formatCurrentCliMessage("short.sales", { path: payload.salesPackagePath }));
         log(formatCoverStatus(payload.coverImagePath, payload.coverError));
       }
     } catch (e) {
-      logCommandError("Short run failed", e, opts.json);
+      logCommandError("Short run failed", "short.failure", e, opts.json);
     }
   });
 
@@ -298,15 +301,16 @@ function parseEnvInteger(value: string | undefined, fallback: number): number {
 }
 
 function formatCoverStatus(coverImagePath?: string, coverError?: string): string {
-  if (coverImagePath) return `Cover: ${coverImagePath}`;
-  if (coverError) return `Cover: skipped (${coverError})`;
-  return "Cover: skipped";
+  if (coverImagePath) return formatCurrentCliMessage("short.cover", { path: coverImagePath });
+  if (coverError) return formatCurrentCliMessage("short.coverError", { detail: coverError });
+  return formatCurrentCliMessage("short.coverSkipped");
 }
 
-function logCommandError(prefix: string, error: unknown, json?: boolean): void {
+function logCommandError(prefix: string, key: CliMessageKey, error: unknown, json?: boolean): void {
   if (json) {
+    // i18n-raw: structured JSON errors remain identical across locales.
     log(JSON.stringify({ error: `${prefix}: ${String(error)}` }, null, 2));
     return;
   }
-  logError(`${prefix}: ${String(error)}`);
+  logError(formatCurrentCliMessage(key, { detail: String(error) }));
 }

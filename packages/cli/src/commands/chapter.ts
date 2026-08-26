@@ -11,6 +11,7 @@ import {
   formatChapterSyncSummary,
 } from "../localization.js";
 import { resolveCliLocale, resolveWritingLanguage } from "../locale.js";
+import { formatCliMessage } from "../i18n/messages.js";
 import { findProjectRoot, log, logError, resolveBookId } from "../utils.js";
 
 export const chapterCommand = new Command("chapter")
@@ -33,6 +34,7 @@ chapterCommand
       const result = await syncChapterWordCounts(state, bookId);
 
       if (opts.json) {
+        // i18n-raw: structured JSON results must remain locale-independent.
         log(JSON.stringify(result, null, 2));
         return;
       }
@@ -50,9 +52,10 @@ chapterCommand
       }
     } catch (e) {
       if (opts.json) {
+        // i18n-raw: structured JSON errors preserve the original detail.
         log(JSON.stringify({ error: String(e) }));
       } else {
-        logError(`Failed to sync chapter word counts: ${e}`);
+        logError(formatCliMessage(locale, "chapter.syncFailure", { detail: String(e) }));
       }
       process.exit(1);
     }
@@ -98,6 +101,7 @@ chapterCommand
       });
 
       if (opts.json) {
+        // i18n-raw: structured delete result must remain locale-independent.
         log(JSON.stringify(result, null, 2));
       } else {
         log(formatChapterDeleteDone(locale, {
@@ -109,9 +113,10 @@ chapterCommand
       }
     } catch (e) {
       if (opts.json) {
+        // i18n-raw: structured JSON errors preserve the original detail.
         log(JSON.stringify({ error: String(e) }));
       } else {
-        logError(`Failed to delete chapter: ${e}`);
+        logError(formatCliMessage(locale, "chapter.deleteFailure", { detail: String(e) }));
       }
       process.exit(1);
     }

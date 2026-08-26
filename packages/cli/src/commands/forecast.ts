@@ -13,6 +13,7 @@ import {
   type NarrativeForecast,
 } from "@actalk/inkos-core";
 import { buildPipelineConfig, findProjectRoot, loadConfig, log, logError, resolveBookId } from "../utils.js";
+import { formatCurrentCliMessage, type CliMessageKey } from "../i18n/messages.js";
 
 // CLI surface for RFC #342: create / show / select. All three operate only on
 // story/runtime/narrative-forecasts/ artifacts; canonical files stay untouched.
@@ -49,10 +50,12 @@ forecastCommand
         branchCount,
         horizon,
         runtime: pipeline.createAgentContext("forecast", bookId),
+        // i18n-raw: workflow progress text is emitted by the forecast engine.
         onProgress: opts.json ? undefined : (message) => log(message),
       });
 
       if (opts.json) {
+        // i18n-raw: structured forecast data must remain locale-independent.
         log(JSON.stringify({
           forecast: result.forecast,
           forecastJsonPath: result.forecastJsonPath,
@@ -60,12 +63,12 @@ forecastCommand
         }, null, 2));
         return;
       }
-      log(`Forecast created: ${result.forecast.forecastId} (base chapter ${result.forecast.baseChapter})`);
+      log(formatCurrentCliMessage("forecast.created", { forecastId: result.forecast.forecastId, chapter: result.forecast.baseChapter }));
       for (const line of formatBranchLines(result.forecast)) log(line);
-      log(`Comparison: ${result.comparisonPath}`);
-      log(`Select a branch with: inkos forecast select ${bookId} ${result.forecast.forecastId} <branch-id>`);
+      log(formatCurrentCliMessage("forecast.comparison", { path: result.comparisonPath }));
+      log(formatCurrentCliMessage("forecast.selectHint", { bookId, forecastId: result.forecast.forecastId }));
     } catch (e) {
-      failForecastCommand("Forecast create failed", e, opts.json);
+      failForecastCommand("Forecast create failed", "forecast.createFailure", e, opts.json);
     }
   });
 
@@ -83,6 +86,7 @@ forecastCommand
       const result = await getNarrativeForecast({ projectRoot: root, bookId, forecastId });
 
       if (opts.json) {
+        // i18n-raw: structured forecast data must remain locale-independent.
         log(JSON.stringify({
           forecast: result.forecast,
           stale: result.stale,
@@ -91,16 +95,16 @@ forecastCommand
         }, null, 2));
         return;
       }
-      log(`Forecast ${result.forecast.forecastId} — status: ${result.stale ? "stale" : result.forecast.status}`);
-      log(`Divergence: ${result.forecast.divergence}`);
-      log(`Base chapter: ${result.forecast.baseChapter}, horizon: ~${result.forecast.horizon} chapters`);
+      log(formatCurrentCliMessage("forecast.status", { forecastId: result.forecast.forecastId, status: result.stale ? "stale" : result.forecast.status }));
+      log(formatCurrentCliMessage("forecast.divergence", { value: result.forecast.divergence }));
+      log(formatCurrentCliMessage("forecast.horizon", { chapter: result.forecast.baseChapter, horizon: result.forecast.horizon }));
       if (result.stale) {
-        log("WARNING: canon changed after this forecast was generated; regenerate before relying on it.");
+        log(formatCurrentCliMessage("forecast.staleWarning"));
       }
       for (const line of formatBranchLines(result.forecast)) log(line);
-      log(`Comparison: ${result.comparisonPath}`);
+      log(formatCurrentCliMessage("forecast.comparison", { path: result.comparisonPath }));
     } catch (e) {
-      failForecastCommand("Forecast show failed", e, opts.json);
+      failForecastCommand("Forecast show failed", "forecast.showFailure", e, opts.json);
     }
   });
 
@@ -118,6 +122,7 @@ forecastCommand
       const result = await selectNarrativeBranch({ projectRoot: root, bookId, forecastId, branchId });
 
       if (opts.json) {
+        // i18n-raw: structured branch data must remain locale-independent.
         log(JSON.stringify({
           forecastId: result.forecast.forecastId,
           branchId: result.branch.branchId,
@@ -127,14 +132,14 @@ forecastCommand
         }, null, 2));
         return;
       }
-      log(`Selected ${result.branch.branchId} "${result.branch.title}" from ${result.forecast.forecastId}.`);
+      log(formatCurrentCliMessage("forecast.selected", { branchId: result.branch.branchId, title: result.branch.title, forecastId: result.forecast.forecastId }));
       if (result.stale) {
-        log("WARNING: this forecast is stale; the plan includes a stale warning.");
+        log(formatCurrentCliMessage("forecast.selectedStale"));
       }
-      log(`Plan: ${result.planPath}`);
-      log("Canonical files were not modified. Applying the plan to the outline is a separate, explicit step.");
+      log(formatCurrentCliMessage("forecast.plan", { path: result.planPath }));
+      log(formatCurrentCliMessage("forecast.canonUntouched"));
     } catch (e) {
-      failForecastCommand("Forecast select failed", e, opts.json);
+      failForecastCommand("Forecast select failed", "forecast.selectFailure", e, opts.json);
     }
   });
 
@@ -172,7 +177,12 @@ export function parseForecastSelectArgs(args: ReadonlyArray<string>): {
 
 function formatBranchLines(forecast: NarrativeForecast): string[] {
   return forecast.branches.map((branch) =>
-    `- ${branch.branchId} "${branch.title}" — intent fit ${branch.intentAlignment.score}/100, ${branch.risks.length} risk(s)`);
+    formatCurrentCliMessage("forecast.branch", {
+      branchId: branch.branchId,
+      title: branch.title,
+      score: branch.intentAlignment.score,
+      risks: branch.risks.length,
+    }));
 }
 
 function parseBoundedInteger(
@@ -189,11 +199,12 @@ function parseBoundedInteger(
   return parsed;
 }
 
-function failForecastCommand(prefix: string, error: unknown, json?: boolean): void {
+function failForecastCommand(prefix: string, key: CliMessageKey, error: unknown, json?: boolean): void {
   if (json) {
+    // i18n-raw: structured JSON errors remain identical across locales.
     log(JSON.stringify({ error: `${prefix}: ${String(error)}` }, null, 2));
   } else {
-    logError(`${prefix}: ${String(error)}`);
+    logError(formatCurrentCliMessage(key, { detail: String(error) }));
   }
   process.exitCode = 1;
 }

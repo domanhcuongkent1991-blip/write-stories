@@ -9,6 +9,7 @@ import {
 import { loadConfig, findProjectRoot, resolveBookId, log, logError } from "../utils.js";
 import { readFile, readdir } from "node:fs/promises";
 import { join } from "node:path";
+import { formatCurrentCliMessage } from "../i18n/messages.js";
 
 export const detectCommand = new Command("detect")
   .description("Run AIGC detection on chapters")
@@ -23,7 +24,7 @@ export const detectCommand = new Command("detect")
       const root = findProjectRoot();
 
       if (!config.detection?.enabled) {
-        logError("AIGC detection is not enabled. Add detection config to inkos.json.");
+        logError(formatCurrentCliMessage("detect.disabled"));
         process.exit(1);
       }
 
@@ -45,19 +46,25 @@ export const detectCommand = new Command("detect")
         const history = await loadDetectionHistory(bookDir);
         const stats = analyzeDetectionInsights(history);
         if (opts.json) {
+          // i18n-raw: structured detection statistics must remain locale-independent.
           log(JSON.stringify(stats, null, 2));
         } else {
-          log(`Detection Statistics:`);
-          log(`  Total detections: ${stats.totalDetections}`);
-          log(`  Total rewrites: ${stats.totalRewrites}`);
-          log(`  Avg original score: ${stats.avgOriginalScore.toFixed(3)}`);
-          log(`  Avg final score: ${stats.avgFinalScore.toFixed(3)}`);
-          log(`  Avg score reduction: ${stats.avgScoreReduction.toFixed(3)}`);
-          log(`  Pass rate: ${(stats.passRate * 100).toFixed(0)}%`);
+          log(formatCurrentCliMessage("detect.statistics"));
+          log(formatCurrentCliMessage("detect.total", { count: stats.totalDetections }));
+          log(formatCurrentCliMessage("detect.rewrites", { count: stats.totalRewrites }));
+          log(formatCurrentCliMessage("detect.avgOriginal", { score: stats.avgOriginalScore.toFixed(3) }));
+          log(formatCurrentCliMessage("detect.avgFinal", { score: stats.avgFinalScore.toFixed(3) }));
+          log(formatCurrentCliMessage("detect.avgReduction", { score: stats.avgScoreReduction.toFixed(3) }));
+          log(formatCurrentCliMessage("detect.passRate", { rate: (stats.passRate * 100).toFixed(0) }));
           if (stats.chapterBreakdown.length > 0) {
-            log(`  Chapters:`);
+            log(formatCurrentCliMessage("detect.chapters"));
             for (const ch of stats.chapterBreakdown) {
-              log(`    Ch.${ch.chapterNumber}: ${ch.originalScore.toFixed(3)} → ${ch.finalScore.toFixed(3)} (${ch.rewriteAttempts} rewrites)`);
+              log(formatCurrentCliMessage("detect.chapterStat", {
+                chapter: ch.chapterNumber,
+                original: ch.originalScore.toFixed(3),
+                final: ch.finalScore.toFixed(3),
+                rewrites: ch.rewriteAttempts,
+              }));
             }
           }
         }
@@ -76,7 +83,7 @@ export const detectCommand = new Command("detect")
       } else {
         const targetChapter = chapterNumber ?? (await state.getNextChapterNumber(bookId)) - 1;
         if (targetChapter < 1) {
-          logError("No chapters to detect.");
+          logError(formatCurrentCliMessage("detect.noChapters"));
           process.exit(1);
         }
         const content = await readChapterContent(bookDir, targetChapter);
@@ -84,7 +91,7 @@ export const detectCommand = new Command("detect")
         printResult(result, opts.json);
       }
     } catch (e) {
-      logError(`Detection failed: ${e}`);
+      logError(formatCurrentCliMessage("detect.failure", { detail: String(e) }));
       process.exit(1);
     }
   });
@@ -94,10 +101,14 @@ function printResult(
   json: boolean,
 ): void {
   if (json) {
+    // i18n-raw: structured detection result must remain locale-independent.
     log(JSON.stringify(result, null, 2));
   } else {
-    const icon = result.passed ? "✅" : "⚠️";
-    log(`  ${icon} Chapter ${result.chapterNumber}: score=${result.detection.score.toFixed(3)} (${result.detection.provider}) ${result.passed ? "PASS" : "FAIL"}`);
+    log(formatCurrentCliMessage(result.passed ? "detect.resultPassed" : "detect.resultFailed", {
+      chapter: result.chapterNumber,
+      score: result.detection.score.toFixed(3),
+      provider: result.detection.provider,
+    }));
   }
 }
 

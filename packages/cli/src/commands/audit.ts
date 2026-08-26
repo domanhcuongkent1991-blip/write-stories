@@ -7,6 +7,7 @@ import {
   formatNotifyFailureBody,
 } from "../localization.js";
 import { resolveCliLocale } from "../locale.js";
+import { formatCliMessage } from "../i18n/messages.js";
 import { sendCommandNotification } from "../notify-helper.js";
 
 export const auditCommand = new Command("audit")
@@ -39,19 +40,23 @@ export const auditCommand = new Command("audit")
 
       const pipeline = new PipelineRunner(buildPipelineConfig(config, root));
 
-      if (!opts.json) log(`Auditing "${bookId}"${chapterNumber ? ` chapter ${chapterNumber}` : " (latest)"}...`);
+      if (!opts.json) log(formatCliMessage(locale, chapterNumber ? "audit.startChapter" : "audit.startLatest", {
+        bookId,
+        ...(chapterNumber ? { chapter: chapterNumber } : {}),
+      }));
 
       const result = await pipeline.auditDraft(bookId, chapterNumber);
 
       if (opts.json) {
+        // i18n-raw: structured audit result must remain locale-independent.
         log(JSON.stringify(result, null, 2));
       } else {
-        log(`  Chapter ${result.chapterNumber}: ${result.passed ? "PASSED" : "FAILED"}`);
-        log(`  Summary: ${result.summary}`);
+        log(formatCliMessage(locale, result.passed ? "audit.resultPassed" : "audit.resultFailed", { chapter: result.chapterNumber }));
+        log(formatCliMessage(locale, "audit.summary", { summary: result.summary }));
         if (result.issues.length > 0) {
-          log("  Issues:");
+          log(formatCliMessage(locale, "audit.issues"));
           for (const issue of result.issues) {
-            log(`    [${issue.severity}] ${issue.category}: ${issue.description}`);
+            log(formatCliMessage(locale, "audit.rawIssue", { severity: issue.severity, category: issue.category, description: issue.description }));
           }
         }
       }
@@ -77,9 +82,10 @@ export const auditCommand = new Command("audit")
         });
       }
       if (opts.json) {
+        // i18n-raw: structured JSON errors preserve the original detail.
         log(JSON.stringify({ error: String(e) }));
       } else {
-        logError(`Audit failed: ${e}`);
+        logError(formatCliMessage(locale, "audit.failure", { detail: String(e) }));
       }
       process.exit(1);
     }

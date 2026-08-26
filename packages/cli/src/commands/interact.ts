@@ -101,6 +101,7 @@ export function createInteractCommand(hooks: InteractCommandHooks = {}): Command
       };
 
       if (opts.json) {
+        // i18n-raw: structured JSON and raw agent output are protocol content.
         process.stdout.write(`${JSON.stringify({
           responseText,
           session,
@@ -109,6 +110,7 @@ export function createInteractCommand(hooks: InteractCommandHooks = {}): Command
       }
 
       if (responseText) {
+        // i18n-raw: raw agent response content must never be translated.
         process.stdout.write(`${responseText}\n`);
       }
     });

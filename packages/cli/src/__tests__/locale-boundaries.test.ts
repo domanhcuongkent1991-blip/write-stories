@@ -28,8 +28,8 @@ describe("CLI locale and writing-language boundaries", () => {
   });
 
   it("uses the book language for length units under a Vietnamese UI", () => {
-    expect(formatWriteNextResultLines("vi", "zh", WRITE_RESULT)).toContain("  Length: 1200字");
-    expect(formatWriteNextResultLines("vi", "en", WRITE_RESULT)).toContain("  Length: 1200 words");
+    expect(formatWriteNextResultLines("vi", "zh", WRITE_RESULT)).toContain("  Độ dài: 1200字");
+    expect(formatWriteNextResultLines("vi", "en", WRITE_RESULT)).toContain("  Độ dài: 1200 words");
   });
 
   it("keeps Vietnamese outside the writing-language type", () => {

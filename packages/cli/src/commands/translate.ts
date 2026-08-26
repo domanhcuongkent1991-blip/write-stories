@@ -9,6 +9,7 @@ import {
   writeTranslationExport,
 } from "@actalk/inkos-core";
 import { createClient, findProjectRoot, loadConfig, log, logError } from "../utils.js";
+import { formatCurrentCliMessage, type CliMessageKey } from "../i18n/messages.js";
 
 export const translateCommand = new Command("translate")
   .description("Translate and localize novels/scripts across languages");
@@ -33,15 +34,16 @@ translateCommand
         segmentMaxChars: opts.segmentMaxChars,
       });
       if (opts.json) {
+        // i18n-raw: structured translation project must remain locale-independent.
         log(JSON.stringify(result, null, 2));
       } else {
-        log(`Translation project created: ${result.manifest.id}`);
-        log(`Title: ${result.manifest.title}`);
-        log(`Chapters: ${result.manifest.chapters.length}`);
-        log(`Manifest: ${result.manifestPath}`);
+        log(formatCurrentCliMessage("translate.created", { id: result.manifest.id }));
+        log(formatCurrentCliMessage("translate.title", { title: result.manifest.title }));
+        log(formatCurrentCliMessage("translate.chapters", { count: result.manifest.chapters.length }));
+        log(formatCurrentCliMessage("translate.manifest", { path: result.manifestPath }));
       }
     } catch (error) {
-      fail("Failed to create translation project", error, opts.json);
+      fail("translate.createFailure", error, opts.json);
     }
   });
 
@@ -69,15 +71,16 @@ translateCommand
         batchSize: opts.batchSize,
       });
       if (opts.json) {
+        // i18n-raw: structured translation run result must remain locale-independent.
         log(JSON.stringify(result, null, 2));
       } else {
-        log(`Skills: ${activatedSkillIds(activatedSkills).join(", ")}`);
-        log(`Translated segments: ${result.translatedSegments}`);
-        log(`Reviewed chapters: ${result.reviewedChapters}`);
-        log(`Report: ${result.reportPath}`);
+        log(formatCurrentCliMessage("translate.skills", { skills: activatedSkillIds(activatedSkills).join(", ") }));
+        log(formatCurrentCliMessage("translate.segments", { count: result.translatedSegments }));
+        log(formatCurrentCliMessage("translate.reviewed", { count: result.reviewedChapters }));
+        log(formatCurrentCliMessage("translate.report", { path: result.reportPath }));
       }
     } catch (error) {
-      fail("Translation run failed", error, opts.json);
+      fail("translate.runFailure", error, opts.json);
     }
   });
 
@@ -96,21 +99,23 @@ translateCommand
         outputPath: opts.output,
       });
       if (opts.json) {
+        // i18n-raw: structured translation export result must remain locale-independent.
         log(JSON.stringify(result, null, 2));
       } else {
-        log(`Exported ${result.chaptersExported} chapter(s)`);
-        log(`Output: ${result.outputPath}`);
+        log(formatCurrentCliMessage("translate.exported", { count: result.chaptersExported }));
+        log(formatCurrentCliMessage("translate.output", { path: result.outputPath }));
       }
     } catch (error) {
-      fail("Translation export failed", error, opts.json);
+      fail("translate.exportFailure", error, opts.json);
     }
   });
 
-function fail(prefix: string, error: unknown, json: boolean): never {
+function fail(key: CliMessageKey, error: unknown, json: boolean): never {
   if (json) {
+    // i18n-raw: structured JSON errors remain identical across locales.
     log(JSON.stringify({ error: String(error) }));
   } else {
-    logError(`${prefix}: ${error}`);
+    logError(formatCurrentCliMessage(key, { detail: String(error) }));
   }
   process.exit(1);
 }

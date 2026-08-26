@@ -4,6 +4,7 @@ import { loadConfig, findProjectRoot, buildPipelineConfig, log, logError } from 
 import { createWriteStream, type WriteStream } from "node:fs";
 import { writeFile, readFile, unlink } from "node:fs/promises";
 import { join } from "node:path";
+import { formatCurrentCliMessage } from "../i18n/messages.js";
 
 const PID_FILE = "inkos.pid";
 
@@ -21,17 +22,17 @@ export const upCommand = new Command("up")
       pidPath = join(root, PID_FILE);
       try {
         const existingPid = await readFile(pidPath, "utf-8");
-        logError(`Daemon already running (PID: ${existingPid.trim()}). Run 'inkos down' first.`);
+        logError(formatCurrentCliMessage("daemon.alreadyRunning", { pid: existingPid.trim() }));
         process.exit(1);
       } catch {
         // No PID file, good
       }
 
-      log("Starting InkOS daemon...");
-      log(`  Write cycle: ${config.daemon.schedule.writeCron}`);
-      log(`  Radar scan: ${config.daemon.schedule.radarCron}`);
-      log(`  Max concurrent books: ${config.daemon.maxConcurrentBooks}`);
-      log("");
+      log(formatCurrentCliMessage("daemon.starting"));
+      log(formatCurrentCliMessage("daemon.writeCycle", { schedule: config.daemon.schedule.writeCron }));
+      log(formatCurrentCliMessage("daemon.radarScan", { schedule: config.daemon.schedule.radarCron }));
+      log(formatCurrentCliMessage("daemon.maxBooks", { count: config.daemon.maxConcurrentBooks }));
+      log(formatCurrentCliMessage("common.blank"));
 
       // Write PID file
       await writeFile(pidPath, String(process.pid), "utf-8");
@@ -55,16 +56,16 @@ export const upCommand = new Command("up")
             : status === "state-degraded"
               ? "x"
               : "!";
-          log(`  [${icon}] ${bookId} Ch.${chapter} — ${status}`);
+          log(formatCurrentCliMessage("daemon.chapterEvent", { icon, bookId, chapter, status }));
         },
         onError: (bookId, error) => {
-          logError(`${bookId}: ${error.message}`);
+          logError(formatCurrentCliMessage("daemon.bookError", { bookId, detail: error.message }));
         },
       });
 
       // Handle shutdown
       const shutdown = async () => {
-        log("\nShutting down daemon...");
+        log(formatCurrentCliMessage("daemon.shuttingDown"));
         scheduler.stop();
         logStream?.end();
         const currentPidPath = pidPath;
@@ -82,7 +83,7 @@ export const upCommand = new Command("up")
       process.on("SIGTERM", shutdown);
 
       await scheduler.start();
-      log("Daemon running. Press Ctrl+C to stop.");
+      log(formatCurrentCliMessage("daemon.running"));
 
       // Keep process alive
       await new Promise(() => {});
@@ -95,7 +96,7 @@ export const upCommand = new Command("up")
           // ignore
         }
       }
-      logError(`Failed to start daemon: ${e}`);
+      logError(formatCurrentCliMessage("daemon.startFailure", { detail: String(e) }));
       process.exit(1);
     }
   });
@@ -110,12 +111,12 @@ export const downCommand = new Command("down")
       const pid = (await readFile(pidPath, "utf-8")).trim();
       try {
         process.kill(parseInt(pid, 10), "SIGTERM");
-        log(`Daemon (PID: ${pid}) stopped.`);
+        log(formatCurrentCliMessage("daemon.stopped", { pid }));
       } catch {
-        log(`Daemon (PID: ${pid}) not found. Cleaning up.`);
+        log(formatCurrentCliMessage("daemon.notFound", { pid }));
       }
       try { await unlink(pidPath); } catch { /* already cleaned up by daemon */ }
     } catch {
-      log("No daemon running.");
+      log(formatCurrentCliMessage("daemon.notRunning"));
     }
   });

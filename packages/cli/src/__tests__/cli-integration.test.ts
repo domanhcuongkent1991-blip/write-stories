@@ -28,6 +28,8 @@ function buildTestEnv(overrides?: Record<string, string>) {
     ...baseEnv,
     // Prevent global config from leaking into tests
     HOME: projectDir,
+    // Existing human-readable assertions are English; locale-specific tests override this.
+    INKOS_LOCALE: "en",
     ...overrides,
   };
 }
@@ -87,6 +89,38 @@ describe("CLI integration", () => {
       expect(output).toContain("book");
       expect(output).toContain("write");
     });
+
+    it("localizes Commander descriptions without changing command names or flags", () => {
+      const rootHelp = run(["--help"], { env: { INKOS_LOCALE: "vi" } });
+      const auditHelp = run(["audit", "--help"], { env: { INKOS_LOCALE: "vi" } });
+
+      expect(rootHelp).toContain("Hệ thống sáng tác tiểu thuyết đa tác tử");
+      expect(rootHelp).toContain("audit");
+      expect(auditHelp).toContain("Kiểm tra chất lượng");
+      expect(auditHelp).toContain("--json");
+      expect(auditHelp).toContain("Xuất JSON");
+    }, DOUBLE_CLI_INVOCATION_TEST_TIMEOUT_MS);
+  });
+
+  describe("JSON locale boundary", () => {
+    it("keeps registered JSON command results and exit codes identical for EN and VI", () => {
+      const fixtures: ReadonlyArray<readonly string[]> = [
+        ["audit", "missing-json-book", "--json"],
+        ["chapter", "sync", "missing-json-book", "--json"],
+        ["write", "next", "missing-json-book", "--json"],
+        ["import", "chapters", "missing-json-book", "--from", join(projectDir, "missing-import.txt"), "--json"],
+        ["compose", "chapter", "missing-json-book", "--json"],
+        ["export", "missing-json-book", "--json"],
+      ];
+
+      for (const args of fixtures) {
+        const english = runStderr([...args], { env: { INKOS_LOCALE: "en" } });
+        const vietnamese = runStderr([...args], { env: { INKOS_LOCALE: "vi" } });
+
+        expect(vietnamese.exitCode, args.join(" ")).toBe(english.exitCode);
+        expect(JSON.parse(vietnamese.stdout), args.join(" ")).toEqual(JSON.parse(english.stdout));
+      }
+    }, 120_000);
   });
 
   describe("inkos init", () => {

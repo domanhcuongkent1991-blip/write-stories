@@ -5,6 +5,7 @@ import { dirname, join } from "node:path";
 import { access } from "node:fs/promises";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { ensureProjectDirectoryInitialized } from "../project-bootstrap.js";
+import { formatCurrentCliMessage } from "../i18n/messages.js";
 
 export interface StudioLaunchSpec {
   readonly studioEntry: string;
@@ -123,15 +124,11 @@ export async function launchStudioWorkbench(root: string, port: string): Promise
   const launch = await resolveStudioLaunch(root);
 
   if (!launch) {
-    logError(
-      "InkOS Studio not found. If you cloned the repo, run:\n" +
-      "  cd packages/studio && pnpm install && pnpm build\n" +
-      "Then run 'inkos studio' from the project root.",
-    );
+    logError(formatCurrentCliMessage("studio.notFound"));
     process.exit(1);
   }
 
-  log(`Starting InkOS Studio on ${url}`);
+  log(formatCurrentCliMessage("studio.starting", { url }));
 
   const child = spawn(launch.command, launch.args, {
     cwd: root,
@@ -140,7 +137,7 @@ export async function launchStudioWorkbench(root: string, port: string): Promise
   });
 
   child.on("error", (e) => {
-    logError(`Failed to start studio: ${e.message}`);
+    logError(formatCurrentCliMessage("studio.startFailure", { detail: e.message }));
     process.exit(1);
   });
 
@@ -169,7 +166,7 @@ export async function launchStudioEntry(
 ): Promise<void> {
   const prepared = await prepareStudioRoot(root);
   if (prepared.initialized) {
-    log(`No inkos.json found in ${root}. Initialized a minimal InkOS project for Studio.`);
+    log(formatCurrentCliMessage("studio.initialized", { root }));
   }
 
   if (hooks.launchStudio) {

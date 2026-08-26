@@ -17,6 +17,7 @@ import {
   formatDoctorHintStreamRequirement,
 } from "../localization.js";
 import { resolveCliLocale } from "../locale.js";
+import { formatCliMessage } from "../i18n/messages.js";
 
 function buildDoctorProbePlans(
   preferredApiFormat: "chat" | "responses" | undefined,
@@ -286,7 +287,7 @@ export const doctorCommand = new Command("doctor")
           detail: `provider=${llmConfig.provider} model=${llmConfig.model} stream=${llmConfig.stream ?? true} baseUrl=${llmConfig.baseUrl}`,
         });
 
-        log("\n  [..] Testing API connectivity...");
+        log(formatCliMessage(locale, "doctor.testingApi"));
 
         let connected = false;
         let detectedDetail = "";
@@ -382,16 +383,16 @@ export const doctorCommand = new Command("doctor")
     }
 
     // Output
-    log("\nInkOS Doctor\n");
+    log(formatCliMessage(locale, "doctor.header"));
     for (const check of checks) {
       const icon = check.ok ? "[OK]" : "[!!]";
-      log(`  ${icon} ${check.name}: ${check.detail}`);
+      log(formatCliMessage(locale, "doctor.check", { icon, name: check.name, detail: check.detail }));
     }
 
     const failed = checks.filter((c) => !c.ok);
     if (failed.length > 0) {
-      log(`\n${failed.length} issue(s) found.`);
+      log(formatCliMessage(locale, "doctor.issues", { count: failed.length }));
     } else {
-      log("\nAll checks passed.");
+      log(formatCliMessage(locale, "doctor.allPassed"));
     }
   });
