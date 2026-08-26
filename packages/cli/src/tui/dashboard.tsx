@@ -18,9 +18,9 @@ import { loadProjectSession, persistProjectSession, resolveSessionActiveBook } f
 import { classifyLocalTuiCommand, parseDepthCommand, parseModelCommand } from "./local-commands.js";
 import {
   applySlashSuggestion,
+  buildSlashCommands,
   getNextSlashSelection,
   getSlashSuggestions,
-  SLASH_COMMANDS,
 } from "./slash-autocomplete.js";
 import {
   WARM_ACCENT, WARM_BORDER, WARM_MUTED, WARM_REPLY,
@@ -182,7 +182,7 @@ export function InkTuiApp(props: InkTuiAppProps): React.JSX.Element {
   );
   const assistantDraftTimestampRef = useRef<number | null>(null);
   const submitLockRef = useRef(false);
-  const slashSuggestions = getSlashSuggestions(inputValue, SLASH_COMMANDS);
+  const slashSuggestions = getSlashSuggestions(inputValue, buildSlashCommands(props.locale));
   const inputHistory = buildInputHistory(session.messages);
   const activity = describeActivityState(copy);
   const chatDepthProfile = resolveChatDepthProfile(chatDepth);
@@ -389,6 +389,7 @@ export function InkTuiApp(props: InkTuiAppProps): React.JSX.Element {
         input,
         session,
         activeBookId,
+        uiLocale: props.locale,
         onTextDelta: (text) => {
           props.chatStreamBridge?.onTextDelta?.(text);
         },

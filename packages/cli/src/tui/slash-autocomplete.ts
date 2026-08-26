@@ -1,4 +1,5 @@
-import type { CliLocale } from "../locale.js";
+import type { TuiLocale } from "./i18n.js";
+import { VI_SLASH_COMMANDS } from "./vi-copy.js";
 
 const SLASH_COMMAND_VARIANTS: ReadonlyArray<{ zh: string; en: string }> = [
   { zh: "/new 输入你的想法", en: "/new describe your idea" },
@@ -17,11 +18,12 @@ const SLASH_COMMAND_VARIANTS: ReadonlyArray<{ zh: string; en: string }> = [
   { zh: "/exit", en: "/exit" },
 ];
 
-export function buildSlashCommands(locale: CliLocale = "zh"): readonly string[] {
-  return SLASH_COMMAND_VARIANTS.map((variant) => (locale === "zh" ? variant.zh : variant.en));
+export function buildSlashCommands(locale: TuiLocale = "zh-CN"): readonly string[] {
+  if (locale === "vi") return VI_SLASH_COMMANDS;
+  return SLASH_COMMAND_VARIANTS.map((variant) => (locale === "zh-CN" ? variant.zh : variant.en));
 }
 
-export const SLASH_COMMANDS = buildSlashCommands("zh");
+export const SLASH_COMMANDS = buildSlashCommands("zh-CN");
 
 export type SlashNavigationDirection = "up" | "down";
 

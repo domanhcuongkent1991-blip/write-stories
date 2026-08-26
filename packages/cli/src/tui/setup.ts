@@ -9,6 +9,7 @@ import {
   brightCyan, brightGreen, brightWhite,
 } from "./ansi.js";
 import { resolveTuiLocale, type TuiLocale } from "./i18n.js";
+import { buildViAutoInitMessages, VI_INTERACTIVE_SETUP_COPY } from "./vi-copy.js";
 import { GLOBAL_ENV_PATH, loadConfig } from "../utils.js";
 import { ensureProjectGitignore } from "../project-bootstrap.js";
 
@@ -75,6 +76,9 @@ export interface InteractiveSetupCopy {
 }
 
 export function buildInteractiveSetupCopy(locale: TuiLocale): InteractiveSetupCopy {
+  if (locale === "vi") {
+    return VI_INTERACTIVE_SETUP_COPY;
+  }
   if (locale === "en") {
     return {
       title: "LLM Setup",
@@ -141,6 +145,9 @@ export function buildAutoInitMessages(projectName: string, locale: TuiLocale): {
   readonly initialized: string;
   readonly envTemplateHeader: string;
 } {
+  if (locale === "vi") {
+    return buildViAutoInitMessages(projectName);
+  }
   if (locale === "en") {
     return {
       initializing: `Initializing project in ${projectName}/ ...`,
@@ -171,8 +178,7 @@ export async function ensureProject(cwd: string): Promise<SetupResult> {
 export async function interactiveLlmSetup(
   projectRoot: string,
 ): Promise<void> {
-  const projectLanguage = await detectProjectLanguage(projectRoot);
-  const locale = resolveTuiLocale(process.env, projectLanguage);
+  const locale = resolveTuiLocale();
   const copy = buildInteractiveSetupCopy(locale);
   const rl = readline.createInterface({
     input: process.stdin,

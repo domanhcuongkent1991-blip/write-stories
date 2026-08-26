@@ -9,6 +9,12 @@ import {
   badge, sleep, stripAnsi, box,
 } from "./ansi.js";
 import { formatModeLabel, getTuiCopy, normalizeStageLabel, resolveTuiLocale, type TuiLocale } from "./i18n.js";
+import {
+  VI_HELP_FOOTER,
+  VI_HELP_SECTIONS,
+  VI_INTENT_LABELS,
+  VI_THEME_LABELS,
+} from "./vi-copy.js";
 
 /* ── Operation themes ── */
 
@@ -277,7 +283,9 @@ export function formatResultCard(content: string, intent?: string): string {
 }
 
 export function intentToBadge(intent: string, locale: TuiLocale = resolveTuiLocale()): string {
-  const labels = locale === "en"
+  const labels = locale === "vi"
+    ? VI_INTENT_LABELS
+    : locale === "en"
     ? {
         write_next: " WRITE ",
         revise_chapter: " REVISE ",
@@ -441,6 +449,12 @@ function formatElapsed(ms: number): string {
 }
 
 export function buildStyledHelpSections(locale: TuiLocale = resolveTuiLocale()): StyledHelpSection[] {
+  if (locale === "vi") {
+    return VI_HELP_SECTIONS.map((section) => ({
+      title: section.title,
+      commands: section.commands,
+    }));
+  }
   if (locale === "en") {
     return [
       {
@@ -507,6 +521,9 @@ export function buildStyledHelpSections(locale: TuiLocale = resolveTuiLocale()):
 }
 
 function buildHelpFooter(locale: TuiLocale): { readonly title: string; readonly examples: readonly string[] } {
+  if (locale === "vi") {
+    return VI_HELP_FOOTER;
+  }
   if (locale === "en") {
     return {
       title: "Use slash commands for actions:",
@@ -523,6 +540,10 @@ function buildHelpFooter(locale: TuiLocale): { readonly title: string; readonly 
 function localizeThemeLabel(label: string, locale: TuiLocale): string {
   if (locale === "en") {
     return label;
+  }
+
+  if (locale === "vi") {
+    return VI_THEME_LABELS[label] ?? label;
   }
 
   const labels: Record<string, string> = {

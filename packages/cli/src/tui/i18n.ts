@@ -1,6 +1,7 @@
 import type { ChatDepth } from "./chat-depth.js";
+import { VI_TUI_COPY } from "./vi-copy.js";
 
-export type TuiLocale = "zh-CN" | "en";
+export type TuiLocale = "zh-CN" | "en" | "vi";
 
 export interface TuiCopy {
   readonly locale: TuiLocale;
@@ -57,6 +58,14 @@ export interface TuiCopy {
     readonly readyToContinue: string;
   };
   readonly depthLabels: Record<ChatDepth, string>;
+  readonly agent: {
+    readonly noPendingAction: string;
+    readonly invalidPendingAction: string;
+    readonly pendingActionCancelled: string;
+    readonly confirmTitle: string;
+    readonly confirmSummary: string;
+    readonly confirmHint: string;
+  };
 }
 
 const ZH_CN: TuiCopy = {
@@ -127,6 +136,14 @@ const ZH_CN: TuiCopy = {
     light: "轻量",
     normal: "标准",
     deep: "深入",
+  },
+  agent: {
+    noPendingAction: "没有待确认的动作。",
+    invalidPendingAction: "这条待确认动作已失效，请重新提出需求。",
+    pendingActionCancelled: "已取消待确认动作。",
+    confirmTitle: "确认执行",
+    confirmSummary: "确认后继续执行。",
+    confirmHint: "输入 /confirm 继续，或 /cancel 取消。",
   },
 };
 
@@ -199,28 +216,48 @@ const EN: TuiCopy = {
     normal: "normal",
     deep: "deep",
   },
+  agent: {
+    noPendingAction: "There is no pending action.",
+    invalidPendingAction: "This pending action is no longer valid. Please propose it again.",
+    pendingActionCancelled: "Pending action cancelled.",
+    confirmTitle: "Confirm action",
+    confirmSummary: "Confirm to continue.",
+    confirmHint: "Type /confirm to continue, or /cancel to cancel.",
+  },
 };
+
+type DeepPartial<T> = {
+  [Key in keyof T]?: T[Key] extends (...args: any[]) => unknown
+    ? T[Key]
+    : T[Key] extends ReadonlyArray<unknown>
+      ? T[Key]
+      : T[Key] extends object
+        ? DeepPartial<T[Key]>
+        : T[Key];
+};
+
+const VI = mergeCopy(EN, VI_TUI_COPY as DeepPartial<TuiCopy>);
 
 export function resolveTuiLocale(
   env: NodeJS.ProcessEnv = process.env,
-  preferredLanguage?: string,
 ): TuiLocale {
-  const requested = normalizeLocale(env.INKOS_TUI_LOCALE ?? env.INKOS_LOCALE);
-  if (requested) {
-    return requested;
+  for (const value of [
+    env.INKOS_TUI_LOCALE,
+    env.INKOS_LOCALE,
+    env.LC_ALL,
+    env.LC_MESSAGES,
+    env.LANG,
+  ]) {
+    const locale = normalizeLocale(value);
+    if (locale) return locale;
   }
-
-  const preferred = normalizeLocale(preferredLanguage);
-  if (preferred) {
-    return preferred;
-  }
-
-  const detected = normalizeLocale(env.LC_ALL ?? env.LC_MESSAGES ?? env.LANG);
-  return detected ?? "zh-CN";
+  return "zh-CN";
 }
 
 export function getTuiCopy(locale: TuiLocale): TuiCopy {
-  return locale === "en" ? EN : ZH_CN;
+  if (locale === "en") return EN;
+  if (locale === "vi") return VI;
+  return ZH_CN;
 }
 
 export function normalizeStageLabel(label: string, copy: TuiCopy): string {
@@ -280,5 +317,29 @@ function normalizeLocale(value: string | undefined): TuiLocale | undefined {
     return "en";
   }
 
+  if (normalized.startsWith("vi")) {
+    return "vi";
+  }
+
   return undefined;
+}
+
+function mergeCopy(base: TuiCopy, overlay: DeepPartial<TuiCopy>): TuiCopy {
+  return mergeObject(base, overlay) as TuiCopy;
+}
+
+function mergeObject(base: object, overlay: object): object {
+  const result: Record<string, unknown> = { ...(base as Record<string, unknown>) };
+  for (const [key, value] of Object.entries(overlay)) {
+    if (value === undefined) continue;
+    const baseValue = result[key];
+    result[key] = isPlainObject(baseValue) && isPlainObject(value)
+      ? mergeObject(baseValue, value)
+      : value;
+  }
+  return result;
+}
+
+function isPlainObject(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
 }

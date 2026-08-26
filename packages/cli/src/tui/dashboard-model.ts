@@ -149,7 +149,9 @@ function summarizeEvent(event: InteractionEvent, copy: TuiCopy): string {
   if (event.bookId && event.chapterNumber !== undefined) {
     const chapterLabel = copy.locale === "zh-CN"
       ? `第 ${event.chapterNumber} 章`
-      : `ch.${event.chapterNumber}`;
+      : copy.locale === "vi"
+        ? `chương ${event.chapterNumber}`
+        : `ch.${event.chapterNumber}`;
     return `${base} (${event.bookId} ${chapterLabel})`;
   }
   if (event.bookId) {

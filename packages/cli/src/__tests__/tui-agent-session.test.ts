@@ -102,6 +102,7 @@ describe("tui agent session bridge", () => {
       input: "帮我整理这一章",
       session,
       activeBookId: "harbor",
+      uiLocale: "vi",
     });
 
     expect(runAgentSessionMock).toHaveBeenCalledWith(
@@ -109,6 +110,7 @@ describe("tui agent session bridge", () => {
         sessionId: session.sessionId,
         bookId: "harbor",
         projectRoot,
+        language: "zh",
       }),
       "帮我整理这一章",
       [
@@ -263,8 +265,11 @@ describe("tui agent session bridge", () => {
       projectRoot,
       input: "把这个故事做成互动影游",
       session: createProjectSession(projectRoot),
+      uiLocale: "vi",
     });
-    expect(proposed.responseText).toContain("输入 /confirm");
+    expect(proposed.responseText).toContain("创建互动影游");
+    expect(proposed.responseText).toContain("把上传的故事改成三幕互动影游");
+    expect(proposed.responseText).toContain("Nhập /confirm");
     expect(proposed.session.pendingProposedAction).toEqual(expect.objectContaining({
       action: "interactive_film_create",
       targetSessionKind: "interactive-film",
@@ -278,6 +283,7 @@ describe("tui agent session bridge", () => {
       projectRoot,
       input: "/confirm",
       session: proposed.session,
+      uiLocale: "vi",
     });
     expect(runAgentSessionMock).toHaveBeenLastCalledWith(
       expect.objectContaining({
@@ -351,5 +357,43 @@ describe("tui agent session bridge", () => {
     expect(result.responseText).toContain("完成下一章");
     const persisted = await loadProjectSession(projectRoot);
     expect(persisted.activeBookId).toBe("night-harbor");
+  });
+
+  it("keeps Vietnamese UI chrome separate from Chinese and English writing instructions", async () => {
+    const { resolveTuiAgentRoute } = await import("../tui/agent-input.js");
+    const session = createProjectSession(projectRoot);
+
+    const noPending = resolveTuiAgentRoute("/confirm", session, null, {
+      uiLocale: "vi",
+      writingLanguage: "zh",
+    });
+    expect(noPending.userMessage).toBe("/confirm");
+    expect(noPending.localResponse).toBe("Không có hành động nào đang chờ xác nhận.");
+
+    const cancelled = resolveTuiAgentRoute("/cancel", session, null, {
+      uiLocale: "vi",
+      writingLanguage: "zh",
+    });
+    expect(cancelled.userMessage).toBe("/cancel");
+    expect(cancelled.localResponse).toBe("Không có hành động nào đang chờ xác nhận.");
+
+    const chineseWrite = resolveTuiAgentRoute("/write", session, "harbor", {
+      uiLocale: "vi",
+      writingLanguage: "zh",
+    });
+    const englishWrite = resolveTuiAgentRoute("/write", session, "harbor", {
+      uiLocale: "vi",
+      writingLanguage: "en",
+    });
+    expect(chineseWrite.userMessage).toBe("写下一章");
+    expect(englishWrite.userMessage).toBe("Write the next chapter");
+    expect(chineseWrite.requestedIntent).toBe("write_next");
+    expect(englishWrite.requestedIntent).toBe("write_next");
+
+    const rawInput = "Giữ nguyên nội dung thô này — /confirm chỉ là văn bản";
+    expect(resolveTuiAgentRoute(rawInput, session, null, {
+      uiLocale: "vi",
+      writingLanguage: "en",
+    }).userMessage).toBe(rawInput);
   });
 });

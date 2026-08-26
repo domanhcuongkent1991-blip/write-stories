@@ -45,6 +45,21 @@ describe("tui layout", () => {
     expect(frame.indexOf("Mode auto")).toBeLessThan(frame.indexOf("Ask InkOS"));
   });
 
+  it("renders Vietnamese chrome without rewriting raw messages", () => {
+    const rawMessage = "原始 agent message /confirm";
+    const frame = renderTuiFrame({
+      locale: "vi",
+      projectName: "ben-cang",
+      automationMode: "semi",
+      status: "writing chapter",
+      messages: [rawMessage],
+    });
+
+    expect(frame).toContain("Dự án ben-cang");
+    expect(frame).toContain("Giai đoạn Đang viết");
+    expect(frame).toContain(rawMessage);
+  });
+
   it("does not add blank lines before the readline prompt", () => {
     const logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
 

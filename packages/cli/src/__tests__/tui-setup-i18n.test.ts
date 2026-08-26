@@ -16,6 +16,8 @@ describe("tui setup i18n", () => {
   it("builds localized auto-init messages", () => {
     expect(buildAutoInitMessages("山海", "zh-CN").initializing).toContain("正在初始化项目：山海");
     expect(buildAutoInitMessages("harbor", "en").initialized).toContain("Project initialized");
+    expect(buildAutoInitMessages("ben-cang", "vi").initialized).toContain("Đã khởi tạo dự án");
+    expect(buildInteractiveSetupCopy("vi").title).toBe("Cấu hình LLM");
   });
 
   it("uses Anthropic protocol for Kimi Code base URLs even when the user picked custom", () => {

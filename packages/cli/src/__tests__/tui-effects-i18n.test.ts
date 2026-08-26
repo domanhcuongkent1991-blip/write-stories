@@ -6,14 +6,17 @@ describe("tui effects i18n", () => {
   it("builds localized help sections", () => {
     const zhSections = buildStyledHelpSections("zh-CN");
     const enSections = buildStyledHelpSections("en");
+    const viSections = buildStyledHelpSections("vi");
 
     expect(zhSections[0]?.title).toBe("写作");
     expect(zhSections[1]?.commands[0]?.[1]).toContain("列出");
     expect(enSections[0]?.title).toBe("Writing");
+    expect(viSections[0]?.title).toBe("Sáng tác");
   });
 
   it("localizes intent badges and status labels", () => {
     expect(stripAnsi(intentToBadge("write_next", "zh-CN"))).toContain("写作");
+    expect(stripAnsi(intentToBadge("write_next", "vi"))).toContain("VIẾT");
 
     const zhLines = formatStyledStatusLines("zh-CN", {
       mode: "semi",
@@ -25,5 +28,14 @@ describe("tui effects i18n", () => {
     expect(zhLines.join("\n")).toContain("模式");
     expect(zhLines.join("\n")).toContain("半自动");
     expect(zhLines.join("\n")).toContain("作品");
+
+    const rawEventDetail = "原始 event detail /confirm";
+    const viLines = formatStyledStatusLines("vi", {
+      mode: "semi",
+      status: "writing",
+      events: [{ kind: "task.started", detail: rawEventDetail, status: "running" }],
+    });
+    expect(viLines.join("\n")).toContain("Chế độ");
+    expect(viLines.join("\n")).toContain(rawEventDetail);
   });
 });

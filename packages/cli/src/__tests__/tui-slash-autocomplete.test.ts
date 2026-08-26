@@ -35,11 +35,15 @@ describe("tui slash autocomplete", () => {
   it("builds locale-specific command lists with identical stems", () => {
     const zh = buildSlashCommands();
     const en = buildSlashCommands("en");
+    const vi = buildSlashCommands("vi");
 
     expect(zh).toEqual(SLASH_COMMANDS);
     expect(zh[0]).toBe("/new 输入你的想法");
     expect(en[0]).toBe("/new describe your idea");
+    expect(vi[0]).toBe("/new mô tả ý tưởng của bạn");
     expect(en).toHaveLength(zh.length);
+    expect(vi).toHaveLength(zh.length);
     expect(en.map((c) => c.match(/^\/\S+/)?.[0])).toEqual(zh.map((c) => c.match(/^\/\S+/)?.[0]));
+    expect(vi.map((c) => c.match(/^\/\S+/)?.[0])).toEqual(zh.map((c) => c.match(/^\/\S+/)?.[0]));
   });
 });

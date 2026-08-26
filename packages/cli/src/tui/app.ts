@@ -5,7 +5,7 @@ import React from "react";
 import { InkTuiApp } from "./dashboard.js";
 import { formatModeLabel, getTuiCopy, normalizeStageLabel, resolveTuiLocale, type TuiLocale } from "./i18n.js";
 import { loadProjectSession } from "./session-store.js";
-import { detectModelInfo, detectProjectLanguage, ensureProject, interactiveLlmSetup } from "./setup.js";
+import { detectModelInfo, ensureProject, interactiveLlmSetup } from "./setup.js";
 import { animateStartup } from "./effects.js";
 
 export interface TuiFrameState {
@@ -74,8 +74,7 @@ export async function launchTui(
 ): Promise<void> {
   projectRoot = await resolveProjectRoot(projectRoot);
   const { hasLlmConfig } = await ensureProject(projectRoot);
-  const projectLanguage = await detectProjectLanguage(projectRoot);
-  const locale = resolveTuiLocale(process.env, projectLanguage);
+  const locale = resolveTuiLocale();
   const copy = getTuiCopy(locale);
 
   if (!hasLlmConfig) {
