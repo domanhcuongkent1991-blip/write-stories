@@ -295,18 +295,18 @@ export function ProjectSettings({ nav, theme, t }: { nav: Nav; theme: Theme; t: 
           {skills.length === 0 ? (
             <p className="text-xs text-muted-foreground italic">{isZh ? "还没有 Skill。" : "No skills yet."}</p>
           ) : (
-            <div className="grid gap-2 md:grid-cols-2">
+            <div className="grid min-w-0 gap-2 md:grid-cols-2">
               {skills.map((skill) => (
-                <div key={skill.id} className="rounded-xl border border-border/60 bg-secondary/20 p-3">
-                  <div className="flex items-start gap-2">
+                <div key={skill.id} className="min-w-0 rounded-xl border border-border/60 bg-secondary/20 p-3">
+                  <div className="flex min-w-0 items-start gap-2">
                     <div className="min-w-0 flex-1">
-                      <div className="flex items-center gap-2">
+                      <div className="flex min-w-0 items-center gap-2">
                         <div className="truncate text-sm font-semibold">{skill.name}</div>
-                        <span className="rounded-full bg-background px-2 py-0.5 text-[10px] uppercase tracking-wide text-muted-foreground">
+                        <span className="shrink-0 rounded-full bg-background px-2 py-0.5 text-[10px] uppercase tracking-wide text-muted-foreground">
                           {skill.source ?? "skill"}
                         </span>
                       </div>
-                      <div className="mt-0.5 font-mono text-[11px] text-muted-foreground/70">@{skill.id}</div>
+                      <div className="mt-0.5 break-all font-mono text-[11px] text-muted-foreground/70">@{skill.id}</div>
                       <p className="mt-1 text-xs leading-5 text-muted-foreground">{skill.description || (isZh ? "无说明" : "No description")}</p>
                     </div>
                     {skill.editable ? (
