@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
+import type { RefObject } from "react";
 import { useApi } from "../hooks/use-api";
 import type { SSEMessage } from "../hooks/use-sse";
 import { applyBookCollectionEvent, shouldRefetchBookCollections, shouldRefetchDaemonStatus } from "../hooks/use-book-activity";
@@ -48,6 +49,7 @@ import {
   Rows3,
   Film,
   Languages,
+  X,
 } from "lucide-react";
 import { InkosLogo } from "./InkosLogo";
 
@@ -92,11 +94,22 @@ interface Nav {
   toFilmStudio: (id: string) => void;
 }
 
-export function Sidebar({ nav, activePage, sse, t }: {
+export function shouldHideClosedMobileSidebar(input: {
+  readonly isDesktop: boolean;
+  readonly mobileOpen: boolean;
+}): boolean {
+  return !input.isDesktop && !input.mobileOpen;
+}
+
+export function Sidebar({ nav, activePage, sse, t, isDesktop, mobileOpen = false, onMobileClose, mobileCloseButtonRef }: {
   nav: Nav;
   activePage: string;
   sse: { messages: ReadonlyArray<SSEMessage> };
   t: TFunction;
+  isDesktop: boolean;
+  mobileOpen?: boolean;
+  onMobileClose?: () => void;
+  mobileCloseButtonRef?: RefObject<HTMLButtonElement | null>;
 }) {
   const { data, refetch: refetchBooks, mutate: mutateBooks } = useApi<{ books: ReadonlyArray<BookSummary> }>("/books");
   const { data: filmsData, refetch: refetchFilms } = useApi<{ films: ReadonlyArray<{ projectId: string; title: string }> }>("/interactive-films");
@@ -122,6 +135,7 @@ export function Sidebar({ nav, activePage, sse, t }: {
 
   const books = data?.books ?? [];
   const films = filmsData?.films ?? [];
+  const hideClosedMobileSidebar = shouldHideClosedMobileSidebar({ isDesktop, mobileOpen });
   const projectChatKey = "__null__";
   const projectChatSessions = useMemo(
     () =>
@@ -286,9 +300,25 @@ export function Sidebar({ nav, activePage, sse, t }: {
   };
 
   return (
-    <aside className="w-[260px] shrink-0 border-r border-border bg-background/80 backdrop-blur-md flex flex-col h-full overflow-hidden select-none">
+    <aside
+      id="app-sidebar"
+      data-testid="app-sidebar"
+      aria-hidden={hideClosedMobileSidebar ? true : undefined}
+      inert={hideClosedMobileSidebar ? true : undefined}
+      className={`fixed inset-y-0 left-0 z-40 w-[260px] max-w-[85vw] shrink-0 border-r border-border bg-background/80 backdrop-blur-md flex flex-col h-full overflow-hidden select-none transform transition-transform duration-200 ease-out lg:static lg:z-auto lg:max-w-none lg:translate-x-0 ${mobileOpen ? "translate-x-0" : "-translate-x-full"}`}
+    >
       {/* Logo Area */}
-      <div className="px-6 py-8">
+      <div className="relative px-6 py-8">
+        <button
+          ref={mobileCloseButtonRef}
+          type="button"
+          data-testid="mobile-nav-close"
+          aria-label={t("common.closeNavigation")}
+          onClick={onMobileClose}
+          className="absolute right-3 top-3 inline-flex h-11 w-11 items-center justify-center rounded-lg text-muted-foreground hover:bg-secondary/50 hover:text-foreground transition-colors lg:hidden"
+        >
+          <X size={20} />
+        </button>
         <button
           onClick={nav.toDashboard}
           className="group flex items-center gap-3 hover:opacity-80 transition-all duration-300"

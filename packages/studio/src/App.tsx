@@ -1,4 +1,4 @@
-import { useState, useEffect, lazy, Suspense } from "react";
+import { useState, useEffect, useCallback, useRef, lazy, Suspense } from "react";
 import { useHashRoute } from "./hooks/use-hash-route";
 import type { HashRoute } from "./hooks/use-hash-route";
 import { Sidebar } from "./components/Sidebar";
@@ -37,7 +37,7 @@ import {
   type WritingLanguage,
 } from "./lib/writing-language";
 import { postApi, useApi } from "./hooks/use-api";
-import { Sun, Moon } from "lucide-react";
+import { Menu, Sun, Moon } from "lucide-react";
 import { House } from "lucide-react";
 
 export type { HashRoute as Route } from "./hooks/use-hash-route";
@@ -71,6 +71,19 @@ export function syncProjectWritingLanguage(language: unknown): WritingLanguage {
   return resolved;
 }
 
+export function shouldCloseMobileNavigation(input: {
+  readonly key: string;
+  readonly defaultPrevented?: boolean;
+  readonly nestedDialogOpen?: boolean;
+}): boolean {
+  return input.key === "Escape" && !input.defaultPrevented && !input.nestedDialogOpen;
+}
+
+function getInitialDesktopState(): boolean {
+  return typeof window !== "undefined"
+    && Boolean(window.matchMedia?.("(min-width: 1024px)").matches);
+}
+
 export function App() {
   const { route, setRoute } = useHashRoute();
   const sse = useSSE();
@@ -78,6 +91,11 @@ export function App() {
   const { t, locale, setLocale } = useI18n();
   const { data: project, error: projectError, refetch: refetchProject } = useApi<{ language: string; languageExplicit: boolean }>("/project");
   const [showLanguageSelector, setShowLanguageSelector] = useState(false);
+  const [mobileNavOpen, setMobileNavOpen] = useState(false);
+  const [isDesktop, setIsDesktop] = useState(getInitialDesktopState);
+  const mobileNavOpenButtonRef = useRef<HTMLButtonElement>(null);
+  const mobileNavCloseButtonRef = useRef<HTMLButtonElement>(null);
+  const mobileNavWasOpen = useRef(false);
   const [ready, setReady] = useState(false);
 
   const isDark = theme === "dark";
@@ -103,35 +121,100 @@ export function App() {
     }
   }, [project]);
 
-  useSessionEvents(sse, route, setRoute);
+  const closeMobileNav = useCallback(() => {
+    setMobileNavOpen(false);
+  }, []);
+  const navigate = useCallback((nextRoute: HashRoute) => {
+    setMobileNavOpen(false);
+    setRoute(nextRoute);
+  }, [setRoute]);
+
+  useSessionEvents(sse, route, navigate);
+
+  useEffect(() => {
+    setMobileNavOpen(false);
+  }, [route]);
+
+  useEffect(() => {
+    if (typeof window === "undefined" || !window.matchMedia) return;
+    const desktopQuery = window.matchMedia("(min-width: 1024px)");
+    const handleViewportChange = () => {
+      setIsDesktop(desktopQuery.matches);
+      if (desktopQuery.matches) {
+        setMobileNavOpen(false);
+      }
+    };
+    handleViewportChange();
+    desktopQuery.addEventListener?.("change", handleViewportChange);
+    return () => desktopQuery.removeEventListener?.("change", handleViewportChange);
+  }, []);
+
+  useEffect(() => {
+    if (mobileNavOpen) {
+      mobileNavWasOpen.current = true;
+      mobileNavCloseButtonRef.current?.focus();
+      return;
+    }
+
+    if (!mobileNavWasOpen.current) return;
+    mobileNavWasOpen.current = false;
+    if (typeof window !== "undefined" && window.matchMedia?.("(min-width: 1024px)").matches) return;
+    const openButton = mobileNavOpenButtonRef.current;
+    if (openButton?.isConnected) {
+      openButton.focus();
+    }
+  }, [mobileNavOpen]);
+
+  useEffect(() => {
+    if (!mobileNavOpen) return;
+    const handleKeyDown = (event: KeyboardEvent) => {
+      const nestedDialogOpen = typeof Element !== "undefined"
+        && event.target instanceof Element
+        && Boolean(event.target.closest('[data-slot="dialog-content"]'));
+      const openDialog = typeof document !== "undefined"
+        && Boolean(document.querySelector('[data-slot="dialog-content"][data-open]'));
+      if (!shouldCloseMobileNavigation({
+        key: event.key,
+        defaultPrevented: event.defaultPrevented,
+        nestedDialogOpen: nestedDialogOpen || openDialog,
+      })) {
+        return;
+      }
+      event.preventDefault();
+      setMobileNavOpen(false);
+    };
+    document.addEventListener("keydown", handleKeyDown);
+    return () => document.removeEventListener("keydown", handleKeyDown);
+  }, [mobileNavOpen]);
+
   const selectHeaderLocale = createHeaderLocaleSelection(setLocale);
 
   const nav = {
-    toDashboard: () => setRoute({ page: "dashboard" }),
-    toChat: () => setRoute({ page: "chat" }),
-    toBook: (bookId: string) => setRoute({ page: "book", bookId }),
-    toBookSettings: (bookId: string) => setRoute({ page: "book-settings", bookId }),
-    toBookCreate: () => setRoute({ page: "book-create" }),
+    toDashboard: () => navigate({ page: "dashboard" }),
+    toChat: () => navigate({ page: "chat" }),
+    toBook: (bookId: string) => navigate({ page: "book", bookId }),
+    toBookSettings: (bookId: string) => navigate({ page: "book-settings", bookId }),
+    toBookCreate: () => navigate({ page: "book-create" }),
     toChapter: (bookId: string, chapterNumber: number) =>
-      setRoute({ page: "chapter", bookId, chapterNumber }),
-    toAnalytics: (bookId: string) => setRoute({ page: "analytics", bookId }),
-    toServices: () => setRoute({ page: "services" }),
-    toProjectSettings: () => setRoute({ page: "project-settings" }),
-    toServiceDetail: (id: string) => setRoute({ page: "service-detail", serviceId: id }),
-    toTruth: (bookId: string) => setRoute({ page: "truth", bookId }),
-    toDaemon: () => setRoute({ page: "daemon" }),
-    toLogs: () => setRoute({ page: "logs" }),
-    toGenres: () => setRoute({ page: "genres" }),
-    toStyle: () => setRoute({ page: "style" }),
-    toTranslation: () => setRoute({ page: "translation" }),
-    toImport: (tab?: "chapters" | "canon" | "fanfic" | "spinoff" | "imitation") => setRoute({ page: "import", ...(tab ? { tab } : {}) }),
-    toRadar: () => setRoute({ page: "radar" }),
-    toDoctor: () => setRoute({ page: "doctor" }),
-    toPlay: (projectId: string) => setRoute({ page: "play", projectId }),
-    toFilm: (projectId: string) => setRoute({ page: "film", projectId }),
-    toFlow: (projectId: string) => setRoute({ page: "flow", projectId }),
-    toFilmAuthor: (projectId: string) => setRoute({ page: "film-author", projectId }),
-    toFilmStudio: (projectId: string) => setRoute({ page: "film-studio", projectId }),
+      navigate({ page: "chapter", bookId, chapterNumber }),
+    toAnalytics: (bookId: string) => navigate({ page: "analytics", bookId }),
+    toServices: () => navigate({ page: "services" }),
+    toProjectSettings: () => navigate({ page: "project-settings" }),
+    toServiceDetail: (id: string) => navigate({ page: "service-detail", serviceId: id }),
+    toTruth: (bookId: string) => navigate({ page: "truth", bookId }),
+    toDaemon: () => navigate({ page: "daemon" }),
+    toLogs: () => navigate({ page: "logs" }),
+    toGenres: () => navigate({ page: "genres" }),
+    toStyle: () => navigate({ page: "style" }),
+    toTranslation: () => navigate({ page: "translation" }),
+    toImport: (tab?: "chapters" | "canon" | "fanfic" | "spinoff" | "imitation") => navigate({ page: "import", ...(tab ? { tab } : {}) }),
+    toRadar: () => navigate({ page: "radar" }),
+    toDoctor: () => navigate({ page: "doctor" }),
+    toPlay: (projectId: string) => navigate({ page: "play", projectId }),
+    toFilm: (projectId: string) => navigate({ page: "film", projectId }),
+    toFlow: (projectId: string) => navigate({ page: "flow", projectId }),
+    toFilmAuthor: (projectId: string) => navigate({ page: "film-author", projectId }),
+    toFilmStudio: (projectId: string) => navigate({ page: "film-studio", projectId }),
   };
 
   const activeBookId = deriveActiveBookId(route);
@@ -220,27 +303,57 @@ export function App() {
   }
 
   return (
-    <div className="h-screen bg-background text-foreground flex overflow-hidden font-sans">
+    <div data-testid="app-shell" className="min-h-screen h-dvh bg-background text-foreground flex overflow-hidden font-sans">
       {/* Left Sidebar */}
-      <Sidebar nav={nav} activePage={activePage} sse={sse} t={t} />
+      {mobileNavOpen && (
+        <button
+          type="button"
+          data-testid="mobile-nav-overlay"
+          aria-label={t("common.closeNavigation")}
+          onClick={closeMobileNav}
+          className="fixed inset-0 z-30 bg-background/50 backdrop-blur-sm lg:hidden"
+        />
+      )}
+      <Sidebar
+        nav={nav}
+        activePage={activePage}
+        sse={sse}
+        t={t}
+        isDesktop={isDesktop}
+        mobileOpen={mobileNavOpen}
+        onMobileClose={closeMobileNav}
+        mobileCloseButtonRef={mobileNavCloseButtonRef}
+      />
 
       {/* Center Content */}
       <div className="flex-1 flex flex-col min-w-0 bg-background/30 backdrop-blur-sm">
         {/* Header Strip */}
-        <header className="h-14 shrink-0 flex items-center justify-between px-8 border-b border-border/40">
-          <div className="flex items-center gap-2">
+        <header className="h-14 shrink-0 flex items-center justify-between gap-3 px-4 sm:px-6 lg:px-8 border-b border-border/40">
+          <div className="flex min-w-0 items-center gap-2">
+             <button
+               ref={mobileNavOpenButtonRef}
+               type="button"
+               data-testid="mobile-nav-open"
+               aria-controls="app-sidebar"
+               aria-expanded={mobileNavOpen}
+               aria-label={t("common.openNavigation")}
+               onClick={() => setMobileNavOpen(true)}
+               className="inline-flex h-11 w-11 shrink-0 items-center justify-center rounded-lg border border-border/50 bg-card/70 text-foreground hover:bg-secondary/50 transition-colors lg:hidden"
+             >
+               <Menu size={20} />
+             </button>
              <button
                onClick={nav.toDashboard}
-               className="inline-flex items-center gap-2 rounded-lg border border-border/50 bg-card/70 px-3.5 py-2 text-[17px] font-semibold text-foreground hover:bg-secondary/50 transition-colors"
+               className="inline-flex min-w-0 items-center gap-2 rounded-lg border border-border/50 bg-card/70 px-3.5 py-2 text-[17px] font-semibold text-foreground hover:bg-secondary/50 transition-colors"
              >
                <House size={18} />
-               <span>{t("bread.home")}</span>
-               <span className="text-muted-foreground/70">/</span>
-               <span className="font-serif">InkOS Studio</span>
+               <span className="truncate">{t("bread.home")}</span>
+               <span className="shrink-0 text-muted-foreground/70">/</span>
+               <span className="truncate font-serif">InkOS Studio</span>
              </button>
           </div>
 
-          <div className="flex items-center gap-3">
+          <div className="flex shrink-0 items-center gap-3">
             <div className="flex gap-0.5 bg-muted/50 rounded-lg p-0.5">
               <button
                 onClick={() => selectHeaderLocale("zh")}
@@ -272,7 +385,7 @@ export function App() {
         </header>
 
         {/* Main Content Area */}
-        <main className="flex-1 relative overflow-y-auto scroll-smooth">
+        <main className="flex-1 relative min-w-0 overflow-y-auto scroll-smooth">
           {route.page === "dashboard" && (
             <div className="max-w-4xl mx-auto px-6 py-12 md:px-12 lg:py-16 fade-in">
               <Dashboard nav={nav} sse={sse} theme={theme} t={t} />

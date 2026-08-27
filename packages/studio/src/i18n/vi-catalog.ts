@@ -344,6 +344,8 @@ export const VI_CATALOG = {
   "common.loading": "Đang tải...",
   "common.refresh": "Làm mới",
   "common.enterCommand": "Nhập lệnh...",
+  "common.openNavigation": "Mở điều hướng",
+  "common.closeNavigation": "Đóng điều hướng",
   "chapter.readyForReview": "Chờ duyệt",
   "chapter.approved": "Đã duyệt",
   "chapter.drafted": "Bản nháp",

@@ -396,6 +396,8 @@ export const BASE_STRINGS = {
   "common.loading": { zh: "加载中...", en: "Loading..." },
   "common.refresh": { zh: "刷新", en: "Refresh" },
   "common.enterCommand": { zh: "输入指令...", en: "Enter command..." },
+  "common.openNavigation": { zh: "打开导航", en: "Open navigation" },
+  "common.closeNavigation": { zh: "关闭导航", en: "Close navigation" },
   "chapter.readyForReview": { zh: "待审核", en: "Ready for Review" },
   "chapter.approved": { zh: "已通过", en: "Approved" },
   "chapter.drafted": { zh: "草稿", en: "Drafted" },
