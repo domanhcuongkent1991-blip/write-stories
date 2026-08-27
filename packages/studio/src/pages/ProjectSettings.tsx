@@ -54,6 +54,12 @@ const DEFAULT_RESEARCH_SEARCH: ResearchSearchDraft = {
   apiKeyEnv: "TAVILY_API_KEY",
 };
 
+const PROJECT_SETTINGS_OVERRIDE_AGENT_INPUT_CLASS_NAME = "min-w-0 basis-full flex-none sm:flex-1";
+
+export function getProjectSettingsOverrideAgentInputClassName(): string {
+  return PROJECT_SETTINGS_OVERRIDE_AGENT_INPUT_CLASS_NAME;
+}
+
 // Smooth open/close via grid-template-rows (same trick as the sidebar).
 function Collapse({ open, children }: { open: boolean; children: React.ReactNode }) {
   return (
@@ -483,19 +489,19 @@ export function ProjectSettings({ nav, theme, t }: { nav: Nav; theme: Theme; t: 
             <p className="text-xs text-muted-foreground italic">{t("settings.noOverrides")}</p>
           )}
           {overrideRows.map((row, i) => (
-            <div key={i} className="flex items-center gap-2">
+            <div key={i} className="flex flex-wrap items-center gap-2">
               <input
                 value={row.agent}
                 onChange={(e) => setOverrideRows((prev) => prev.map((r, j) => (j === i ? { ...r, agent: e.target.value } : r)))}
                 placeholder={t("settings.agentName")}
-                className={`${fieldClass} flex-1`}
+                className={`${fieldClass} ${PROJECT_SETTINGS_OVERRIDE_AGENT_INPUT_CLASS_NAME}`}
               />
               <span className="text-muted-foreground">→</span>
               <input
                 value={row.model}
                 onChange={(e) => setOverrideRows((prev) => prev.map((r, j) => (j === i ? { ...r, model: e.target.value } : r)))}
                 placeholder={t("settings.modelId")}
-                className={`${fieldClass} flex-1 font-mono`}
+                className={`${fieldClass} min-w-0 flex-1 font-mono`}
               />
               <button
                 onClick={() => setOverrideRows((prev) => prev.filter((_, j) => j !== i))}
@@ -638,7 +644,7 @@ export function ProjectSettings({ nav, theme, t }: { nav: Nav; theme: Theme; t: 
                 </button>
               </div>
               {ch.type === "telegram" && (
-                <div className="grid grid-cols-2 gap-2">
+                <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
                   <input value={ch.botToken ?? ""} onChange={(e) => updateChannel(i, { botToken: e.target.value })} placeholder="botToken" className={`${fieldClass} font-mono`} />
                   <input value={ch.chatId ?? ""} onChange={(e) => updateChannel(i, { chatId: e.target.value })} placeholder="chatId" className={`${fieldClass} font-mono`} />
                 </div>
@@ -647,7 +653,7 @@ export function ProjectSettings({ nav, theme, t }: { nav: Nav; theme: Theme; t: 
                 <input value={ch.webhookUrl ?? ""} onChange={(e) => updateChannel(i, { webhookUrl: e.target.value })} placeholder="webhookUrl" className={`${fieldClass} font-mono`} />
               )}
               {ch.type === "webhook" && (
-                <div className="grid grid-cols-2 gap-2">
+                <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
                   <input value={ch.url ?? ""} onChange={(e) => updateChannel(i, { url: e.target.value })} placeholder="url" className={`${fieldClass} font-mono`} />
                   <input value={ch.secret ?? ""} onChange={(e) => updateChannel(i, { secret: e.target.value })} placeholder="secret (可选)" className={`${fieldClass} font-mono`} />
                 </div>
@@ -655,7 +661,7 @@ export function ProjectSettings({ nav, theme, t }: { nav: Nav; theme: Theme; t: 
             </div>
           ))}
         </div>
-        <div className="flex gap-2">
+        <div className="flex flex-wrap gap-2">
           <button
             onClick={() => setNotifyChannels((prev) => [...prev, { type: "feishu" }])}
             className={`flex items-center gap-1.5 rounded-lg px-3 py-2 text-sm font-medium ${c.btnSecondary}`}
@@ -683,7 +689,7 @@ export function ProjectSettings({ nav, theme, t }: { nav: Nav; theme: Theme; t: 
         </label>
         <Collapse open={det.enabled}>
           <div className="space-y-2 pt-1">
-            <div className="grid grid-cols-2 gap-2">
+            <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
               <label className="text-xs text-muted-foreground space-y-1">
                 <span>{t("settings.detectionProvider")}</span>
                 <select value={det.provider} onChange={(e) => setDet((d) => ({ ...d, provider: e.target.value }))} className={fieldClass}>
@@ -701,7 +707,7 @@ export function ProjectSettings({ nav, theme, t }: { nav: Nav; theme: Theme; t: 
               <span>{t("settings.detectionApiUrl")}</span>
               <input value={det.apiUrl} onChange={(e) => setDet((d) => ({ ...d, apiUrl: e.target.value }))} placeholder="https://..." className={`${fieldClass} font-mono`} />
             </label>
-            <div className="grid grid-cols-2 gap-2">
+            <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
               <label className="text-xs text-muted-foreground space-y-1">
                 <span>{t("settings.detectionThreshold")} (0–1)</span>
                 <input type="number" min={0} max={1} step={0.05} value={det.threshold} onChange={(e) => setDet((d) => ({ ...d, threshold: Number(e.target.value) }))} className={fieldClass} />

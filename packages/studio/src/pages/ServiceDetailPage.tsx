@@ -279,8 +279,8 @@ export function ServiceDetailPage({ serviceId, nav }: { serviceId: string; nav: 
       </button>
 
       {/* Title + status */}
-      <div className="flex items-center gap-3">
-        <h1 className="font-serif text-2xl">{label}</h1>
+      <div className="flex flex-wrap items-center gap-3">
+        <h1 className="min-w-0 break-words font-serif text-2xl">{label}</h1>
         {isConnected && (
           <span className="text-[10px] px-2 py-0.5 rounded-full bg-emerald-500/10 text-emerald-500 font-medium">
             {t("nav.connected")}
@@ -292,7 +292,7 @@ export function ServiceDetailPage({ serviceId, nav }: { serviceId: string; nav: 
       <div className="space-y-5">
         {/* Custom fields */}
         {isCustom && (
-        <div className="grid grid-cols-2 gap-4">
+        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
             <Field label={t("serviceDetail.serviceName")}>
               <input type="text" value={customName} onChange={(e) => setCustomName(e.target.value)}
                 placeholder={t("serviceDetail.localOllamaExample")} className="w-full rounded-lg border border-border/60 bg-background px-3 py-2 text-sm" />
@@ -320,7 +320,7 @@ export function ServiceDetailPage({ serviceId, nav }: { serviceId: string; nav: 
         </Field>
 
         {/* Actions + feedback */}
-        <div className="flex items-center gap-2">
+        <div className="flex flex-wrap items-center gap-2">
           <button onClick={handleTest} disabled={isBusy}
             className="flex items-center gap-1.5 px-3.5 py-2 text-xs rounded-lg border border-border/60 hover:bg-secondary/50 transition-colors disabled:opacity-50">
             {status.state === "testing" && <Loader2 size={12} className="animate-spin" />}
@@ -360,7 +360,7 @@ export function ServiceDetailPage({ serviceId, nav }: { serviceId: string; nav: 
           )}
         </div>
 
-        <div className="grid grid-cols-2 gap-4">
+        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
           <Field label={t("serviceDetail.protocol")}>
             <select
               value={apiFormat}

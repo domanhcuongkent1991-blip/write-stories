@@ -5,6 +5,7 @@ import {
   detectionDraftFromConfig,
   notifyDraftFromChannel,
 } from "./project-settings-model";
+import { getProjectSettingsOverrideAgentInputClassName } from "./ProjectSettings";
 
 describe("project settings form model", () => {
   it("preserves webhook event filters when round-tripping notification channels", () => {
@@ -36,5 +37,14 @@ describe("project settings form model", () => {
 
     expect(draft.enabled).toBe(false);
     expect(buildDetectionConfig(draft)).toBeNull();
+  });
+
+  it("places the override agent input on its own row until the small breakpoint", () => {
+    const className = getProjectSettingsOverrideAgentInputClassName();
+
+    expect(className).toContain("min-w-0");
+    expect(className).toContain("basis-full");
+    expect(className).toContain("flex-none");
+    expect(className).toContain("sm:flex-1");
   });
 });

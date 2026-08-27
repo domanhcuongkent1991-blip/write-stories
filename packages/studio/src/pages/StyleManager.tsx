@@ -133,7 +133,7 @@ export function StyleManager({ nav, theme, t }: { nav: Nav; theme: Theme; t: TFu
           {profile && (
             <div className={`border ${c.cardStatic} rounded-lg p-5 space-y-4`}>
               <h3 className="font-semibold text-sm uppercase tracking-wider text-muted-foreground">{t("style.results")}</h3>
-              <div className="grid grid-cols-2 gap-3 text-sm">
+              <div className="grid grid-cols-1 gap-3 text-sm sm:grid-cols-2">
                 <div className="bg-secondary/30 rounded-lg p-3">
                   <div className="text-muted-foreground text-xs">{t("style.avgSentence")}</div>
                   <div className="text-xl font-bold">{profile.avgSentenceLength.toFixed(1)}</div>

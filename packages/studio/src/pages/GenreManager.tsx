@@ -43,6 +43,12 @@ interface GenreFormData {
   readonly body: string;
 }
 
+const GENRE_MANAGER_CONTENT_LAYOUT_CLASS_NAME = "grid grid-cols-1 gap-6 lg:grid-cols-[250px_minmax(0,1fr)]";
+
+export function getGenreManagerContentLayoutClassName(): string {
+  return GENRE_MANAGER_CONTENT_LAYOUT_CLASS_NAME;
+}
+
 const EMPTY_FORM: GenreFormData = {
   id: "",
   name: "",
@@ -82,7 +88,7 @@ function GenreForm({
 
   return (
     <div className="space-y-4">
-      <div className="grid grid-cols-2 gap-4">
+      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
         <div>
           <label className="text-xs text-muted-foreground uppercase tracking-wide">ID</label>
           <input
@@ -140,7 +146,7 @@ function GenreForm({
         />
       </div>
 
-      <div className="flex gap-6">
+      <div className="flex flex-wrap gap-6">
         <label className="flex items-center gap-2 text-sm">
           <input
             type="checkbox"
@@ -187,7 +193,7 @@ function GenreForm({
         />
       </div>
 
-      <div className="flex gap-2">
+      <div className="flex flex-wrap gap-2">
         <button onClick={onSubmit} className={`px-4 py-2 text-sm rounded-md ${c.btnPrimary}`}>
           {isEdit ? t("genre.saveChanges") : t("genre.createNew")}
         </button>
@@ -324,7 +330,7 @@ export function GenreManager({ nav, theme, t }: { nav: Nav; theme: Theme; t: TFu
         <span>{t("create.genre")}</span>
       </div>
 
-      <div className="flex items-center justify-between">
+      <div className="flex flex-wrap items-center justify-between gap-3">
         <h1 className="font-serif text-3xl">{t("create.genre")}</h1>
         <button
           onClick={openCreateForm}
@@ -352,9 +358,9 @@ export function GenreManager({ nav, theme, t }: { nav: Nav; theme: Theme; t: TFu
         </div>
       )}
 
-      <div className="grid grid-cols-[250px_1fr] gap-6">
+      <div className={GENRE_MANAGER_CONTENT_LAYOUT_CLASS_NAME}>
         {/* Genre list */}
-        <div className={`border ${c.cardStatic} rounded-lg overflow-hidden`}>
+        <div className={`min-w-0 border ${c.cardStatic} rounded-lg overflow-hidden`}>
           {filteredGenres.map((g) => (
             <button
               key={g.id}
@@ -372,11 +378,11 @@ export function GenreManager({ nav, theme, t }: { nav: Nav; theme: Theme; t: TFu
         </div>
 
         {/* Detail panel */}
-        <div className={`border ${c.cardStatic} rounded-lg p-6 min-h-[400px]`}>
+        <div className={`min-w-0 border ${c.cardStatic} rounded-lg p-6 min-h-[400px]`}>
           {validSelected && detail ? (
             <div className="space-y-6">
-              <div className="flex items-start justify-between">
-                <div>
+              <div className="flex flex-wrap items-start justify-between gap-3">
+                <div className="min-w-0">
                   <h2 className="text-xl font-medium">{detail.profile.name}</h2>
                   <div className="text-sm text-muted-foreground mt-1">
                     {detail.profile.id} · {detail.profile.language} ·
@@ -385,7 +391,7 @@ export function GenreManager({ nav, theme, t }: { nav: Nav; theme: Theme; t: TFu
                     {detail.profile.eraResearch ? " Era" : ""}
                   </div>
                 </div>
-                <div className="flex gap-2">
+                <div className="flex flex-wrap gap-2">
                   <button
                     onClick={openEditForm}
                     className={`flex items-center gap-1.5 px-3 py-1.5 text-sm ${c.btnSecondary} rounded-md`}

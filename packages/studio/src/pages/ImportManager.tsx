@@ -16,6 +16,17 @@ interface Nav { toDashboard: () => void; toBook: (bookId: string) => void }
 
 type Tab = "chapters" | "canon" | "fanfic" | "spinoff" | "imitation";
 
+const IMPORT_TAB_LIST_CLASS_NAME = "flex w-fit max-w-full gap-1 overflow-x-auto rounded-lg bg-secondary/30 p-1";
+const IMPORT_TAB_ITEM_CLASS_NAME = "shrink-0 px-4 py-2 rounded-md text-sm font-medium flex items-center gap-2 transition-all";
+
+export function getImportTabListClassName(): string {
+  return IMPORT_TAB_LIST_CLASS_NAME;
+}
+
+export function getImportTabItemClassName(): string {
+  return IMPORT_TAB_ITEM_CLASS_NAME;
+}
+
 function fileToDataUrl(file: File): Promise<string> {
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
@@ -198,12 +209,12 @@ export function ImportManager({ nav, theme, t, initialTab }: { nav: Nav; theme: 
       </h1>
 
       {/* Tabs */}
-      <div className="flex gap-1 bg-secondary/30 rounded-lg p-1 w-fit">
+      <div className={IMPORT_TAB_LIST_CLASS_NAME}>
         {tabs.map((tb) => (
           <button
             key={tb.id}
             onClick={() => { setTab(tb.id); setStatus(""); }}
-            className={`px-4 py-2 rounded-md text-sm font-medium flex items-center gap-2 transition-all ${
+            className={`${IMPORT_TAB_ITEM_CLASS_NAME} ${
               tab === tb.id ? "bg-card shadow-sm text-foreground" : "text-muted-foreground hover:text-foreground"
             }`}
           >
@@ -292,7 +303,7 @@ export function ImportManager({ nav, theme, t, initialTab }: { nav: Nav; theme: 
               placeholder={t("import.fanficTitle")}
               className="w-full px-3 py-2 rounded-lg bg-secondary/30 border border-border text-sm"
             />
-            <div className="grid grid-cols-3 gap-3">
+            <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
               <select value={ffMode} onChange={(e) => setFfMode(e.target.value)}
                 className="px-3 py-2 rounded-lg bg-secondary/30 border border-border text-sm">
                 <option value="canon">{t("workflow.import.modeCanon")}</option>
@@ -354,7 +365,7 @@ export function ImportManager({ nav, theme, t, initialTab }: { nav: Nav; theme: 
               placeholder={t("import.imitationTitle")}
               className="w-full px-3 py-2 rounded-lg bg-secondary/30 border border-border text-sm"
             />
-            <div className="grid grid-cols-2 gap-3">
+            <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
               <select value={imGenre} onChange={(e) => setImGenre(e.target.value)}
                 className="px-3 py-2 rounded-lg bg-secondary/30 border border-border text-sm">
                 <option value="other">{t("workflow.import.genreOther")}</option>
