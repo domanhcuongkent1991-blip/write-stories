@@ -110,6 +110,17 @@ interface CoverConfigResponse {
 
 const MAX_CHAT_ATTACHMENTS = 8;
 const MAX_CHAT_ATTACHMENT_BYTES = 4 * 1024 * 1024;
+const CHAT_COMPOSER_CONTROL_CLASS_NAME = "flex min-w-0 flex-wrap items-center gap-2 px-3 py-2";
+const CHAT_COMPOSER_MODEL_ROW_CLASS_NAME = "flex min-w-0 flex-wrap items-center gap-2 px-3 pb-2 border-t border-border/20 pt-1.5";
+
+export function getChatComposerControlClassName(): string {
+  return CHAT_COMPOSER_CONTROL_CLASS_NAME;
+}
+
+export function getChatComposerModelRowClassName(): string {
+  return CHAT_COMPOSER_MODEL_ROW_CLASS_NAME;
+}
+
 const CHAT_ATTACHMENT_ACCEPT = [
   "image/*",
   "text/plain",
@@ -984,8 +995,8 @@ export function ChatPage({ activeBookId, mode = activeBookId ? "book" : "book-cr
       ) : null}
       {needsPlayModeChoice ? null : (
       <div className={`shrink-0 border-t border-border/40 px-4 py-3 transition-[padding] duration-200 ${worldPanelInsetClass}`}>
-        <div className="max-w-3xl mx-auto">
-          <div className="flex items-start gap-2">
+        <div className="max-w-3xl mx-auto min-w-0 w-full">
+          <div className="flex min-w-0 items-start gap-2">
             <div className="relative flex-1 rounded-xl bg-secondary/30 transition-all">
               {skillPanelOpen ? (
                 <SkillPickerPanel
@@ -1061,7 +1072,7 @@ export function ChatPage({ activeBookId, mode = activeBookId ? "book" : "book-cr
                   ) : null}
                 </div>
               ) : null}
-              <div className="flex items-center gap-2 px-3 py-2">
+              <div className={getChatComposerControlClassName()}>
                 <button
                   type="button"
                   onClick={() => setSkillPanelOpen((value) => !value)}
@@ -1090,7 +1101,7 @@ export function ChatPage({ activeBookId, mode = activeBookId ? "book" : "book-cr
                   placeholder={isZh ? "输入指令..." : "Enter command..."}
                   disabled={!activeSessionId}
                   rows={1}
-                  className="flex-1 bg-transparent text-base leading-7 placeholder:text-muted-foreground/50 outline-none! border-none! ring-0! shadow-none focus:outline-none! focus:ring-0! focus:border-none! resize-none disabled:opacity-50 max-h-[200px] overflow-y-auto"
+                  className="min-w-0 flex-1 bg-transparent text-base leading-7 placeholder:text-muted-foreground/50 outline-none! border-none! ring-0! shadow-none focus:outline-none! focus:ring-0! focus:border-none! resize-none disabled:opacity-50 max-h-[200px] overflow-y-auto"
                 />
                 <button
                   type="button"
@@ -1104,13 +1115,13 @@ export function ChatPage({ activeBookId, mode = activeBookId ? "book" : "book-cr
                     : <ArrowUp size={14} strokeWidth={2.5} />}
                 </button>
               </div>
-              <div className="flex items-center gap-2 px-3 pb-2 border-t border-border/20 pt-1.5">
+              <div className={getChatComposerModelRowClassName()}>
                 {modelPickerStatus === "loading" ? (
                   <span className="text-[15px] text-muted-foreground/40 animate-pulse">{isZh ? "加载模型..." : "Loading models..."}</span>
                 ) : modelPickerStatus === "ready" ? (
                   <DropdownMenu>
-                    <DropdownMenuTrigger className="flex items-center gap-1.5 px-2 py-1.5 rounded-md hover:bg-muted text-[16px] transition-colors cursor-pointer">
-                      <span className="font-medium truncate max-w-[260px]">
+                    <DropdownMenuTrigger className="flex min-w-0 max-w-full items-center gap-1.5 rounded-md px-2 py-1.5 text-[16px] transition-colors cursor-pointer hover:bg-muted">
+                      <span className="min-w-0 max-w-full truncate font-medium">
                         {selectedModelLabel}
                       </span>
                       <ChevronDown size={17} className="text-muted-foreground" />
@@ -1135,7 +1146,7 @@ export function ChatPage({ activeBookId, mode = activeBookId ? "book" : "book-cr
                   <button
                     type="button"
                     onClick={() => setWorldPanelOpen((v) => !v)}
-                    className={`ml-auto flex items-center gap-1.5 rounded-md px-3 py-1.5 text-[16px] font-medium transition-colors ${worldPanelOpen ? "bg-primary/15 text-primary" : "text-muted-foreground hover:bg-muted hover:text-primary"}`}
+                    className={`ml-auto flex max-w-full shrink-0 items-center gap-1.5 rounded-md px-3 py-1.5 text-[16px] font-medium transition-colors ${worldPanelOpen ? "bg-primary/15 text-primary" : "text-muted-foreground hover:bg-muted hover:text-primary"}`}
                     title={isZh ? "查看世界：持有 / 状态 / 关系" : "View world: holdings / state / relations"}
                   >
                     <Gamepad2 size={18} />

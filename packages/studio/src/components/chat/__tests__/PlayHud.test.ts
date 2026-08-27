@@ -1,7 +1,11 @@
 import { describe, expect, it } from "vitest";
-import { buildAutoImageRequests, buildView } from "../PlayHud";
+import { buildAutoImageRequests, buildView, getPlayHudPanelClassName } from "../PlayHud";
 
 describe("PlayHud buildView", () => {
+  it("caps the HUD width against the viewport while keeping its desktop width", () => {
+    expect(getPlayHudPanelClassName()).toContain("w-[min(380px,calc(100vw-1rem))]");
+  });
+
   it("classifies held inventory from canonical graph edge roles, not status words", () => {
     const view = buildView({
       currentState: { turn: 1, mode: "guided", premise: "查一个配送柜。" },

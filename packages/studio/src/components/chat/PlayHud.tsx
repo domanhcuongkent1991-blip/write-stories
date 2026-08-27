@@ -77,6 +77,12 @@ interface CoverConfigResponse {
   readonly providers?: ReadonlyArray<{ readonly service: string; readonly connected?: boolean }>;
 }
 
+const PLAY_HUD_PANEL_CLASS_NAME = "absolute bottom-28 right-0 top-0 z-20 flex w-[min(380px,calc(100vw-1rem))] flex-col border-l border-border/40 bg-card/95 backdrop-blur shadow-xl";
+
+export function getPlayHudPanelClassName(): string {
+  return PLAY_HUD_PANEL_CLASS_NAME;
+}
+
 function formatValue(value: unknown): string {
   if (value === null || value === undefined) return "";
   if (typeof value === "string" || typeof value === "number" || typeof value === "boolean") {
@@ -414,7 +420,7 @@ export function PlayHud(props: {
   if (!open) return null;
 
   return (
-    <aside className="absolute bottom-28 right-0 top-0 z-20 flex w-[380px] max-w-[calc(100vw-1rem)] flex-col border-l border-border/40 bg-card/95 backdrop-blur shadow-xl">
+    <aside className={getPlayHudPanelClassName()}>
       <header className="relative flex min-w-0 items-center gap-2.5 overflow-hidden border-b border-border/40 px-4 py-3">
         <span aria-hidden className="pointer-events-none absolute inset-x-0 -bottom-px h-px bg-gradient-to-r from-transparent via-primary/50 to-transparent" />
         {view?.turn != null ? (
