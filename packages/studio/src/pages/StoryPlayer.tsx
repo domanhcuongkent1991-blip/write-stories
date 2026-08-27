@@ -8,6 +8,22 @@ import type { StoryGraph, Choice } from "@actalk/inkos-core/interactive-film/gra
 
 interface Nav { toDashboard: () => void }
 
+const STORY_PLAYER_HUD_CLASS_NAME = "max-h-[min(40dvh,16rem)] w-full max-w-full space-y-1 overflow-y-auto rounded-lg border border-border bg-card/95 px-4 py-3 shadow-lg backdrop-blur-sm lg:fixed lg:bottom-6 lg:right-6 lg:w-auto lg:max-w-[calc(100vw-3rem)]";
+const STORY_PLAYER_HUD_ROW_CLASS_NAME = "flex min-w-0 items-start justify-between gap-4 text-xs";
+const STORY_PLAYER_CHOICE_CLASS_NAME = "w-full break-words text-left px-5 py-4 border border-border rounded-xl hover:bg-muted/40 transition-colors";
+
+export function getStoryPlayerHudClassName(): string {
+  return STORY_PLAYER_HUD_CLASS_NAME;
+}
+
+export function getStoryPlayerHudRowClassName(): string {
+  return STORY_PLAYER_HUD_ROW_CLASS_NAME;
+}
+
+export function getStoryPlayerChoiceClassName(): string {
+  return STORY_PLAYER_CHOICE_CLASS_NAME;
+}
+
 export function StoryPlayer({
   projectId,
   nav,
@@ -124,7 +140,7 @@ export function StoryPlayer({
               key={choice.id}
               data-testid={`choice-${choice.id}`}
               onClick={() => onChoose(choice.targetNodeId, choice.effects)}
-              className="w-full text-left px-5 py-4 border border-border rounded-xl hover:bg-muted/40 transition-colors"
+              className={getStoryPlayerChoiceClassName()}
             >
               {choice.text}
             </button>
@@ -134,11 +150,11 @@ export function StoryPlayer({
       )}
 
       {graph.variables.length > 0 && (
-        <div className="fixed bottom-6 right-6 border border-border rounded-lg px-4 py-3 bg-card/95 backdrop-blur-sm shadow-lg space-y-1" data-testid="player-hud">
+        <div className={getStoryPlayerHudClassName()} data-testid="player-hud">
           {graph.variables.map((v) => (
-            <div key={v.name} className="flex justify-between gap-4 text-xs">
-              <span className={c.muted}>{v.name}</span>
-              <span className="font-mono text-primary" data-testid={`hud-${v.name}`}>
+            <div key={v.name} className={getStoryPlayerHudRowClassName()}>
+              <span className={`min-w-0 flex-1 break-words ${c.muted}`}>{v.name}</span>
+              <span className="shrink-0 font-mono text-primary" data-testid={`hud-${v.name}`}>
                 {String(vars[v.name] ?? v.default)}
               </span>
             </div>

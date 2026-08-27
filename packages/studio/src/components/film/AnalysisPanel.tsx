@@ -56,6 +56,16 @@ type Colors = ReturnType<typeof useColors>;
 // ---------------------------------------------------------------------------
 
 const MAX_ARC_DISPLAY = 8;
+const ANALYSIS_ISSUE_ROW_CLASS_NAME = "flex min-w-0 flex-wrap gap-2 text-xs sm:flex-nowrap";
+const ANALYSIS_ISSUE_MESSAGE_CLASS_NAME = "min-w-0 flex-1 break-words text-foreground";
+
+export function getAnalysisIssueRowClassName(): string {
+  return ANALYSIS_ISSUE_ROW_CLASS_NAME;
+}
+
+export function getAnalysisIssueMessageClassName(): string {
+  return ANALYSIS_ISSUE_MESSAGE_CLASS_NAME;
+}
 
 // A small tasteful palette for data-viz arc polylines (SVG stroke attributes
 // require actual color values, not Tailwind class names).
@@ -119,10 +129,10 @@ function IssuesList({ report, c }: { report: AnalysisReport; c: Colors }) {
             <li
               key={i}
               data-testid={`validation-issue-${issue.code}`}
-              className="text-xs flex gap-2"
+              className={getAnalysisIssueRowClassName()}
             >
               <span className={levelClass(issue.level)}>[{issue.level}]</span>
-              <span className="text-foreground">{issue.message}</span>
+              <span className={getAnalysisIssueMessageClassName()}>{issue.message}</span>
             </li>
           ))}
         </ul>

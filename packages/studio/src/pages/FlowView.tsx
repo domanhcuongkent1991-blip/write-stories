@@ -88,6 +88,32 @@ const TYPE_MINIMAP_COLOR: Record<string, string> = {
   normal: "#6b7280",
 };
 
+const FLOW_TOOLBAR_CLASS_NAME = "flex min-w-0 flex-wrap items-center gap-3 text-sm shrink-0";
+const FLOW_TITLE_CLASS_NAME = "min-w-0 flex-1 break-words";
+const FLOW_STATS_CLASS_NAME = "flex flex-wrap items-center gap-4 text-xs text-muted-foreground border border-border rounded px-3 py-1.5 bg-card shrink-0";
+const FLOW_LEGEND_CLASS_NAME = "flex w-full flex-wrap items-center gap-3 sm:ml-auto sm:w-auto";
+const FLOW_CANVAS_CLASS_NAME = "flex-1 min-h-[20rem] border rounded sm:min-h-[28rem]";
+
+export function getFlowToolbarClassName(): string {
+  return FLOW_TOOLBAR_CLASS_NAME;
+}
+
+export function getFlowTitleClassName(): string {
+  return FLOW_TITLE_CLASS_NAME;
+}
+
+export function getFlowStatsClassName(): string {
+  return FLOW_STATS_CLASS_NAME;
+}
+
+export function getFlowLegendClassName(): string {
+  return FLOW_LEGEND_CLASS_NAME;
+}
+
+export function getFlowCanvasClassName(): string {
+  return FLOW_CANVAS_CLASS_NAME;
+}
+
 function StoryFlowNode({ id, data }: NodeProps<StoryNode>) {
   const cls = TYPE_COLOR[data.nodeType] ?? TYPE_COLOR.normal;
   return (
@@ -284,7 +310,7 @@ export default function FlowView({
 
   return (
     <div className="flex flex-col h-full p-5 gap-3" data-testid="flow-view">
-      <div className="flex items-center gap-3 text-sm shrink-0">
+      <div className={getFlowToolbarClassName()}>
         {!embedded && (
           <button
             onClick={() => nav.toFilm(projectId)}
@@ -294,7 +320,7 @@ export default function FlowView({
             ← {t("bread.film")}
           </button>
         )}
-        <span data-testid="flow-title">{graph.title || projectId}</span>
+        <span className={getFlowTitleClassName()} data-testid="flow-title">{graph.title || projectId}</span>
         <button
           data-testid="flow-edit-toggle"
           onClick={() => setEditing((v) => !v)}
@@ -320,13 +346,13 @@ export default function FlowView({
       {stats && (
         <div
           data-testid="flow-stats"
-          className="flex items-center gap-4 text-xs text-muted-foreground border border-border rounded px-3 py-1.5 bg-card shrink-0"
+          className={getFlowStatsClassName()}
         >
           <span>{t("workflow.flow.nodes")} {stats.total}</span>
           <span>{t("workflow.flow.branches")} {stats.branch}</span>
           <span>{t("workflow.flow.endings")} {stats.ending}</span>
           <span>{t("workflow.flow.deadEnds")} {stats.deadEnd}</span>
-          <span className="ml-auto flex items-center gap-3">
+          <span className={getFlowLegendClassName()}>
             <span className="flex items-center gap-1">
               <span style={{ display: "inline-block", width: 20, height: 2, background: "#9ca3af", borderRadius: 1 }} />
               {t("workflow.flow.defaultEdge")}
@@ -342,7 +368,7 @@ export default function FlowView({
           </span>
         </div>
       )}
-      <div className="flex-1 min-h-0 border rounded">
+      <div className={getFlowCanvasClassName()}>
         <ReactFlow
           nodes={displayNodes}
           edges={displayEdges}

@@ -16,6 +16,32 @@ interface Nav {
   toFilmAuthor: (id: string) => void;
 }
 
+const STORY_GRAPH_TOP_NAV_CLASS_NAME = "flex min-w-0 flex-wrap items-center gap-3 text-sm";
+const STORY_GRAPH_TITLE_CLASS_NAME = "min-w-0 flex-1 break-words";
+const STORY_GRAPH_TOP_ACTION_ROW_CLASS_NAME = "flex w-full flex-wrap items-center gap-2 sm:ml-auto sm:w-auto sm:justify-end";
+const STORY_GRAPH_NODE_CLASS_NAME = "min-w-0 break-words border rounded p-3";
+const STORY_GRAPH_NODE_ACTION_ROW_CLASS_NAME = "mt-2 flex flex-wrap items-center gap-2";
+
+export function getStoryGraphTopNavClassName(): string {
+  return STORY_GRAPH_TOP_NAV_CLASS_NAME;
+}
+
+export function getStoryGraphTitleClassName(): string {
+  return STORY_GRAPH_TITLE_CLASS_NAME;
+}
+
+export function getStoryGraphTopActionRowClassName(): string {
+  return STORY_GRAPH_TOP_ACTION_ROW_CLASS_NAME;
+}
+
+export function getStoryGraphNodeClassName(): string {
+  return STORY_GRAPH_NODE_CLASS_NAME;
+}
+
+export function getStoryGraphNodeActionRowClassName(): string {
+  return STORY_GRAPH_NODE_ACTION_ROW_CLASS_NAME;
+}
+
 export function buildProjectExportDownloadUrl(projectId: string): string | null {
   return buildApiUrl(`/projects/${encodeURIComponent(projectId)}/export`);
 }
@@ -75,45 +101,47 @@ export function StoryGraphTree({
   };
 
   return (
-    <div className="space-y-6" data-testid="film-tree">
+    <div className="min-w-0 space-y-6 break-words" data-testid="film-tree">
       {!embedded && (
-        <div className="flex items-center gap-3 text-sm">
+        <div className={getStoryGraphTopNavClassName()}>
           <button onClick={nav.toDashboard} className={c.link} data-testid="film-back">
             ← {t("bread.books")}
           </button>
           <span className={c.muted}>/</span>
-          <span data-testid="film-title">{graph.title || projectId}</span>
-          <button
-            onClick={() => nav.toPlay(projectId)}
-            className={`ml-auto px-3 py-1 rounded ${c.btnPrimary}`}
-            data-testid="film-play"
-          >
-            {t("workflow.storyGraph.play")} →
-          </button>
-          <button
-            onClick={() => nav.toFlow(projectId)}
-            className={`px-3 py-1 rounded ${c.btnSecondary}`}
-            data-testid="open-flow"
-          >
-            {t("workflow.storyGraph.flow")} →
-          </button>
-          <button
-            onClick={() => nav.toFilmAuthor(projectId)}
-            className={`px-3 py-1 rounded ${c.btnSecondary}`}
-            data-testid="open-authoring"
-          >
-            {t("workflow.storyGraph.aiAuthoring")} →
-          </button>
-          {exportUrl && (
-            <a
-              href={exportUrl}
-              download
-              className={`px-3 py-1 rounded ${c.btnSecondary}`}
-              data-testid="film-export-package"
+          <span className={getStoryGraphTitleClassName()} data-testid="film-title">{graph.title || projectId}</span>
+          <div className={getStoryGraphTopActionRowClassName()}>
+            <button
+              onClick={() => nav.toPlay(projectId)}
+              className={`px-3 py-1 rounded ${c.btnPrimary}`}
+              data-testid="film-play"
             >
-              {t("workflow.storyGraph.exportPackage")}
-            </a>
-          )}
+              {t("workflow.storyGraph.play")} →
+            </button>
+            <button
+              onClick={() => nav.toFlow(projectId)}
+              className={`px-3 py-1 rounded ${c.btnSecondary}`}
+              data-testid="open-flow"
+            >
+              {t("workflow.storyGraph.flow")} →
+            </button>
+            <button
+              onClick={() => nav.toFilmAuthor(projectId)}
+              className={`px-3 py-1 rounded ${c.btnSecondary}`}
+              data-testid="open-authoring"
+            >
+              {t("workflow.storyGraph.aiAuthoring")} →
+            </button>
+            {exportUrl && (
+              <a
+                href={exportUrl}
+                download
+                className={`px-3 py-1 rounded ${c.btnSecondary}`}
+                data-testid="film-export-package"
+              >
+                {t("workflow.storyGraph.exportPackage")}
+              </a>
+            )}
+          </div>
         </div>
       )}
 
@@ -169,10 +197,10 @@ function NodeEditor({
   const dirty = scene !== node.sceneDesc;
 
   return (
-    <div className="border rounded p-3" data-testid={`film-node-${node.id}`}>
-      <div className="flex items-center gap-2 text-sm font-medium">
+    <div className={getStoryGraphNodeClassName()} data-testid={`film-node-${node.id}`}>
+      <div className="flex min-w-0 flex-wrap items-center gap-2 text-sm font-medium">
         <span className="px-1.5 py-0.5 rounded bg-muted text-muted-foreground text-xs">{node.type}</span>
-        <span>{node.title || node.id}</span>
+        <span className="min-w-0 flex-1 break-words">{node.title || node.id}</span>
       </div>
       {node.imageSlot?.assetRef && (
         <img
@@ -199,7 +227,7 @@ function NodeEditor({
           ))}
         </div>
       )}
-      <div className="flex items-center gap-2 mt-2">
+      <div className={getStoryGraphNodeActionRowClassName()}>
         <button
           data-testid={`film-save-${node.id}`}
           disabled={!dirty || saving}

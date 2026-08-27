@@ -105,6 +105,27 @@ const EMPTY_STALE: Record<Phase, boolean> = {
   validate: false,
 };
 
+const FILM_WIZARD_ROOT_CLASS_NAME = "flex h-full min-h-0 flex-col bg-background text-foreground";
+const FILM_WIZARD_TOP_BAR_CLASS_NAME = "flex flex-wrap items-center justify-between gap-2 border-b border-border px-4 py-2 shrink-0";
+const FILM_WIZARD_PHASE_GROUP_CLASS_NAME = "flex w-full min-w-0 flex-wrap items-center gap-3 sm:w-auto sm:flex-1";
+const FILM_WIZARD_SUBVIEW_BAR_CLASS_NAME = "flex flex-wrap items-center gap-1 border-b border-border px-4 py-1.5 shrink-0";
+
+export function getFilmWizardRootClassName(): string {
+  return FILM_WIZARD_ROOT_CLASS_NAME;
+}
+
+export function getFilmWizardTopBarClassName(): string {
+  return FILM_WIZARD_TOP_BAR_CLASS_NAME;
+}
+
+export function getFilmWizardPhaseGroupClassName(): string {
+  return FILM_WIZARD_PHASE_GROUP_CLASS_NAME;
+}
+
+export function getFilmWizardSubviewBarClassName(): string {
+  return FILM_WIZARD_SUBVIEW_BAR_CLASS_NAME;
+}
+
 // ---------------------------------------------------------------------------
 // Sub-components
 // ---------------------------------------------------------------------------
@@ -243,11 +264,11 @@ export default function FilmWizard({
   }
 
   return (
-    <div data-testid="film-wizard" className="flex flex-col h-screen bg-background text-foreground">
+    <div data-testid="film-wizard" className={getFilmWizardRootClassName()}>
 
       {/* ── Phase stepper top bar ── */}
-      <div className="flex items-center justify-between border-b border-border px-4 py-2 shrink-0 gap-3">
-        <div className="flex items-center gap-3">
+      <div className={getFilmWizardTopBarClassName()}>
+        <div className={getFilmWizardPhaseGroupClassName()}>
           <button
             type="button"
             data-testid="wizard-exit"
@@ -256,7 +277,7 @@ export default function FilmWizard({
           >
             ← {t("workflow.film.interactiveFilms")}
           </button>
-          <div className="flex items-center gap-1 flex-wrap">
+          <div className="flex min-w-0 flex-wrap items-center gap-1">
           {WIZARD_PHASES.map((p, i) => {
             const isActive = phase === p && !showPreview;
             const status = progress[p];
@@ -298,7 +319,7 @@ export default function FilmWizard({
           data-testid="wizard-preview"
           onClick={handlePreviewToggle}
           className={[
-            "shrink-0 flex items-center gap-1 rounded-md px-3 py-1.5 text-sm font-medium",
+            "ml-auto shrink-0 flex items-center gap-1 rounded-md px-3 py-1.5 text-sm font-medium",
             showPreview ? c.btnPrimary : c.btnSecondary,
           ].join(" ")}
         >
@@ -308,7 +329,7 @@ export default function FilmWizard({
 
       {/* ── Sub-view switch bar ── */}
       {!showPreview && subviews.length > 0 && (
-        <div className="flex items-center gap-1 border-b border-border px-4 py-1.5 shrink-0">
+        <div className={getFilmWizardSubviewBarClassName()}>
           {subviews.map((sv) => (
             <button
               key={sv.key}
