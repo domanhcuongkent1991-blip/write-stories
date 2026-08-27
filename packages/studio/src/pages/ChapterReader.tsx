@@ -32,6 +32,22 @@ interface Nav {
   toDashboard: () => void;
 }
 
+const CHAPTER_READER_ACTION_ROW_CLASS_NAME = "flex w-full flex-wrap gap-2 md:w-auto md:justify-end";
+const CHAPTER_READER_MANUSCRIPT_CLASS_NAME = "paper-sheet rounded-2xl p-4 sm:p-8 md:p-16 lg:p-24 shadow-2xl shadow-primary/5 min-h-[80vh] relative overflow-hidden";
+const CHAPTER_READER_FOOTER_META_CLASS_NAME = "flex flex-wrap items-center justify-center gap-4 text-xs font-medium text-muted-foreground";
+
+export function getChapterReaderActionRowClassName(): string {
+  return CHAPTER_READER_ACTION_ROW_CLASS_NAME;
+}
+
+export function getChapterReaderManuscriptClassName(): string {
+  return CHAPTER_READER_MANUSCRIPT_CLASS_NAME;
+}
+
+export function getChapterReaderFooterMetaClassName(): string {
+  return CHAPTER_READER_FOOTER_META_CLASS_NAME;
+}
+
 export function ChapterReader({ bookId, chapterNumber, nav, theme, t }: {
   bookId: string;
   chapterNumber: number;
@@ -144,7 +160,7 @@ export function ChapterReader({ bookId, chapterNumber, nav, theme, t }: {
           </span>
         </nav>
 
-        <div className="flex gap-2">
+        <div className={getChapterReaderActionRowClassName()}>
           <button
             onClick={() => nav.toBook(bookId)}
             className="flex items-center gap-2 px-4 py-2 text-xs font-bold bg-secondary text-muted-foreground rounded-xl hover:text-foreground hover:bg-secondary/80 transition-all border border-border/50"
@@ -209,7 +225,7 @@ export function ChapterReader({ bookId, chapterNumber, nav, theme, t }: {
       />
 
       {/* Manuscript Sheet */}
-      <div className="paper-sheet rounded-2xl p-8 md:p-16 lg:p-24 shadow-2xl shadow-primary/5 min-h-[80vh] relative overflow-hidden">
+      <div className={getChapterReaderManuscriptClassName()}>
         {/* Physical Paper Details */}
         <div className="absolute top-0 left-8 w-px h-full bg-primary/5 hidden md:block" />
         <div className="absolute top-0 right-8 w-px h-full bg-primary/5 hidden md:block" />
@@ -248,7 +264,7 @@ export function ChapterReader({ bookId, chapterNumber, nav, theme, t }: {
         )}
 
         <footer className="mt-24 pt-12 border-t border-border/20 flex flex-col items-center gap-6 text-center">
-          <div className="flex items-center gap-4 text-xs font-medium text-muted-foreground">
+          <div className={getChapterReaderFooterMetaClassName()}>
              <div className="flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-secondary/50">
                <Type size={14} className="text-primary/60" />
                <span>{body.length.toLocaleString()} {t("reader.characters")}</span>

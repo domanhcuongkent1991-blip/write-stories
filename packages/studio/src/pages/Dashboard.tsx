@@ -42,6 +42,22 @@ interface Nav {
   toServices: () => void;
 }
 
+const DASHBOARD_HEADER_LAYOUT_CLASS_NAME = "flex flex-col items-start gap-4 border-b border-border/40 pb-8 sm:flex-row sm:items-end sm:justify-between";
+const DASHBOARD_BOOK_CARD_LAYOUT_CLASS_NAME = "flex flex-col gap-5 p-5 sm:flex-row sm:items-start sm:justify-between sm:p-8";
+const DASHBOARD_BOOK_ACTION_ROW_CLASS_NAME = "flex w-full flex-wrap items-center justify-start gap-3 sm:ml-6 sm:w-auto sm:shrink-0 sm:justify-end";
+
+export function getDashboardHeaderLayoutClassName(): string {
+  return DASHBOARD_HEADER_LAYOUT_CLASS_NAME;
+}
+
+export function getDashboardBookCardLayoutClassName(): string {
+  return DASHBOARD_BOOK_CARD_LAYOUT_CLASS_NAME;
+}
+
+export function getDashboardBookActionRowClassName(): string {
+  return DASHBOARD_BOOK_ACTION_ROW_CLASS_NAME;
+}
+
 function BookMenu({ bookId, bookTitle, nav, t, onDelete, onOpenChange }: {
   readonly bookId: string;
   readonly bookTitle: string;
@@ -197,7 +213,7 @@ export function Dashboard({ nav, sse, theme, t }: { nav: Nav; sse: { messages: R
           </button>
         </div>
       )}
-      <div className="flex items-end justify-between border-b border-border/40 pb-8">
+      <div className={getDashboardHeaderLayoutClassName()}>
         <div>
           <h1 className="font-serif text-4xl mb-2">{t("dash.title")}</h1>
           <p className="text-sm text-muted-foreground">{t("dash.subtitle")}</p>
@@ -220,7 +236,7 @@ export function Dashboard({ nav, sse, theme, t }: { nav: Nav; sse: { messages: R
               key={book.id}
               className={`paper-sheet group relative rounded-2xl fade-in ${staggerClass} ${menuOpenBookId === book.id ? "z-50" : ""}`}
             >
-              <div className="p-8 flex items-start justify-between">
+              <div className={getDashboardBookCardLayoutClassName()}>
                 <div className="flex-1 min-w-0">
                   <div className="flex items-center gap-3 mb-3">
                     <div className="p-2 rounded-lg bg-primary/5 text-primary">
@@ -269,7 +285,7 @@ export function Dashboard({ nav, sse, theme, t }: { nav: Nav; sse: { messages: R
                   </div>
                 </div>
 
-                <div className="flex items-center gap-3 shrink-0 ml-6">
+                <div className={getDashboardBookActionRowClassName()}>
                   <button
                     onClick={async () => {
                       try { await postApi(`/books/${book.id}/write-next`); }
