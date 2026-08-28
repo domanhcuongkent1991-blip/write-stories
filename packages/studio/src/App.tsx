@@ -89,7 +89,12 @@ export function App() {
   const sse = useSSE();
   const { theme, setTheme } = useTheme();
   const { t, locale, setLocale } = useI18n();
-  const { data: project, error: projectError, refetch: refetchProject } = useApi<{ language: string; languageExplicit: boolean }>("/project");
+  const { data: project, error: projectError, refetch: refetchProject } = useApi<{
+    language: string;
+    languageExplicit: boolean;
+    writingLanguages?: ReadonlyArray<"zh" | "en" | "vi">;
+    writingLanguageContractVersion?: string;
+  }>("/project");
   const [showLanguageSelector, setShowLanguageSelector] = useState(false);
   const [mobileNavOpen, setMobileNavOpen] = useState(false);
   const [isDesktop, setIsDesktop] = useState(getInitialDesktopState);

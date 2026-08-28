@@ -1,4 +1,5 @@
 import { useRef, useEffect, useMemo, useState } from "react";
+import type { WritingLanguage } from "@actalk/inkos-core";
 import type { Theme } from "../hooks/use-theme";
 import type { TFunction } from "../hooks/use-i18n";
 import type { SSEMessage } from "../hooks/use-sse";
@@ -26,6 +27,7 @@ import {
   buildNarrativeForecastSelectionInstruction,
 } from "../components/chat/NarrativeForecastPreview";
 import { ProjectArtifactDrawer } from "../components/chat/ProjectArtifactDrawer";
+import { BookWritingLanguageSelector } from "../components/chat/BookWritingLanguageSelector";
 import { PlayHud } from "../components/chat/PlayHud";
 import { PlayChoicePanel } from "../components/chat/PlayChoicePanel";
 import { latestPlayChoiceSet } from "../components/chat/play-choices";
@@ -167,6 +169,12 @@ function formatFileSize(size: number): string {
 interface SkillsResponse {
   readonly skills: ReadonlyArray<StudioSkill>;
   readonly diagnostics?: ReadonlyArray<{ readonly path?: string; readonly message?: string }>;
+}
+
+interface ProjectWritingCapabilityResponse {
+  readonly language?: "zh" | "en";
+  readonly writingLanguages?: ReadonlyArray<WritingLanguage>;
+  readonly writingLanguageContractVersion?: string;
 }
 
 type ScrollFrameId = number | ReturnType<typeof setTimeout>;
@@ -402,6 +410,20 @@ export function ChatPage({ activeBookId, mode = activeBookId ? "book" : "book-cr
   const fetchCustomModels = useServiceStore((s) => s.fetchCustomModels);
   const [configuredModelSelection, setConfiguredModelSelection] = useState<ChatPageModelPreference | null>(null);
   const [serviceConfigLoaded, setServiceConfigLoaded] = useState(false);
+  const { data: projectWritingCapability } = useApi<ProjectWritingCapabilityResponse>("/project");
+  const projectLanguage: "zh" | "en" = projectWritingCapability?.language === "en" ? "en" : "zh";
+  const availableWritingLanguages = useMemo<ReadonlyArray<WritingLanguage>>(() => {
+    const advertised = projectWritingCapability?.writingLanguages;
+    if (!advertised || advertised.length === 0) return ["zh", "en"];
+    return advertised.filter((language, index, values): language is WritingLanguage =>
+      (language === "zh" || language === "en" || language === "vi") && values.indexOf(language) === index,
+    );
+  }, [projectWritingCapability?.writingLanguages]);
+  const [selectedBookLanguage, setSelectedBookLanguage] = useState<WritingLanguage>(projectLanguage);
+
+  useEffect(() => {
+    setSelectedBookLanguage((current) => availableWritingLanguages.includes(current) ? current : projectLanguage);
+  }, [availableWritingLanguages, projectLanguage]);
 
   useEffect(() => { void fetchServices(); }, [fetchServices]);
   useEffect(() => {
@@ -665,6 +687,15 @@ export function ChatPage({ activeBookId, mode = activeBookId ? "book" : "book-cr
     const targetPlayMode = details.targetSessionKind === "play"
       ? details.actionPayload?.playStart?.mode ?? activeSession?.playMode ?? (details.action === "play_start" ? "open" : undefined)
       : undefined;
+    const actionPayload = details.action === "create_book"
+      ? {
+          ...(details.actionPayload ?? {}),
+          createBook: {
+            ...(details.actionPayload?.createBook ?? {}),
+            language: selectedBookLanguage,
+          },
+        }
+      : details.actionPayload;
     if (details.sameSession && activeSessionId) {
       autoScrollPinnedRef.current = true;
       await sendMessage(activeSessionId, details.instruction ?? "", {
@@ -673,7 +704,7 @@ export function ChatPage({ activeBookId, mode = activeBookId ? "book" : "book-cr
         playMode: targetPlayMode,
         actionSource: "button",
         requestedIntent: details.action,
-        actionPayload: details.actionPayload,
+        actionPayload,
         requestedSkills: details.requestedSkills,
       });
       return;
@@ -685,7 +716,7 @@ export function ChatPage({ activeBookId, mode = activeBookId ? "book" : "book-cr
       playMode: targetPlayMode,
       actionSource: "button",
       requestedIntent: details.action,
-      actionPayload: details.actionPayload,
+      actionPayload,
       requestedSkills: details.requestedSkills,
     });
   };
@@ -1116,6 +1147,19 @@ export function ChatPage({ activeBookId, mode = activeBookId ? "book" : "book-cr
                 </button>
               </div>
               <div className={getChatComposerModelRowClassName()}>
+                {currentSessionKind === "book-create" && !activeBookId && (
+                  <BookWritingLanguageSelector
+                    value={selectedBookLanguage}
+                    available={availableWritingLanguages}
+                    disabled={loading || !activeSessionId}
+                    onChange={setSelectedBookLanguage}
+                    labels={{
+                      zh: t("create.writingLanguage.zh"),
+                      en: t("create.writingLanguage.en"),
+                      vi: t("create.writingLanguage.vi"),
+                    }}
+                  />
+                )}
                 {modelPickerStatus === "loading" ? (
                   <span className="text-[15px] text-muted-foreground/40 animate-pulse">{isZh ? "加载模型..." : "Loading models..."}</span>
                 ) : modelPickerStatus === "ready" ? (

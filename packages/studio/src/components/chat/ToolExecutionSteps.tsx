@@ -874,6 +874,13 @@ export function getProposedActionDetails(exec: ToolExecution): ProposedActionDet
 }
 
 export function getProposedActionContractRows(details: ProposedActionDetails): ReadonlyArray<{ label: string; value: string }> {
+  const createBook = details.actionPayload?.createBook;
+  if (details.action === "create_book" && createBook?.language) {
+    return [{
+      label: t("create.writingLanguage"),
+      value: createBook.language,
+    }];
+  }
   const playStart = details.actionPayload?.playStart;
   if (details.action !== "play_start" || !playStart) return [];
   const rows: Array<{ label: string; value: string }> = [];

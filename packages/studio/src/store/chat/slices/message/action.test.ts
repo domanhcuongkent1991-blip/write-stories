@@ -312,6 +312,30 @@ describe("chat message actions", () => {
     ]);
   });
 
+  it("sends the selected Vietnamese language on a confirmed create-book action", async () => {
+    const store = createTestStore();
+    const sessionId = store.getState().createDraftSession(null, "book-create");
+    store.getState().setSelectedModel("deepseek-v4-flash", "kkaiapi");
+    fetchJson
+      .mockResolvedValueOnce({ session: { sessionId, bookId: null, sessionKind: "book-create" } })
+      .mockResolvedValueOnce({ response: "ok", session: { sessionId, sessionKind: "book-create" } });
+
+    await store.getState().sendMessage(sessionId, "Tạo sách", {
+      sessionKind: "book-create",
+      actionSource: "button",
+      requestedIntent: "create_book",
+      actionPayload: {
+        createBook: { title: "Đêm Trắng", language: "vi" },
+      },
+    });
+
+    const agentCall = fetchJson.mock.calls.find(([path]) => path === "/agent");
+    const body = JSON.parse((agentCall?.[1] as { body: string }).body);
+    expect(body.actionSource).toBe("button");
+    expect(body.requestedIntent).toBe("create_book");
+    expect(body.actionPayload.createBook.language).toBe("vi");
+  });
+
   it("restores confirmed proposal cards when loading persisted session messages", () => {
     const store = createTestStore();
     const sessionId = store.getState().createDraftSession(null, "play", "open");
