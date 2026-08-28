@@ -1038,6 +1038,113 @@ describe("WriterAgent", () => {
     }
   });
 
+  it("uses the English scaffold placeholder for missing Vietnamese writing context", async () => {
+    const root = await mkdtemp(join(tmpdir(), "inkos-writer-vi-placeholder-test-"));
+    const bookDir = join(root, "book");
+    const storyDir = join(bookDir, "story");
+    await mkdir(storyDir, { recursive: true });
+
+    await Promise.all([
+      writeFile(join(storyDir, "story_bible.md"), "# Story Bible\n", "utf-8"),
+      writeFile(join(storyDir, "pending_hooks.md"), "# Pending Hooks\n", "utf-8"),
+      writeFile(join(storyDir, "chapter_summaries.md"), "# Chapter Summaries\n", "utf-8"),
+      writeFile(join(storyDir, "subplot_board.md"), "# Subplot Board\n", "utf-8"),
+      writeFile(join(storyDir, "emotional_arcs.md"), "# Emotional Arcs\n", "utf-8"),
+      writeFile(join(storyDir, "style_profile.json"), "{}", "utf-8"),
+      writeFile(join(storyDir, "fanfic_canon.md"), "", "utf-8"),
+    ]);
+
+    const agent = new WriterAgent({
+      client: {
+        provider: "openai",
+        apiFormat: "chat",
+        stream: false,
+        defaults: {
+          temperature: 0.7,
+          maxTokens: 4096,
+          thinkingBudget: 0,
+          extra: {},
+        },
+      },
+      model: "test-model",
+      projectRoot: root,
+    });
+
+    const chatSpy = vi.spyOn(WriterAgent.prototype as never, "chat" as never)
+      .mockResolvedValueOnce({
+        content: [
+          "=== CHAPTER_TITLE ===",
+          "Ledger Trail",
+          "",
+          "=== CHAPTER_CONTENT ===",
+          "Mara follows the ledger trail through the market.",
+          "",
+          "=== PRE_WRITE_CHECK ===",
+          "- ok",
+        ].join("\n"),
+        usage: ZERO_USAGE,
+      })
+      .mockResolvedValueOnce({
+        content: "=== OBSERVATIONS ===\n- observed",
+        usage: ZERO_USAGE,
+      })
+      .mockResolvedValueOnce({
+        content: [
+          "=== POST_SETTLEMENT ===",
+          "- ledger trail advanced",
+          "",
+          "=== UPDATED_STATE ===",
+          "state",
+          "",
+          "=== UPDATED_HOOKS ===",
+          "hooks",
+          "",
+          "=== CHAPTER_SUMMARY ===",
+          "| 1 | Ledger Trail | Mara | Follows the ledger | Trail advances | none | tense | setup |",
+          "",
+          "=== UPDATED_SUBPLOTS ===",
+          "subplots",
+          "",
+          "=== UPDATED_EMOTIONAL_ARCS ===",
+          "arcs",
+          "",
+          "=== UPDATED_CHARACTER_MATRIX ===",
+          "matrix",
+        ].join("\n"),
+        usage: ZERO_USAGE,
+      });
+
+    try {
+      await agent.writeChapter({
+        book: {
+          id: "writer-book",
+          title: "Writer Book",
+          platform: "tomato",
+          genre: "xuanhuan",
+          status: "active",
+          targetChapters: 120,
+          chapterWordCount: 2200,
+          language: "vi",
+          createdAt: "2026-03-23T00:00:00.000Z",
+          updatedAt: "2026-03-23T00:00:00.000Z",
+        },
+        bookDir,
+        chapterNumber: 1,
+        ...createGovernedWriterInput(1),
+        lengthSpec: buildLengthSpec(220, "vi"),
+      });
+
+      const modelMessages = chatSpy.mock.calls
+        .flatMap((call) => call[0] as ReadonlyArray<{ content: string }>)
+        .map((message) => message.content)
+        .join("\n");
+      expect(modelMessages).not.toContain("文件尚未创建");
+      expect(modelMessages).toContain("(file not created yet)");
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
   it("injects an English variance brief into governed creative prompts", async () => {
     const root = await mkdtemp(join(tmpdir(), "inkos-writer-variance-test-"));
     const bookDir = join(root, "book");

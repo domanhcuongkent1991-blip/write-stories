@@ -13,6 +13,7 @@ import {
 } from "../models/runtime-state.js";
 import { evaluateHookAdmission } from "../utils/hook-governance.js";
 import { resolveHookPayoffTiming } from "../utils/hook-lifecycle.js";
+import { resolveWritingLanguageProfile } from "../utils/language.js";
 import { validateRuntimeState } from "./state-validator.js";
 
 export interface RuntimeStateSnapshot {
@@ -53,9 +54,12 @@ export function applyRuntimeStateDelta(params: {
   }
 
   const hooks = applyHookOps(snapshot.hooks, delta);
+  const scaffoldLanguage = resolveWritingLanguageProfile(
+    snapshot.manifest.language,
+  ).scaffoldLanguage;
   const currentState = applyCurrentStatePatch(
     snapshot.currentState,
-    snapshot.manifest.language,
+    scaffoldLanguage,
     delta,
   );
   const chapterSummaries = applySummaryDelta(snapshot.chapterSummaries, delta, allowReapply);

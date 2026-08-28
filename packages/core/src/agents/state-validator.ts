@@ -1,4 +1,5 @@
 import { BaseAgent } from "./base.js";
+import type { ScaffoldLanguage } from "../models/writing-language.js";
 
 export interface ValidationWarning {
   readonly category: string;
@@ -37,7 +38,7 @@ export class StateValidatorAgent extends BaseAgent {
     newState: string,
     oldHooks: string,
     newHooks: string,
-    language: "zh" | "en" = "zh",
+    language: ScaffoldLanguage = "zh",
     authorityContext?: StateValidationAuthorityContext,
   ): Promise<ValidationResult> {
     const stateDiff = this.computeDiff(oldState, newState, "State Card");

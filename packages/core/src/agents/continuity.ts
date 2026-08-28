@@ -2,6 +2,7 @@ import { BaseAgent } from "./base.js";
 import type { GenreProfile } from "../models/genre-profile.js";
 import type { BookRules } from "../models/book-rules.js";
 import type { FanficMode } from "../models/book.js";
+import type { ScaffoldLanguage } from "../models/writing-language.js";
 import type { ChapterMemo, ContextPackage, RuleStack } from "../models/input-governance.js";
 import { readGenreProfile, readBookLanguage, readBookRules } from "./rules-reader.js";
 import { getFanficDimensionConfig, FANFIC_DIMENSIONS } from "./fanfic-dimensions.js";
@@ -14,6 +15,7 @@ import {
   readCurrentStateWithFallback,
 } from "../utils/outline-paths.js";
 import { join } from "node:path";
+import { resolveWritingLanguageProfile } from "../utils/language.js";
 
 export interface AuditResult {
   readonly passed: boolean;
@@ -38,7 +40,7 @@ export interface AuditIssue {
   readonly repairScope?: "local" | "structural" | "unknown";
 }
 
-type PromptLanguage = "zh" | "en";
+type PromptLanguage = ScaffoldLanguage;
 
 function normalizeRepairScope(value: unknown): AuditIssue["repairScope"] {
   if (value === "local" || value === "structural" || value === "unknown") return value;
@@ -440,7 +442,9 @@ export class ContinuityAuditor extends BaseAgent {
       ? styleGuideRaw
       : (legacyRulesBody || "(无文风指南)");
 
-    const resolvedLanguage = bookLanguage ?? gp.language;
+    const resolvedLanguage = resolveWritingLanguageProfile(
+      bookLanguage ?? gp.language,
+    ).scaffoldLanguage;
     const isEnglish = resolvedLanguage === "en";
     const fanficMode = hasFanficCanon ? (bookRules?.fanficMode as FanficMode | undefined) : undefined;
     const dimensions = buildDimensionList(gp, bookRules, resolvedLanguage, hasParentCanon, fanficMode);

@@ -3,7 +3,9 @@ import { join } from "node:path";
 import { BaseAgent } from "./base.js";
 import type { BookConfig } from "../models/book.js";
 import type { LengthSpec } from "../models/length-governance.js";
+import type { ScaffoldLanguage } from "../models/writing-language.js";
 import { buildLengthSpec } from "../utils/length-metrics.js";
+import { resolveWritingLanguageProfile } from "../utils/language.js";
 import { readBookRules as readAuthoritativeBookRules } from "./rules-reader.js";
 import {
   ChapterIntentSchema,
@@ -113,9 +115,13 @@ export class PlannerAgent extends BaseAgent {
     const activeHookCount = memorySelection.activeHooks.filter(
       (hook) => hook.status !== "resolved" && hook.status !== "deferred",
     ).length;
+    const writingLanguage = input.book.language ?? "zh";
+    const scaffoldLanguage = resolveWritingLanguageProfile(
+      writingLanguage,
+    ).scaffoldLanguage;
 
     const arcContext = this.buildArcContext(
-      input.book.language,
+      scaffoldLanguage,
       seedMaterials.volumeOutline,
       outlineNode,
     );
@@ -130,10 +136,10 @@ export class PlannerAgent extends BaseAgent {
       styleEmphasis,
     });
 
-    const isGoldenOpening = this.isGoldenOpeningChapter(input.book.language, input.chapterNumber);
+    const isGoldenOpening = this.isGoldenOpeningChapter(scaffoldLanguage, input.chapterNumber);
     const lengthSpec = buildLengthSpec(
       input.book.chapterWordCount,
-      input.book.language ?? "zh",
+      writingLanguage,
     );
     const memo = await this.planChapterMemo({
       storyDir,
@@ -150,7 +156,7 @@ export class PlannerAgent extends BaseAgent {
       // Phase hotfix 4: thread book language through so the planner uses
       // English prompts (system + user template + golden opening guidance)
       // for English books instead of always-Chinese.
-      language: input.book.language ?? "zh",
+      language: scaffoldLanguage,
       lengthSpec,
     });
 
@@ -163,9 +169,9 @@ export class PlannerAgent extends BaseAgent {
     const intentMarkdown = this.renderIntentMarkdown(
       intent,
       memo,
-      input.book.language ?? "zh",
-      renderHookSnapshot(memorySelection.hooks, input.book.language ?? "zh"),
-      renderSummarySnapshot(memorySelection.summaries, input.book.language ?? "zh"),
+      scaffoldLanguage,
+      renderHookSnapshot(memorySelection.hooks, scaffoldLanguage),
+      renderSummarySnapshot(memorySelection.summaries, scaffoldLanguage),
       activeHookCount,
     );
     await writeFile(runtimePath, intentMarkdown, "utf-8");
@@ -196,7 +202,7 @@ export class PlannerAgent extends BaseAgent {
     readonly chapterContext?: string;
     readonly relevantHooks?: ReadonlyArray<StoredHook>;
     readonly recyclableHooks?: ReadonlyArray<StoredHook>;
-    readonly language?: "zh" | "en";
+    readonly language?: ScaffoldLanguage;
     readonly lengthSpec: LengthSpec;
   }): Promise<ChapterMemo> {
     const [characterMatrix, subplotBoard, emotionalArcs, bookRulesRaw] = await Promise.all([
@@ -244,7 +250,11 @@ export class PlannerAgent extends BaseAgent {
         softMax: input.lengthSpec.softMax,
         hardMin: input.lengthSpec.hardMin,
         hardMax: input.lengthSpec.hardMax,
-        unit: input.lengthSpec.countingMode === "en_words" ? "words" : "字",
+        unit: input.lengthSpec.countingMode === "en_words"
+          ? "words"
+          : input.lengthSpec.countingMode === "vi_wordlike_tokens_v1"
+            ? "từ"
+            : "字",
       },
       brief: input.brief ?? "",
       chapterContext: input.chapterContext ?? "",
@@ -298,7 +308,7 @@ export class PlannerAgent extends BaseAgent {
     readonly isGoldenOpening: boolean;
     readonly fallbackGoal: string;
     readonly errorMessage: string;
-    readonly language: "zh" | "en";
+    readonly language: ScaffoldLanguage;
     readonly lengthSpec: LengthSpec;
   }): string {
     if (input.language === "en") {
@@ -384,13 +394,13 @@ export class PlannerAgent extends BaseAgent {
     ].join("\n");
   }
 
-  private isGoldenOpeningChapter(language: string | undefined, chapterNumber: number): boolean {
+  private isGoldenOpeningChapter(language: ScaffoldLanguage | undefined, chapterNumber: number): boolean {
     const isZh = (language ?? "zh").toLowerCase().startsWith("zh");
     return isZh ? chapterNumber <= 3 : chapterNumber <= 5;
   }
 
   private buildArcContext(
-    language: string | undefined,
+    language: ScaffoldLanguage | undefined,
     volumeOutline: string,
     outlineNode: string | undefined,
   ): string | undefined {
@@ -530,7 +540,7 @@ export class PlannerAgent extends BaseAgent {
     return this.extractListItems(focusSection, limit);
   }
 
-  private renderHookBudget(activeCount: number, language: "zh" | "en"): string {
+  private renderHookBudget(activeCount: number, language: ScaffoldLanguage): string {
     const cap = 12;
     if (activeCount < 10) {
       return language === "en"
@@ -821,7 +831,7 @@ export class PlannerAgent extends BaseAgent {
   private renderIntentMarkdown(
     intent: ChapterIntent,
     memo: ChapterMemo,
-    language: "zh" | "en",
+    language: ScaffoldLanguage,
     pendingHooks: string,
     chapterSummaries: string,
     activeHookCount: number,
@@ -888,7 +898,7 @@ export class PlannerAgent extends BaseAgent {
     return [...new Set(values.map((value) => value.trim()).filter(Boolean))];
   }
 
-  private isChineseLanguage(language: string | undefined): boolean {
+  private isChineseLanguage(language: ScaffoldLanguage | undefined): boolean {
     return (language ?? "zh").toLowerCase().startsWith("zh");
   }
 

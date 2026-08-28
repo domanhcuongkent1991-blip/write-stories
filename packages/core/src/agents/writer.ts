@@ -18,8 +18,17 @@ import {
 import { analyzeAITells } from "./ai-tells.js";
 import type { ChapterIntent, ChapterMemo, ContextPackage, RuleStack } from "../models/input-governance.js";
 import type { LengthSpec } from "../models/length-governance.js";
+import type {
+  ScaffoldLanguage,
+  WritingLanguage,
+} from "../models/writing-language.js";
 import type { RuntimeStateDelta } from "../models/runtime-state.js";
-import { buildLengthSpec, countChapterLength } from "../utils/length-metrics.js";
+import {
+  buildLengthSpec,
+  countChapterLength,
+  resolveLengthCountingMode,
+} from "../utils/length-metrics.js";
+import { resolveWritingLanguageProfile } from "../utils/language.js";
 import {
   filterSummaries,
   filterSubplots,
@@ -128,59 +137,65 @@ export class WriterAgent extends BaseAgent {
     return "writer";
   }
 
-  private localize(language: "zh" | "en", messages: { zh: string; en: string }): string {
+  private localize(language: ScaffoldLanguage, messages: { zh: string; en: string }): string {
     return language === "en" ? messages.en : messages.zh;
   }
 
-  private logInfo(language: "zh" | "en", messages: { zh: string; en: string }): void {
+  private logInfo(language: ScaffoldLanguage, messages: { zh: string; en: string }): void {
     this.ctx.logger?.info(this.localize(language, messages));
   }
 
-  private logWarn(language: "zh" | "en", messages: { zh: string; en: string }): void {
+  private logWarn(language: ScaffoldLanguage, messages: { zh: string; en: string }): void {
     this.ctx.logger?.warn(this.localize(language, messages));
   }
 
   async writeChapter(input: WriteChapterInput): Promise<WriteChapterOutput> {
     const { book, bookDir, chapterNumber } = input;
 
-    const placeholder = "(文件尚未创建)";
+    // Load the language profile before reading context so missing source files use
+    // the same scaffold language as the prompts that include them.
+    const { profile: genreProfile, body: genreBody } =
+      await readGenreProfile(this.ctx.projectRoot, book.genre);
+    const writingLanguage = book.language ?? genreProfile.language;
+    const resolvedLanguage = resolveWritingLanguageProfile(
+      writingLanguage,
+    ).scaffoldLanguage;
+    const placeholder = resolvedLanguage === "en"
+      ? "(file not created yet)"
+      : "(文件尚未创建)";
     const [
       volumeOutline, styleGuide, currentState, ledger, hooks,
       chapterSummaries, subplotBoard, emotionalArcs, characterMatrix, styleProfileRaw,
       fanficCanonRaw,
     ] = await Promise.all([
         readVolumeMap(bookDir, placeholder),
-        this.readFileOrDefault(join(bookDir, "story/style_guide.md")),
+        this.readFileOrDefault(join(bookDir, "story/style_guide.md"), placeholder),
         // Phase 5 consolidation: architect no longer emits an initial current_state
         // section. When the file is only a seed placeholder, derive initial state
         // from roles/*.Current_State + pending_hooks startChapter=0 rows so the
         // writer still sees substantive content instead of a runtime-append note.
         readCurrentStateWithFallback(bookDir, placeholder),
-        this.readFileOrDefault(join(bookDir, "story/particle_ledger.md")),
-        this.readFileOrDefault(join(bookDir, "story/pending_hooks.md")),
-        this.readFileOrDefault(join(bookDir, "story/chapter_summaries.md")),
-        this.readFileOrDefault(join(bookDir, "story/subplot_board.md")),
-        this.readFileOrDefault(join(bookDir, "story/emotional_arcs.md")),
+        this.readFileOrDefault(join(bookDir, "story/particle_ledger.md"), placeholder),
+        this.readFileOrDefault(join(bookDir, "story/pending_hooks.md"), placeholder),
+        this.readFileOrDefault(join(bookDir, "story/chapter_summaries.md"), placeholder),
+        this.readFileOrDefault(join(bookDir, "story/subplot_board.md"), placeholder),
+        this.readFileOrDefault(join(bookDir, "story/emotional_arcs.md"), placeholder),
         readCharacterContext(bookDir, placeholder),
-        this.readFileOrDefault(join(bookDir, "story/style_profile.json")),
-        this.readFileOrDefault(join(bookDir, "story/fanfic_canon.md")),
+        this.readFileOrDefault(join(bookDir, "story/style_profile.json"), placeholder),
+        this.readFileOrDefault(join(bookDir, "story/fanfic_canon.md"), placeholder),
       ]);
 
     const fingerprintChapters = await this.loadRecentChapters(bookDir, chapterNumber, 5);
 
-    // Load genre profile + book rules
-    const { profile: genreProfile, body: genreBody } =
-      await readGenreProfile(this.ctx.projectRoot, book.genre);
     const parsedBookRules = await readBookRules(bookDir);
     const bookRules = parsedBookRules?.rules ?? null;
     const bookRulesBody = parsedBookRules?.body ?? "";
 
     const styleFingerprint = this.buildStyleFingerprint(styleProfileRaw);
 
-    const hasFanficCanon = fanficCanonRaw !== "(文件尚未创建)";
-    const resolvedLanguage = book.language ?? genreProfile.language;
+    const hasFanficCanon = fanficCanonRaw !== placeholder;
     const targetWords = input.lengthSpec?.target ?? input.wordCountOverride ?? book.chapterWordCount;
-    const resolvedLengthSpec = input.lengthSpec ?? buildLengthSpec(targetWords, resolvedLanguage);
+    const resolvedLengthSpec = input.lengthSpec ?? buildLengthSpec(targetWords, writingLanguage);
     if (!input.chapterIntent || !input.chapterMemo || !input.contextPackage || !input.ruleStack) {
       throw new Error("Writer requires governed chapter intent, memo, context package, and rule stack.");
     }
@@ -217,7 +232,7 @@ export class WriterAgent extends BaseAgent {
       ruleStack: input.ruleStack,
       externalContext: input.externalContext,
       lengthSpec: resolvedLengthSpec,
-      language: book.language ?? genreProfile.language,
+      language: resolvedLanguage,
       varianceBrief: englishVarianceBrief?.text,
       selectedEvidenceBlock: this.joinGovernedEvidenceBlocks(governedMemoryBlocks),
     });
@@ -393,6 +408,14 @@ export class WriterAgent extends BaseAgent {
     const baselineStoryDir = input.baselineChapter === undefined
       ? join(input.bookDir, "story")
       : join(input.bookDir, "story", "snapshots", String(input.baselineChapter));
+    const { profile: genreProfile } = await readGenreProfile(this.ctx.projectRoot, input.book.genre);
+    const writingLanguage = input.book.language ?? genreProfile.language;
+    const resolvedLanguage = resolveWritingLanguageProfile(
+      writingLanguage,
+    ).scaffoldLanguage;
+    const placeholder = resolvedLanguage === "en"
+      ? "(file not created yet)"
+      : "(文件尚未创建)";
     const [
       currentState,
       ledger,
@@ -404,23 +427,21 @@ export class WriterAgent extends BaseAgent {
       volumeOutline,
     ] = await Promise.all([
       input.baselineChapter === undefined
-        ? readCurrentStateWithFallback(input.bookDir, "(文件尚未创建)")
-        : this.readFileOrDefault(join(baselineStoryDir, "current_state.md")),
-      this.readFileOrDefault(join(baselineStoryDir, "particle_ledger.md")),
-      this.readFileOrDefault(join(baselineStoryDir, "pending_hooks.md")),
-      this.readFileOrDefault(join(baselineStoryDir, "chapter_summaries.md")),
-      this.readFileOrDefault(join(baselineStoryDir, "subplot_board.md")),
-      this.readFileOrDefault(join(baselineStoryDir, "emotional_arcs.md")),
+        ? readCurrentStateWithFallback(input.bookDir, placeholder)
+        : this.readFileOrDefault(join(baselineStoryDir, "current_state.md"), placeholder),
+      this.readFileOrDefault(join(baselineStoryDir, "particle_ledger.md"), placeholder),
+      this.readFileOrDefault(join(baselineStoryDir, "pending_hooks.md"), placeholder),
+      this.readFileOrDefault(join(baselineStoryDir, "chapter_summaries.md"), placeholder),
+      this.readFileOrDefault(join(baselineStoryDir, "subplot_board.md"), placeholder),
+      this.readFileOrDefault(join(baselineStoryDir, "emotional_arcs.md"), placeholder),
       input.baselineChapter === undefined
-        ? readCharacterContext(input.bookDir, "(文件尚未创建)")
-        : this.readSnapshotCharacterContext(input.bookDir, baselineStoryDir),
-      readVolumeMap(input.bookDir, "(文件尚未创建)"),
+        ? readCharacterContext(input.bookDir, placeholder)
+        : this.readSnapshotCharacterContext(input.bookDir, baselineStoryDir, placeholder),
+      readVolumeMap(input.bookDir, placeholder),
     ]);
 
-    const { profile: genreProfile } = await readGenreProfile(this.ctx.projectRoot, input.book.genre);
     const parsedBookRules = await readBookRules(input.bookDir);
     const bookRules = parsedBookRules?.rules ?? null;
-    const resolvedLanguage = input.book.language ?? genreProfile.language;
     const governedMemoryBlocks = input.contextPackage
       ? buildGovernedMemoryEvidenceBlocks(input.contextPackage, resolvedLanguage)
       : undefined;
@@ -469,7 +490,7 @@ export class WriterAgent extends BaseAgent {
       content: input.content,
       wordCount: countChapterLength(
         input.content,
-        resolvedLanguage === "en" ? "en_words" : "zh_chars",
+        resolveLengthCountingMode(writingLanguage),
       ),
       preWriteCheck: "",
       postSettlement: settlement.postSettlement,
@@ -523,7 +544,9 @@ export class WriterAgent extends BaseAgent {
     usage: TokenUsage;
   }> {
     // Phase 2a: Observer — extract all facts from the chapter
-    const resolvedLang = params.book.language ?? params.genreProfile.language;
+    const resolvedLang = resolveWritingLanguageProfile(
+      params.book.language ?? params.genreProfile.language,
+    ).scaffoldLanguage;
     const observerSystem = buildObserverSystemPrompt(params.book, params.genreProfile, resolvedLang);
     const observerUser = buildObserverUserPrompt(params.chapterNumber, params.title, params.content, resolvedLang);
 
@@ -629,8 +652,9 @@ export class WriterAgent extends BaseAgent {
     bookDir: string,
     output: WriteChapterOutput,
     numericalSystem: boolean = true,
-    language: "zh" | "en" = "zh",
+    writingLanguage: WritingLanguage = "zh",
   ): Promise<void> {
+    const language = resolveWritingLanguageProfile(writingLanguage).scaffoldLanguage;
     const chaptersDir = join(bookDir, "chapters");
     await mkdir(chaptersDir, { recursive: true });
 
@@ -730,7 +754,7 @@ export class WriterAgent extends BaseAgent {
     readonly ruleStack: RuleStack;
     readonly externalContext?: string;
     readonly lengthSpec: LengthSpec;
-    readonly language?: "zh" | "en";
+    readonly language?: ScaffoldLanguage;
     readonly varianceBrief?: string;
     readonly selectedEvidenceBlock?: string;
   }): string {
@@ -811,7 +835,7 @@ ${lengthRequirementBlock}
 - 只需输出 PRE_WRITE_CHECK、CHAPTER_TITLE、CHAPTER_CONTENT 三个区块`;
   }
 
-  private buildChapterContextBlock(externalContext: string | undefined, language: "zh" | "en"): string {
+  private buildChapterContextBlock(externalContext: string | undefined, language: ScaffoldLanguage): string {
     const trimmed = externalContext?.trim();
     if (!trimmed) return "";
     if (language === "en") {
@@ -850,7 +874,7 @@ ${trimmed}
     chapterIntent: string,
     contextPackage: ContextPackage,
     ruleStack: RuleStack,
-    language: "zh" | "en",
+    language: ScaffoldLanguage,
   ): string {
     const selectedContext = renderNarrativeSelectedContext(contextPackage.selectedContext, language)
       .replace(/^### /gm, "- ");
@@ -903,7 +927,7 @@ ${overrides}\n`;
   private verifyPreWriteCheckAlignsWithMemo(
     preWriteCheck: string,
     chapterNumber: number,
-    language: "zh" | "en",
+    language: ScaffoldLanguage,
   ): void {
     if (!preWriteCheck || preWriteCheck.trim().length === 0) {
       this.logWarn(language, {
@@ -934,7 +958,7 @@ ${overrides}\n`;
     }
   }
 
-  private buildLengthRequirementBlock(lengthSpec: LengthSpec, language: "zh" | "en"): string {
+  private buildLengthRequirementBlock(lengthSpec: LengthSpec, language: ScaffoldLanguage): string {
     if (language === "en") {
       return `Requirements:
 - Target length: ${lengthSpec.target} words
@@ -974,21 +998,28 @@ ${overrides}\n`;
     }
   }
 
-  private async readFileOrDefault(path: string): Promise<string> {
+  private async readFileOrDefault(
+    path: string,
+    fallback: string = "(文件尚未创建)",
+  ): Promise<string> {
     try {
       return await readFile(path, "utf-8");
     } catch {
-      return "(文件尚未创建)";
+      return fallback;
     }
   }
 
   private async readSnapshotCharacterContext(
     bookDir: string,
     snapshotStoryDir: string,
+    fallback: string,
   ): Promise<string> {
-    const snapshotMatrix = await this.readFileOrDefault(join(snapshotStoryDir, "character_matrix.md"));
-    if (snapshotMatrix !== "(文件尚未创建)") return snapshotMatrix;
-    return readCharacterContext(bookDir, "(文件尚未创建)");
+    const snapshotMatrix = await this.readFileOrDefault(
+      join(snapshotStoryDir, "character_matrix.md"),
+      fallback,
+    );
+    if (snapshotMatrix !== fallback) return snapshotMatrix;
+    return readCharacterContext(bookDir, fallback);
   }
 
   private renderDeltaSummaryRow(delta: RuntimeStateDelta): string {
@@ -1061,7 +1092,7 @@ ${overrides}\n`;
   private async buildRuntimeStateArtifactsIfPresent(
     bookDir: string,
     delta: RuntimeStateDelta | undefined,
-    language: "zh" | "en",
+    language: ScaffoldLanguage,
     authoritativeChapterNumber?: number,
     allowReapply?: boolean,
     baselineChapter?: number,
@@ -1097,7 +1128,7 @@ ${overrides}\n`;
   private async resolveRuntimeStateArtifactsForOutput(
     bookDir: string,
     output: WriteChapterOutput,
-    language: "zh" | "en",
+    language: ScaffoldLanguage,
   ): Promise<RuntimeStateArtifacts | null> {
     if (!output.runtimeStateDelta) return null;
     const safeDelta = this.normalizeRuntimeStateDeltaChapter(
@@ -1130,7 +1161,7 @@ ${overrides}\n`;
   private async renderAppendedChapterSummary(
     bookDir: string,
     summary: string,
-    language: "zh" | "en",
+    language: ScaffoldLanguage,
   ): Promise<string | undefined> {
     const summaryPath = join(bookDir, "story", "chapter_summaries.md");
     let existing = "";

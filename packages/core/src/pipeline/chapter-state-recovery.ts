@@ -10,7 +10,7 @@ import type { Logger } from "../utils/logger.js";
 import type { BookConfig } from "../models/book.js";
 import type { ChapterMeta } from "../models/chapter.js";
 import type { ContextPackage, RuleStack } from "../models/input-governance.js";
-import type { LengthLanguage } from "../utils/length-metrics.js";
+import type { ScaffoldLanguage } from "../models/writing-language.js";
 
 export interface SettlementRetryParams {
   readonly writer: Pick<WriterAgent, "settleChapterState">;
@@ -30,7 +30,7 @@ export interface SettlementRetryParams {
   readonly oldState: string;
   readonly oldHooks: string;
   readonly originalValidation: ValidationResult;
-  readonly language: LengthLanguage;
+  readonly language: ScaffoldLanguage;
   readonly logWarn?: (message: { zh: string; en: string }) => void;
   readonly logger?: Pick<Logger, "warn">;
 }
@@ -113,7 +113,7 @@ export async function retrySettlementAfterValidationFailure(
 
 export function buildStateValidationFeedback(
   warnings: ReadonlyArray<ValidationWarning>,
-  language: LengthLanguage,
+  language: ScaffoldLanguage,
 ): string {
   if (warnings.length === 0) {
     return language === "en"
@@ -136,7 +136,7 @@ export function buildStateValidationFeedback(
 
 export function buildStateDegradedIssues(
   warnings: ReadonlyArray<ValidationWarning>,
-  language: LengthLanguage,
+  language: ScaffoldLanguage,
 ): ReadonlyArray<AuditIssue> {
   if (warnings.length > 0) {
     return warnings.map((warning) => ({

@@ -29,6 +29,10 @@ import {
   readChapterVersion,
   saveChapterUserBrief,
 } from "../state/chapter-workspace.js";
+import {
+  resolveWritingLanguageProfile,
+  type WritingLanguageProfile,
+} from "../utils/language.js";
 
 const require = createRequire(import.meta.url);
 const hasNodeSqlite = (() => {
@@ -311,6 +315,21 @@ async function createRunnerFixture(
   return { root, runner, state, bookId };
 }
 
+async function enableViWriting(root: string): Promise<() => void> {
+  const previous = process.env.INKOS_EXPERIMENTAL_WRITING_VI;
+  process.env.INKOS_EXPERIMENTAL_WRITING_VI = "1";
+  await mkdir(join(root, ".inkos"), { recursive: true });
+  await writeFile(join(root, ".inkos", "vi-writing-v1.json"), JSON.stringify({
+    schemaVersion: 1,
+    contractVersion: "vi-writing-v1",
+    projectRoot: root,
+  }), "utf-8");
+  return () => {
+    if (previous === undefined) delete process.env.INKOS_EXPERIMENTAL_WRITING_VI;
+    else process.env.INKOS_EXPERIMENTAL_WRITING_VI = previous;
+  };
+}
+
 describe("PipelineRunner", () => {
   beforeEach(() => {
     vi.spyOn(PlannerAgent.prototype, "planChapter").mockImplementation(async (input) => {
@@ -388,6 +407,802 @@ describe("PipelineRunner", () => {
 
   afterEach(() => {
     vi.restoreAllMocks();
+  });
+
+  it("rejects disabled Vietnamese writing before lock, bootstrap, or agent work", async () => {
+    const root = await mkdtemp(join(tmpdir(), "inkos-runner-vi-disabled-"));
+    const state = new StateManager(root);
+    const bookId = "vi-disabled";
+    await state.saveBookConfig(bookId, {
+      id: bookId,
+      title: "VI Disabled",
+      platform: "other",
+      genre: "other",
+      language: "vi",
+      status: "active",
+      targetChapters: 10,
+      chapterWordCount: 2000,
+      createdAt: "2026-08-28T00:00:00.000Z",
+      updatedAt: "2026-08-28T00:00:00.000Z",
+    });
+    const runner = new PipelineRunner({
+      client: {} as ConstructorParameters<typeof PipelineRunner>[0]["client"],
+      model: "test-model",
+      projectRoot: root,
+    });
+    const acquireBookLock = vi.spyOn(StateManager.prototype, "acquireBookLock")
+      .mockRejectedValue(new Error("lock must not be acquired"));
+    const ensureControlDocuments = vi.spyOn(StateManager.prototype, "ensureControlDocuments");
+    const getNextChapterNumber = vi.spyOn(StateManager.prototype, "getNextChapterNumber");
+    const writeChapter = vi.spyOn(WriterAgent.prototype, "writeChapter");
+    const previous = process.env.INKOS_EXPERIMENTAL_WRITING_VI;
+    delete process.env.INKOS_EXPERIMENTAL_WRITING_VI;
+
+    try {
+      await expect(runner.writeNextChapter(bookId)).rejects.toMatchObject({
+        name: "WritingLanguagePreflightError",
+        code: "WRITING_LANGUAGE_DISABLED",
+      });
+      expect(acquireBookLock).not.toHaveBeenCalled();
+      expect(ensureControlDocuments).not.toHaveBeenCalled();
+      expect(getNextChapterNumber).not.toHaveBeenCalled();
+      expect(writeChapter).not.toHaveBeenCalled();
+    } finally {
+      if (previous === undefined) delete process.env.INKOS_EXPERIMENTAL_WRITING_VI;
+      else process.env.INKOS_EXPERIMENTAL_WRITING_VI = previous;
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("revalidates book language after acquiring the writeNext lock", async () => {
+    const { root, runner, state, bookId } = await createRunnerFixture();
+    const initialBook = await state.loadBookConfig(bookId);
+    const acquireBookLock = vi.spyOn(StateManager.prototype, "acquireBookLock")
+      .mockImplementation(async () => {
+        await state.saveBookConfig(bookId, { ...initialBook, language: "vi" });
+        return async () => undefined;
+      });
+    const ensureControlDocuments = vi.spyOn(StateManager.prototype, "ensureControlDocuments");
+    const getNextChapterNumber = vi.spyOn(StateManager.prototype, "getNextChapterNumber")
+      .mockRejectedValue(new Error("getNextChapterNumber must not run"));
+    const writeChapter = vi.spyOn(WriterAgent.prototype, "writeChapter");
+    const previous = process.env.INKOS_EXPERIMENTAL_WRITING_VI;
+    delete process.env.INKOS_EXPERIMENTAL_WRITING_VI;
+
+    try {
+      await expect(runner.writeNextChapter(bookId)).rejects.toMatchObject({
+        name: "WritingLanguagePreflightError",
+        code: "WRITING_LANGUAGE_DISABLED",
+      });
+      expect(acquireBookLock).toHaveBeenCalledTimes(1);
+      expect(ensureControlDocuments).not.toHaveBeenCalled();
+      expect(getNextChapterNumber).not.toHaveBeenCalled();
+      expect(writeChapter).not.toHaveBeenCalled();
+    } finally {
+      if (previous === undefined) delete process.env.INKOS_EXPERIMENTAL_WRITING_VI;
+      else process.env.INKOS_EXPERIMENTAL_WRITING_VI = previous;
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("preflights Vietnamese getBookStatus before its legacy bootstrap path", async () => {
+    const root = await mkdtemp(join(tmpdir(), "inkos-runner-vi-status-"));
+    const state = new StateManager(root);
+    const bookId = "vi-status";
+    await state.saveBookConfig(bookId, {
+      id: bookId,
+      title: "VI Status",
+      platform: "other",
+      genre: "other",
+      language: "vi",
+      status: "active",
+      targetChapters: 10,
+      chapterWordCount: 2000,
+      createdAt: "2026-08-28T00:00:00.000Z",
+      updatedAt: "2026-08-28T00:00:00.000Z",
+    });
+    const runner = new PipelineRunner({
+      client: {} as ConstructorParameters<typeof PipelineRunner>[0]["client"],
+      model: "test-model",
+      projectRoot: root,
+    });
+    const getNextChapterNumber = vi.spyOn(StateManager.prototype, "getNextChapterNumber")
+      .mockRejectedValue(new Error("bootstrap must not run"));
+    const previous = process.env.INKOS_EXPERIMENTAL_WRITING_VI;
+    delete process.env.INKOS_EXPERIMENTAL_WRITING_VI;
+
+    try {
+      await expect(runner.getBookStatus(bookId)).rejects.toMatchObject({
+        name: "WritingLanguagePreflightError",
+        code: "WRITING_LANGUAGE_DISABLED",
+      });
+      expect(getNextChapterNumber).not.toHaveBeenCalled();
+    } finally {
+      if (previous === undefined) delete process.env.INKOS_EXPERIMENTAL_WRITING_VI;
+      else process.env.INKOS_EXPERIMENTAL_WRITING_VI = previous;
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("preserves an existing partial Vietnamese book directory before agent or file work", async () => {
+    const root = await mkdtemp(join(tmpdir(), "inkos-runner-vi-partial-"));
+    const state = new StateManager(root);
+    const bookId = "vi-partial";
+    const bookDir = state.bookDir(bookId);
+    await mkdir(bookDir, { recursive: true });
+    const sentinelPath = join(bookDir, "KEEP.txt");
+    await writeFile(sentinelPath, "keep this partial directory", "utf-8");
+    const restoreVi = await enableViWriting(root);
+    const runner = new PipelineRunner({
+      client: {} as ConstructorParameters<typeof PipelineRunner>[0]["client"],
+      model: "test-model",
+      projectRoot: root,
+    });
+    const generateFoundation = vi.spyOn(ArchitectAgent.prototype, "generateFoundation")
+      .mockResolvedValue({
+        storyBible: "# Story Bible\n",
+        volumeOutline: "# Volume Outline\n",
+        bookRules: "---\nversion: \"1.0\"\n---\n\n# Book Rules\n",
+        currentState: "# Current State\n",
+        pendingHooks: "# Pending Hooks\n",
+      });
+
+    try {
+      await expect(runner.initBook({
+        id: bookId,
+        title: "VI Partial",
+        platform: "other",
+        genre: "other",
+        language: "vi",
+        status: "outlining",
+        targetChapters: 10,
+        chapterWordCount: 2000,
+        createdAt: "2026-08-28T00:00:00.000Z",
+        updatedAt: "2026-08-28T00:00:00.000Z",
+      })).rejects.toThrow(/already exists/i);
+      expect(generateFoundation).not.toHaveBeenCalled();
+      await expect(readFile(sentinelPath, "utf-8")).resolves.toBe("keep this partial directory");
+    } finally {
+      restoreVi();
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("preserves a Vietnamese target directory that appears after foundation generation", async () => {
+    const root = await mkdtemp(join(tmpdir(), "inkos-runner-vi-late-partial-"));
+    const state = new StateManager(root);
+    const bookId = "vi-late-partial";
+    const bookDir = state.bookDir(bookId);
+    const sentinelPath = join(bookDir, "KEEP.txt");
+    const restoreVi = await enableViWriting(root);
+    const runner = new PipelineRunner({
+      client: {} as ConstructorParameters<typeof PipelineRunner>[0]["client"],
+      model: "test-model",
+      projectRoot: root,
+    });
+    vi.spyOn(ArchitectAgent.prototype, "generateFoundation").mockImplementation(async () => {
+      await mkdir(bookDir, { recursive: true });
+      await writeFile(sentinelPath, "late concurrent directory", "utf-8");
+      return {
+        storyBible: "# Story Bible\n",
+        volumeOutline: "# Volume Outline\n",
+        bookRules: "---\nversion: \"1.0\"\n---\n\n# Book Rules\n",
+        currentState: "# Current State\n",
+        pendingHooks: "# Pending Hooks\n",
+      };
+    });
+
+    try {
+      await expect(runner.initBook({
+        id: bookId,
+        title: "VI Late Partial",
+        platform: "other",
+        genre: "other",
+        language: "vi",
+        status: "outlining",
+        targetChapters: 10,
+        chapterWordCount: 2000,
+        createdAt: "2026-08-28T00:00:00.000Z",
+        updatedAt: "2026-08-28T00:00:00.000Z",
+      })).rejects.toThrow(/appeared during Vietnamese creation/i);
+      await expect(readFile(sentinelPath, "utf-8")).resolves.toBe("late concurrent directory");
+    } finally {
+      restoreVi();
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("freezes the implicit audit target before waiting for one lock", async () => {
+    const { root, runner, state, bookId } = await createRunnerFixture();
+    const bookDir = state.bookDir(bookId);
+    const chaptersDir = join(bookDir, "chapters");
+    const chapterOne: ChapterMeta = {
+      number: 1,
+      title: "First",
+      status: "drafted",
+      wordCount: 20,
+      createdAt: "2026-08-28T00:00:00.000Z",
+      updatedAt: "2026-08-28T00:00:00.000Z",
+      auditIssues: [],
+      lengthWarnings: [],
+    };
+    const chapterTwo: ChapterMeta = {
+      ...chapterOne,
+      number: 2,
+      title: "Second",
+    };
+    await writeFile(join(chaptersDir, "0001_First.md"), "# 第一章\n\n第一章正文。", "utf-8");
+    await state.saveChapterIndex(bookId, [chapterOne]);
+
+    let lockDepth = 0;
+    const acquireBookLock = vi.spyOn(StateManager.prototype, "acquireBookLock")
+      .mockImplementation(async () => {
+        await writeFile(join(chaptersDir, "0002_Second.md"), "# 第二章\n\n第二章正文。", "utf-8");
+        await writeFile(
+          join(chaptersDir, "index.json"),
+          JSON.stringify([chapterOne, chapterTwo], null, 2),
+          "utf-8",
+        );
+        lockDepth += 1;
+        return async () => {
+          lockDepth -= 1;
+        };
+      });
+    const auditChapter = vi.spyOn(ContinuityAuditor.prototype, "auditChapter")
+      .mockImplementation(async (_bookDir, _content, chapterNumber) => {
+        expect(lockDepth).toBe(1);
+        expect(chapterNumber).toBe(1);
+        return createAuditResult({ passed: true, summary: "first chapter audited" });
+      });
+    const originalSaveChapterIndex = StateManager.prototype.saveChapterIndex;
+    const saveChapterIndex = vi.spyOn(StateManager.prototype, "saveChapterIndex")
+      .mockImplementation(async function (this: StateManager, id, index, options) {
+        expect(lockDepth).toBe(1);
+        return originalSaveChapterIndex.call(this, id, index, options);
+      });
+
+    try {
+      const result = await runner.auditDraft(bookId);
+      const savedIndex = await state.loadChapterIndex(bookId);
+
+      expect(result.chapterNumber).toBe(1);
+      expect(acquireBookLock).toHaveBeenCalledTimes(1);
+      expect(auditChapter).toHaveBeenCalledTimes(1);
+      expect(saveChapterIndex).toHaveBeenCalledTimes(1);
+      expect(lockDepth).toBe(0);
+      expect(savedIndex.find((chapter) => chapter.number === 1)?.status).toBe("ready-for-review");
+      expect(savedIndex.find((chapter) => chapter.number === 2)?.status).toBe("drafted");
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects an index-backed audit target deleted while waiting for the lock", async () => {
+    const { root, runner, state, bookId } = await createRunnerFixture();
+    const chaptersDir = join(state.bookDir(bookId), "chapters");
+    const chapter: ChapterMeta = {
+      number: 1,
+      title: "First",
+      status: "drafted",
+      wordCount: 20,
+      createdAt: "2026-08-28T00:00:00.000Z",
+      updatedAt: "2026-08-28T00:00:00.000Z",
+      auditIssues: [],
+      lengthWarnings: [],
+    };
+    await writeFile(join(chaptersDir, "0001_First.md"), "# 第一章\n\n第一章正文。", "utf-8");
+    await state.saveChapterIndex(bookId, [chapter]);
+
+    const acquireBookLock = vi.spyOn(StateManager.prototype, "acquireBookLock")
+      .mockImplementation(async () => {
+        await writeFile(join(chaptersDir, "index.json"), "[]", "utf-8");
+        return async () => undefined;
+      });
+    const auditChapter = vi.spyOn(ContinuityAuditor.prototype, "auditChapter")
+      .mockResolvedValue(createAuditResult({ passed: true }));
+    const saveChapterIndex = vi.spyOn(StateManager.prototype, "saveChapterIndex");
+    const persistAuditDriftGuidance = vi.fn(async () => undefined);
+    const emitWebhook = vi.fn(async () => undefined);
+    Object.assign(runner as object, { persistAuditDriftGuidance, emitWebhook });
+
+    try {
+      await expect(runner.auditDraft(bookId)).rejects.toMatchObject({
+        name: "WritingLanguagePreflightError",
+        code: "STATE_PREFLIGHT_FAILED",
+      });
+      expect(acquireBookLock).toHaveBeenCalledTimes(1);
+      expect(auditChapter).not.toHaveBeenCalled();
+      expect(saveChapterIndex).not.toHaveBeenCalled();
+      expect(persistAuditDriftGuidance).not.toHaveBeenCalled();
+      expect(emitWebhook).not.toHaveBeenCalled();
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("revalidates exact Vietnamese audit telemetry after acquiring the lock", async () => {
+    const root = await mkdtemp(join(tmpdir(), "inkos-runner-vi-audit-race-"));
+    const state = new StateManager(root);
+    const bookId = "vi-audit-race";
+    const bookDir = state.bookDir(bookId);
+    const chaptersDir = join(bookDir, "chapters");
+    await state.saveBookConfig(bookId, {
+      id: bookId,
+      title: "VI Audit Race",
+      platform: "other",
+      genre: "other",
+      language: "vi",
+      status: "active",
+      targetChapters: 10,
+      chapterWordCount: 2000,
+      createdAt: "2026-08-28T00:00:00.000Z",
+      updatedAt: "2026-08-28T00:00:00.000Z",
+    });
+    await mkdir(join(bookDir, "story", "state"), { recursive: true });
+    await mkdir(chaptersDir, { recursive: true });
+    await writeFile(join(bookDir, "story", "state", "manifest.json"), JSON.stringify({
+      schemaVersion: 2,
+      language: "vi",
+      lastAppliedChapter: 1,
+      projectionVersion: 1,
+      migrationWarnings: [],
+    }), "utf-8");
+    await writeFile(join(chaptersDir, "0001_Mua.md"), "# Chương 1\n\nMưa rơi ngoài hiên.", "utf-8");
+    const chapter: ChapterMeta = {
+      number: 1,
+      title: "Mưa",
+      status: "drafted",
+      wordCount: 5,
+      createdAt: "2026-08-28T00:00:00.000Z",
+      updatedAt: "2026-08-28T00:00:00.000Z",
+      auditIssues: [],
+      lengthWarnings: [],
+      lengthTelemetry: {
+        language: "vi",
+        target: 2000,
+        softMin: 1728,
+        softMax: 2272,
+        hardMin: 1455,
+        hardMax: 2545,
+        countingMode: "vi_wordlike_tokens_v1",
+        writerCount: 5,
+        postReviseCount: 0,
+        finalCount: 5,
+        repairApplied: false,
+        lengthWarning: true,
+      },
+    };
+    await state.saveChapterIndex(bookId, [chapter]);
+    const restoreVi = await enableViWriting(root);
+    const runner = new PipelineRunner({
+      client: {} as ConstructorParameters<typeof PipelineRunner>[0]["client"],
+      model: "test-model",
+      projectRoot: root,
+    });
+    const acquireBookLock = vi.spyOn(StateManager.prototype, "acquireBookLock")
+      .mockImplementation(async () => {
+        await writeFile(join(chaptersDir, "index.json"), JSON.stringify([{
+          ...chapter,
+          lengthTelemetry: {
+            ...chapter.lengthTelemetry!,
+            language: "en",
+            countingMode: "en_words",
+          },
+        }], null, 2), "utf-8");
+        return async () => undefined;
+      });
+    const auditChapter = vi.spyOn(ContinuityAuditor.prototype, "auditChapter")
+      .mockResolvedValue(createAuditResult({ passed: true }));
+    const saveChapterIndex = vi.spyOn(StateManager.prototype, "saveChapterIndex");
+
+    try {
+      await expect(runner.auditDraft(bookId)).rejects.toMatchObject({
+        name: "WritingLanguagePreflightError",
+        code: "STATE_LANGUAGE_MISMATCH",
+      });
+      expect(acquireBookLock).toHaveBeenCalledTimes(1);
+      expect(auditChapter).not.toHaveBeenCalled();
+      expect(saveChapterIndex).not.toHaveBeenCalled();
+    } finally {
+      restoreVi();
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("fails closed on invalid or telemetry-less Vietnamese chapter indexes", async () => {
+    const root = await mkdtemp(join(tmpdir(), "inkos-runner-vi-index-strict-"));
+    const state = new StateManager(root);
+    const bookId = "vi-index-strict";
+    const bookDir = state.bookDir(bookId);
+    const chaptersDir = join(bookDir, "chapters");
+    await state.saveBookConfig(bookId, {
+      id: bookId,
+      title: "VI Index Strict",
+      platform: "other",
+      genre: "other",
+      language: "vi",
+      status: "active",
+      targetChapters: 10,
+      chapterWordCount: 2000,
+      createdAt: "2026-08-28T00:00:00.000Z",
+      updatedAt: "2026-08-28T00:00:00.000Z",
+    });
+    await mkdir(join(bookDir, "story", "state"), { recursive: true });
+    await mkdir(chaptersDir, { recursive: true });
+    await writeFile(join(bookDir, "story", "state", "manifest.json"), JSON.stringify({
+      schemaVersion: 2,
+      language: "vi",
+      lastAppliedChapter: 1,
+      projectionVersion: 1,
+      migrationWarnings: [],
+    }), "utf-8");
+    await writeFile(join(chaptersDir, "0001_Mua.md"), "# Chương 1\n\nMưa rơi ngoài hiên.", "utf-8");
+    const indexPath = join(chaptersDir, "index.json");
+    await writeFile(indexPath, "{invalid", "utf-8");
+    const restoreVi = await enableViWriting(root);
+    const runner = new PipelineRunner({
+      client: {} as ConstructorParameters<typeof PipelineRunner>[0]["client"],
+      model: "test-model",
+      projectRoot: root,
+    });
+    const acquireBookLock = vi.spyOn(StateManager.prototype, "acquireBookLock");
+    const auditChapter = vi.spyOn(ContinuityAuditor.prototype, "auditChapter")
+      .mockResolvedValue(createAuditResult({ passed: true }));
+    const saveChapterIndex = vi.spyOn(StateManager.prototype, "saveChapterIndex");
+
+    try {
+      await expect(runner.auditDraft(bookId, 1)).rejects.toMatchObject({
+        name: "WritingLanguagePreflightError",
+        code: "STATE_PREFLIGHT_FAILED",
+      });
+
+      await writeFile(indexPath, JSON.stringify([{
+        number: 1,
+        title: "Mưa",
+        status: "drafted",
+        wordCount: 5,
+        createdAt: "2026-08-28T00:00:00.000Z",
+        updatedAt: "2026-08-28T00:00:00.000Z",
+        auditIssues: [],
+        lengthWarnings: [],
+      }], null, 2), "utf-8");
+      await expect(runner.auditDraft(bookId, 1)).rejects.toMatchObject({
+        name: "WritingLanguagePreflightError",
+        code: "STATE_LANGUAGE_MISMATCH",
+      });
+
+      expect(acquireBookLock).not.toHaveBeenCalled();
+      expect(auditChapter).not.toHaveBeenCalled();
+      expect(saveChapterIndex).not.toHaveBeenCalled();
+    } finally {
+      restoreVi();
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("freezes the implicit revise target before waiting for the lock", async () => {
+    const { root, runner, state, bookId } = await createRunnerFixture();
+    const bookDir = state.bookDir(bookId);
+    const chaptersDir = join(bookDir, "chapters");
+    const chapterOne: ChapterMeta = {
+      number: 1,
+      title: "First",
+      status: "audit-failed",
+      wordCount: 20,
+      createdAt: "2026-08-28T00:00:00.000Z",
+      updatedAt: "2026-08-28T00:00:00.000Z",
+      auditIssues: [],
+      lengthWarnings: [],
+    };
+    const chapterTwo: ChapterMeta = {
+      ...chapterOne,
+      number: 2,
+      title: "Second",
+    };
+    await state.ensureControlDocuments(bookId);
+    await writeFile(join(chaptersDir, "0001_First.md"), "# 第一章\n\n林越推开旧门。", "utf-8");
+    await state.saveChapterIndex(bookId, [chapterOne]);
+    const acquireBookLock = vi.spyOn(StateManager.prototype, "acquireBookLock")
+      .mockImplementation(async () => {
+        await writeFile(join(chaptersDir, "0002_Second.md"), "# 第二章\n\n林越没有回头。", "utf-8");
+        await writeFile(
+          join(chaptersDir, "index.json"),
+          JSON.stringify([chapterOne, chapterTwo], null, 2),
+          "utf-8",
+        );
+        return async () => undefined;
+      });
+    const auditChapter = vi.spyOn(ContinuityAuditor.prototype, "auditChapter")
+      .mockResolvedValue(createAuditResult({ passed: true, summary: "clean" }));
+    Object.assign(runner as object, {
+      createGovernedArtifacts: vi.fn(async () => undefined),
+    });
+
+    try {
+      const result = await runner.reviseDraft(bookId);
+
+      expect(result.chapterNumber).toBe(1);
+      expect(acquireBookLock).toHaveBeenCalledTimes(1);
+      expect(auditChapter).toHaveBeenCalledTimes(1);
+      expect(auditChapter.mock.calls[0]?.[1]).toContain("旧门");
+      expect(auditChapter.mock.calls[0]?.[2]).toBe(1);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("revalidates exact Vietnamese revise telemetry after acquiring the lock", async () => {
+    const root = await mkdtemp(join(tmpdir(), "inkos-runner-vi-revise-race-"));
+    const state = new StateManager(root);
+    const bookId = "vi-revise-race";
+    const bookDir = state.bookDir(bookId);
+    const chaptersDir = join(bookDir, "chapters");
+    await state.saveBookConfig(bookId, {
+      id: bookId,
+      title: "VI Revise Race",
+      platform: "other",
+      genre: "other",
+      language: "vi",
+      status: "active",
+      targetChapters: 10,
+      chapterWordCount: 2000,
+      createdAt: "2026-08-28T00:00:00.000Z",
+      updatedAt: "2026-08-28T00:00:00.000Z",
+    });
+    await mkdir(join(bookDir, "story", "state"), { recursive: true });
+    await mkdir(chaptersDir, { recursive: true });
+    await writeFile(join(bookDir, "story", "state", "manifest.json"), JSON.stringify({
+      schemaVersion: 2,
+      language: "vi",
+      lastAppliedChapter: 1,
+      projectionVersion: 1,
+      migrationWarnings: [],
+    }), "utf-8");
+    await writeFile(join(chaptersDir, "0001_Mua.md"), "# Chương 1\n\nMưa rơi ngoài hiên.", "utf-8");
+    const chapter: ChapterMeta = {
+      number: 1,
+      title: "Mưa",
+      status: "audit-failed",
+      wordCount: 5,
+      createdAt: "2026-08-28T00:00:00.000Z",
+      updatedAt: "2026-08-28T00:00:00.000Z",
+      auditIssues: [],
+      lengthWarnings: [],
+      lengthTelemetry: {
+        language: "vi",
+        target: 2000,
+        softMin: 1728,
+        softMax: 2272,
+        hardMin: 1455,
+        hardMax: 2545,
+        countingMode: "vi_wordlike_tokens_v1",
+        writerCount: 5,
+        postReviseCount: 0,
+        finalCount: 5,
+        repairApplied: false,
+        lengthWarning: true,
+      },
+    };
+    await state.saveChapterIndex(bookId, [chapter]);
+    const restoreVi = await enableViWriting(root);
+    const runner = new PipelineRunner({
+      client: {} as ConstructorParameters<typeof PipelineRunner>[0]["client"],
+      model: "test-model",
+      projectRoot: root,
+    });
+    const acquireBookLock = vi.spyOn(StateManager.prototype, "acquireBookLock")
+      .mockImplementation(async () => {
+        await writeFile(join(chaptersDir, "index.json"), JSON.stringify([{
+          ...chapter,
+          lengthTelemetry: {
+            ...chapter.lengthTelemetry!,
+            language: "en",
+            countingMode: "en_words",
+          },
+        }], null, 2), "utf-8");
+        return async () => undefined;
+      });
+    const auditChapter = vi.spyOn(ContinuityAuditor.prototype, "auditChapter")
+      .mockResolvedValue(createAuditResult({ passed: true }));
+    const saveChapterIndex = vi.spyOn(StateManager.prototype, "saveChapterIndex");
+
+    try {
+      await expect(runner.reviseDraft(bookId)).rejects.toMatchObject({
+        name: "WritingLanguagePreflightError",
+        code: "STATE_LANGUAGE_MISMATCH",
+      });
+      expect(acquireBookLock).toHaveBeenCalledTimes(1);
+      expect(auditChapter).not.toHaveBeenCalled();
+      expect(saveChapterIndex).not.toHaveBeenCalled();
+    } finally {
+      restoreVi();
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("uses one locked book profile for resync and audit without a nested lock", async () => {
+    const { root, runner, state, bookId } = await createRunnerFixture();
+    const initialBook = await state.loadBookConfig(bookId);
+    const chapter: ChapterMeta = {
+      number: 1,
+      title: "First",
+      status: "drafted",
+      wordCount: 20,
+      createdAt: "2026-08-28T00:00:00.000Z",
+      updatedAt: "2026-08-28T00:00:00.000Z",
+      auditIssues: [],
+      lengthWarnings: [],
+    };
+    await writeFile(join(state.bookDir(bookId), "chapters", "0001_First.md"), "# 第一章\n\n正文。", "utf-8");
+    await state.saveChapterIndex(bookId, [chapter]);
+    let lockDepth = 0;
+    const acquireBookLock = vi.spyOn(StateManager.prototype, "acquireBookLock")
+      .mockImplementation(async () => {
+        await state.saveBookConfig(bookId, { ...initialBook, language: "en" });
+        lockDepth += 1;
+        return async () => {
+          lockDepth -= 1;
+        };
+      });
+    const chapterResult = {
+      chapterNumber: 1,
+      title: "First",
+      wordCount: 20,
+      auditResult: createAuditResult({ passed: true }),
+      revised: false,
+      status: "ready-for-review" as const,
+    };
+    const auditResult = { ...createAuditResult({ passed: true }), chapterNumber: 1 };
+    const internalResync = vi.fn(async (
+      _book: BookConfig,
+      _profile: WritingLanguageProfile,
+      _targetChapter: number,
+    ) => {
+      expect(lockDepth).toBe(1);
+      return chapterResult;
+    });
+    const internalAudit = vi.fn(async (
+      _book: BookConfig,
+      targetChapter: number,
+      _profile: WritingLanguageProfile,
+    ) => {
+      expect(lockDepth).toBe(1);
+      expect(targetChapter).toBe(1);
+      return auditResult;
+    });
+    Object.assign(runner as object, {
+      _resyncChapterArtifactsLocked: internalResync,
+      _auditDraftLocked: internalAudit,
+    });
+    const publicAudit = vi.spyOn(runner, "auditDraft").mockResolvedValue(auditResult);
+
+    try {
+      const result = await runner.resyncChapterStateAndAudit(bookId, 1);
+
+      expect(result).toEqual({ chapter: chapterResult, audit: auditResult });
+      expect(acquireBookLock).toHaveBeenCalledTimes(1);
+      expect(internalResync.mock.calls[0]?.[0]).toMatchObject({ id: bookId, language: "en" });
+      expect(internalResync.mock.calls[0]?.[1]).toMatchObject({ language: "en" });
+      expect(internalResync.mock.calls[0]?.[2]).toBe(1);
+      expect(internalAudit).toHaveBeenCalledTimes(1);
+      expect(internalAudit.mock.calls[0]?.[0]).toMatchObject({ id: bookId, language: "en" });
+      expect(internalAudit.mock.calls[0]?.[2]).toMatchObject({ language: "en" });
+      expect(publicAudit).not.toHaveBeenCalled();
+      expect(lockDepth).toBe(0);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects a deleted composite audit target before resync writes", async () => {
+    const { root, runner, state, bookId } = await createRunnerFixture();
+    const chaptersDir = join(state.bookDir(bookId), "chapters");
+    const chapter: ChapterMeta = {
+      number: 1,
+      title: "First",
+      status: "drafted",
+      wordCount: 20,
+      createdAt: "2026-08-28T00:00:00.000Z",
+      updatedAt: "2026-08-28T00:00:00.000Z",
+      auditIssues: [],
+      lengthWarnings: [],
+    };
+    await writeFile(join(chaptersDir, "0001_First.md"), "# 第一章\n\n正文。", "utf-8");
+    await state.saveChapterIndex(bookId, [chapter]);
+    vi.spyOn(StateManager.prototype, "acquireBookLock").mockImplementation(async () => {
+      await writeFile(join(chaptersDir, "index.json"), "[]", "utf-8");
+      return async () => undefined;
+    });
+    const internalResync = vi.fn(async () => ({
+      chapterNumber: 1,
+      title: "First",
+      wordCount: 20,
+      auditResult: createAuditResult({ passed: true }),
+      revised: false,
+      status: "ready-for-review" as const,
+    }));
+    const internalAudit = vi.fn(async () => ({
+      ...createAuditResult({ passed: true }),
+      chapterNumber: 1,
+    }));
+    Object.assign(runner as object, {
+      _resyncChapterArtifactsLocked: internalResync,
+      _auditDraftLocked: internalAudit,
+    });
+
+    try {
+      await expect(runner.resyncChapterStateAndAudit(bookId)).rejects.toMatchObject({
+        name: "WritingLanguagePreflightError",
+        code: "STATE_PREFLIGHT_FAILED",
+      });
+      expect(internalResync).not.toHaveBeenCalled();
+      expect(internalAudit).not.toHaveBeenCalled();
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps explicit telemetry language independent from its counting mode", async () => {
+    const { root, runner } = await createRunnerFixture();
+    try {
+      const telemetry = (runner as unknown as {
+        buildLengthTelemetry: (params: {
+          language: "vi";
+          lengthSpec: {
+            target: number;
+            softMin: number;
+            softMax: number;
+            hardMin: number;
+            hardMax: number;
+            countingMode: "en_words";
+          };
+          writerCount: number;
+          postReviseCount: number;
+          finalCount: number;
+          repairApplied: boolean;
+          lengthWarning: boolean;
+        }) => { language?: string; countingMode: string };
+      }).buildLengthTelemetry({
+        language: "vi",
+        lengthSpec: {
+          target: 900,
+          softMin: 778,
+          softMax: 1022,
+          hardMin: 655,
+          hardMax: 1145,
+          countingMode: "en_words",
+        },
+        writerCount: 700,
+        postReviseCount: 750,
+        finalCount: 800,
+        repairApplied: true,
+        lengthWarning: false,
+      });
+
+      expect(telemetry).toMatchObject({
+        language: "vi",
+        countingMode: "en_words",
+      });
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("preserves a parent writing profile through nested operation context", async () => {
+    const { root, runner } = await createRunnerFixture();
+    const profile = resolveWritingLanguageProfile("vi");
+    const signal = new AbortController().signal;
+    try {
+      const context = await runner.runWithAgentContext(
+        { writingProfile: profile },
+        () => runner.runWithAbortSignal(signal, async () => runner.createAgentContext("writer", "test-book")),
+      );
+
+      expect(context.writingProfile).toBe(profile);
+      expect(context.signal).toBe(signal);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
   });
 
   it("does not reuse override clients when credential sources differ", () => {
@@ -5306,7 +6121,7 @@ describe("PipelineRunner", () => {
     await rm(root, { recursive: true, force: true });
   });
 
-  it("uses chapter length telemetry target for manual revise when available", async () => {
+  it("uses the telemetry target but falls back to explicit book language for manual revise", async () => {
     const { root, runner, state, bookId } = await createRunnerFixture();
     const storyDir = join(state.bookDir(bookId), "story");
     const chaptersDir = join(state.bookDir(bookId), "chapters");
@@ -5317,7 +6132,7 @@ describe("PipelineRunner", () => {
       ...(await state.loadBookConfig(bookId)),
       platform: "other",
       genre: "progression",
-      language: "en",
+      language: "zh",
       chapterWordCount: 1800,
     });
 
@@ -5387,7 +6202,7 @@ describe("PipelineRunner", () => {
       expect(reviseChapter).toHaveBeenCalledTimes(1);
       expect(reviseChapter.mock.calls[0]?.[6]?.lengthSpec).toMatchObject({
         target: 900,
-        countingMode: "en_words",
+        countingMode: "zh_chars",
       });
     } finally {
       await rm(root, { recursive: true, force: true });

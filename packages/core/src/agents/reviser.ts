@@ -2,6 +2,7 @@ import { BaseAgent } from "./base.js";
 import type { GenreProfile } from "../models/genre-profile.js";
 import type { BookRules } from "../models/book-rules.js";
 import type { LengthSpec } from "../models/length-governance.js";
+import type { ScaffoldLanguage } from "../models/writing-language.js";
 import type { AuditIssue } from "./continuity.js";
 import type { ChapterIntent, ChapterMemo, ContextPackage, RuleStack } from "../models/input-governance.js";
 import { readGenreProfile, readBookLanguage, readBookRules } from "./rules-reader.js";
@@ -21,6 +22,7 @@ import {
 } from "../utils/narrative-control.js";
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
+import { resolveWritingLanguageProfile } from "../utils/language.js";
 import {
   readStoryFrame,
   readVolumeMap,
@@ -165,8 +167,10 @@ export class ReviserAgent extends BaseAgent {
       ? styleGuideRaw
       : (legacyRulesBody || "(无文风指南)");
 
-    const isEnglish = (bookLanguage ?? gp.language) === "en";
-    const resolvedLanguage = isEnglish ? "en" : "zh";
+    const resolvedLanguage = resolveWritingLanguageProfile(
+      bookLanguage ?? gp.language,
+    ).scaffoldLanguage;
+    const isEnglish = resolvedLanguage === "en";
 
     const issueList = mode === "auto"
       ? buildTieredIssueList(issues, isEnglish)
@@ -388,7 +392,7 @@ ${chapterContent}`;
     protagonistBlock: string;
     numericalRule: string;
     lengthGuardrail: string;
-    resolvedLanguage: "zh" | "en";
+    resolvedLanguage: ScaffoldLanguage;
     lengthSpec?: LengthSpec;
     autoOutputMode: AutoOutputMode;
   }): string {
@@ -506,7 +510,7 @@ REPLACEMENT_TEXT:
     numericalRule: string;
     lengthGuardrail: string;
     mode: ReviseMode;
-    resolvedLanguage: "zh" | "en";
+    resolvedLanguage: ScaffoldLanguage;
   }): string {
     const { langPrefix, gp, protagonistBlock, numericalRule, lengthGuardrail, mode } = params;
     const modeDesc = MODE_DESCRIPTIONS[mode];

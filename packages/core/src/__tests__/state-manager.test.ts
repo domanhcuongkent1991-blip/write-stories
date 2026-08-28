@@ -932,6 +932,32 @@ describe("StateManager", () => {
       expect(currentFocus).not.toContain("# Current Focus");
     });
 
+    it("uses English control-document scaffolds for Vietnamese books", async () => {
+      const bookDir = manager.bookDir("vi-book");
+      await manager.ensureControlDocumentsAt(bookDir, "vi");
+
+      const storyDir = join(bookDir, "story");
+      const [authorIntent, currentFocus, styleGuide] = await Promise.all([
+        readFile(join(storyDir, "author_intent.md"), "utf-8"),
+        readFile(join(storyDir, "current_focus.md"), "utf-8"),
+        readFile(join(storyDir, "style_guide.md"), "utf-8"),
+      ]);
+
+      expect(authorIntent).toContain("# Author Intent");
+      expect(currentFocus).toContain("# Current Focus");
+      expect(styleGuide).toContain("Writing Methodology");
+    });
+
+    it("rejects an explicit unsupported book language before creating control documents", async () => {
+      const bookId = "unsupported-language-book";
+      const bookDir = manager.bookDir(bookId);
+      await mkdir(bookDir, { recursive: true });
+      await writeFile(join(bookDir, "book.json"), JSON.stringify({ language: "fr" }), "utf-8");
+
+      await expect(manager.ensureControlDocuments(bookId)).rejects.toThrow();
+      await expect(stat(join(bookDir, "story"))).rejects.toThrow();
+    });
+
     it("bootstraps structured runtime state from legacy markdown truth files", async () => {
       const bookId = "runtime-state-book";
       const storyDir = join(manager.bookDir(bookId), "story");

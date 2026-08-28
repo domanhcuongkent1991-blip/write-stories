@@ -4,7 +4,7 @@ import type { WriteChapterOutput, WriterAgent } from "../agents/writer.js";
 import type { BookConfig } from "../models/book.js";
 import type { ContextPackage, RuleStack } from "../models/input-governance.js";
 import type { Logger } from "../utils/logger.js";
-import type { LengthLanguage } from "../utils/length-metrics.js";
+import type { ScaffoldLanguage } from "../models/writing-language.js";
 import {
   buildStateDegradedPersistenceOutput,
   retrySettlementAfterValidationFailure,
@@ -31,7 +31,7 @@ export async function validateChapterTruthPersistence(params: {
     contextPackage: ContextPackage;
     ruleStack: RuleStack;
   };
-  readonly language: LengthLanguage;
+  readonly language: ScaffoldLanguage;
   readonly logWarn: (message: { zh: string; en: string }) => void;
   readonly logger?: Pick<Logger, "warn">;
 }): Promise<{

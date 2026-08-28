@@ -8,6 +8,8 @@ import {
   hydrateActivatedSkillGuidance,
   type ActivatedSkillGuidance,
 } from "../agent/skill-tool.js";
+import { applyOutputLanguageContract } from "./output-language-contract.js";
+import type { WritingLanguageProfile } from "../utils/language.js";
 
 export interface AgentContext {
   readonly client: LLMClient;
@@ -18,6 +20,7 @@ export interface AgentContext {
   readonly onStreamProgress?: OnStreamProgress;
   readonly signal?: AbortSignal;
   readonly activatedSkills?: ReadonlyArray<ActivatedSkillGuidance>;
+  readonly writingProfile?: WritingLanguageProfile;
 }
 
 export abstract class BaseAgent {
@@ -35,7 +38,7 @@ export abstract class BaseAgent {
     messages: ReadonlyArray<LLMMessage>,
     options?: { readonly temperature?: number; readonly maxTokens?: number },
   ): Promise<LLMResponse> {
-    return runWorkerAgent(this.ctx.client, this.ctx.model, await this.appendTaskSkillGuidance(messages), {
+    return runWorkerAgent(this.ctx.client, this.ctx.model, await this.finalizeTaskMessages(messages), {
       ...options,
       onStreamProgress: this.ctx.onStreamProgress,
       signal: this.ctx.signal,
@@ -50,7 +53,7 @@ export abstract class BaseAgent {
     return runWorkerAgentTool(
       this.ctx.client,
       this.ctx.model,
-      await this.appendTaskSkillGuidance(messages),
+      await this.finalizeTaskMessages(messages),
       resultTool,
       {
         ...options,
@@ -66,7 +69,7 @@ export abstract class BaseAgent {
     });
   }
 
-  private async appendTaskSkillGuidance(
+  private async finalizeTaskMessages(
     messages: ReadonlyArray<LLMMessage>,
   ): Promise<ReadonlyArray<LLMMessage>> {
     const query = messages
@@ -79,7 +82,8 @@ export abstract class BaseAgent {
     } catch (error) {
       this.log?.warn(`[skills] Reference retrieval failed for ${this.name}: ${String(error)}`);
     }
-    return appendActivatedSkillGuidance(messages, activations);
+    const withSkills = appendActivatedSkillGuidance(messages, activations);
+    return applyOutputLanguageContract(withSkills, this.ctx.writingProfile);
   }
 
   /**
@@ -93,10 +97,7 @@ export abstract class BaseAgent {
   ): Promise<LLMResponse> {
     // OpenAI has native search — use it directly
     if (this.ctx.client.provider === "openai") {
-      return runWorkerAgent(this.ctx.client, this.ctx.model, appendActivatedSkillGuidance(
-        messages,
-        this.ctx.activatedSkills,
-      ), {
+      return runWorkerAgent(this.ctx.client, this.ctx.model, await this.finalizeTaskMessages(messages), {
         ...options,
         webSearch: true,
         onStreamProgress: this.ctx.onStreamProgress,

@@ -6,6 +6,7 @@
  */
 
 import type { AuditIssue } from "./continuity.js";
+import type { ScaffoldLanguage } from "../models/writing-language.js";
 
 export interface SensitiveWordMatch {
   readonly word: string;
@@ -18,7 +19,7 @@ export interface SensitiveWordResult {
   readonly found: ReadonlyArray<SensitiveWordMatch>;
 }
 
-type SensitiveWordLanguage = "zh" | "en";
+type SensitiveWordLanguage = ScaffoldLanguage;
 
 // Political terms — severity "block"
 const POLITICAL_WORDS: ReadonlyArray<string> = [

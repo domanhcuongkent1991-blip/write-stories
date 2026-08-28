@@ -102,6 +102,39 @@ describe("applyRuntimeStateDelta", () => {
     expect(result.chapterSummaries.rows.map((row) => row.chapter)).toEqual([11, 12]);
   });
 
+  it("uses the English scaffold labels for Vietnamese runtime state", () => {
+    const result = applyRuntimeStateDelta({
+      snapshot: {
+        manifest: {
+          schemaVersion: 2,
+          language: "vi",
+          lastAppliedChapter: 0,
+          projectionVersion: 1,
+          migrationWarnings: [],
+        },
+        currentState: { chapter: 0, facts: [] },
+        hooks: { hooks: [] },
+        chapterSummaries: { rows: [] },
+      },
+      delta: RuntimeStateDeltaSchema.parse({
+        chapter: 1,
+        currentStatePatch: { currentGoal: "Find the missing ledger." },
+        hookOps: { upsert: [], resolve: [], defer: [] },
+        notes: [],
+      }),
+    });
+
+    expect(result.manifest.language).toBe("vi");
+    expect(result.currentState.facts).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          predicate: "Current Goal",
+          object: "Find the missing ledger.",
+        }),
+      ]),
+    );
+  });
+
   it("rejects duplicate summary rows for the same chapter", () => {
     expect(() =>
       applyRuntimeStateDelta({

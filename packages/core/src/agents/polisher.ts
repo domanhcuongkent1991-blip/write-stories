@@ -1,11 +1,12 @@
 import { BaseAgent } from "./base.js";
 import type { ChapterMemo } from "../models/input-governance.js";
+import type { ScaffoldLanguage } from "../models/writing-language.js";
 
 export interface PolishChapterInput {
   readonly chapterContent: string;
   readonly chapterNumber: number;
   readonly chapterMemo?: ChapterMemo;
-  readonly language?: "zh" | "en";
+  readonly language?: ScaffoldLanguage;
   readonly temperature?: number;
 }
 

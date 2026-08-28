@@ -4,6 +4,7 @@ import { parseMarkdownTableRows } from "../utils/story-markdown.js";
 import { readCharacterContext } from "../utils/outline-paths.js";
 import { readBookRules as readStructuredBookRules } from "./rules-reader.js";
 import type { StoredHook } from "../state/memory-db.js";
+import type { ScaffoldLanguage } from "../models/writing-language.js";
 
 async function readOrEmpty(path: string): Promise<string> {
   try {
@@ -236,7 +237,7 @@ function extractRowsByRelation(
 export function formatRelevantThreads(
   hooks: ReadonlyArray<StoredHook>,
   subplotBoardRaw: string,
-  language: "zh" | "en" = "zh",
+  language: ScaffoldLanguage = "zh",
 ): string {
   const hookRows = hooks.map((hook) => `- ${hook.hookId}: ${[
     hook.type,
@@ -264,7 +265,7 @@ export function formatRelevantThreads(
 export function formatRecyclableHooks(
   hooks: ReadonlyArray<StoredHook>,
   chapterNumber: number,
-  language: "zh" | "en" = "zh",
+  language: ScaffoldLanguage = "zh",
 ): string {
   if (hooks.length === 0) {
     return language === "en"

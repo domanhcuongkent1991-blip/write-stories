@@ -172,6 +172,36 @@ describe("VI writing preflight", () => {
     expect(await readFile(manifestPath, "utf-8")).toBe(before);
   });
 
+  it("accepts VI with a valid VI manifest without rewriting it", async () => {
+    const root = await fixture();
+    await mkdir(join(root, ".inkos"));
+    await writeFile(join(root, ".inkos", "vi-writing-v1.json"), JSON.stringify({
+      schemaVersion: 1,
+      contractVersion: "vi-writing-v1",
+      projectRoot: resolve(root),
+    }));
+    const bookDir = join(root, "books", "demo");
+    await mkdir(join(bookDir, "story", "state"), { recursive: true });
+    const manifestPath = join(bookDir, "story", "state", "manifest.json");
+    await writeFile(manifestPath, JSON.stringify({
+      schemaVersion: 2,
+      language: "vi",
+      lastAppliedChapter: 0,
+      projectionVersion: 1,
+      migrationWarnings: [],
+    }));
+    const before = await readFile(manifestPath, "utf-8");
+
+    await expect(preflightWritingLanguage({
+      projectRoot: root,
+      bookDir,
+      language: "vi",
+      operation: "write",
+      env: { INKOS_EXPERIMENTAL_WRITING_VI: "1" },
+    })).resolves.toMatchObject({ language: "vi" });
+    expect(await readFile(manifestPath, "utf-8")).toBe(before);
+  });
+
   it("rejects VI telemetry without the VI language or counting mode", async () => {
     const root = await fixture();
     await mkdir(join(root, ".inkos"));

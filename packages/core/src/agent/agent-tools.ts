@@ -44,6 +44,7 @@ import {
 } from "../interaction/action-envelope.js";
 import { ResearchSearchConfigSchema } from "../models/project.js";
 import { searchWeb } from "../utils/web-search.js";
+import { WritingLanguagePreflightError } from "../state/writing-language-preflight.js";
 import {
   runAsWorkflowTrajectory,
   runWithAgentTrajectoryRole,
@@ -1663,6 +1664,13 @@ export function createImportChaptersTool(
       const targetBookId = resolveToolBookId("import_chapters", params.bookId, activeBookId);
 
       const state = new StateManager(projectRoot);
+      const book = await state.loadBookConfig(targetBookId);
+      if (book.language === "vi") {
+        throw new WritingLanguagePreflightError(
+          "WRITING_LANGUAGE_MODE_UNSUPPORTED",
+          "Vietnamese books are not supported for chapter import.",
+        );
+      }
       const existingChapterCount = (await state.getNextChapterNumber(targetBookId)) - 1;
       if (existingChapterCount > 0 && params.resumeFrom === undefined) {
         throw new Error(
@@ -1805,12 +1813,19 @@ export function createSpinoffBookTool(
       const parentBookId = assertSafeBookId(params.parentBookId, "spinoff_create.parentBookId");
       const state = new StateManager(projectRoot);
       const parent = await state.loadBookConfig(parentBookId);
+      const parentLanguage = parent.language;
+      if (parentLanguage === "vi") {
+        throw new WritingLanguagePreflightError(
+          "WRITING_LANGUAGE_MODE_UNSUPPORTED",
+          "Vietnamese parent books are not supported for side-story creation.",
+        );
+      }
       const book = buildAgentBookConfig({
         ...params,
         parentBookId,
         genre: params.genre ?? parent.genre,
         platform: params.platform ?? parent.platform,
-        language: params.language ?? parent.language,
+        language: params.language ?? parentLanguage,
         targetChapters: params.targetChapters ?? parent.targetChapters,
         chapterWordCount: params.chapterWordCount ?? parent.chapterWordCount,
       });
@@ -1931,7 +1946,13 @@ export function createContinuationImportTool(
       let created = false;
       if (requestedBookId) {
         bookId = resolveToolBookId("continuation_import", requestedBookId, activeBookId);
-        await state.loadBookConfig(bookId);
+        const book = await state.loadBookConfig(bookId);
+        if (book.language === "vi") {
+          throw new WritingLanguagePreflightError(
+            "WRITING_LANGUAGE_MODE_UNSUPPORTED",
+            "Vietnamese books are not supported for continuation import.",
+          );
+        }
       } else {
         if (!params.title?.trim()) {
           throw new Error("continuation_import requires title when no existing bookId is selected.");

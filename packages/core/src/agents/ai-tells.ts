@@ -1,3 +1,5 @@
+import type { ScaffoldLanguage } from "../models/writing-language.js";
+
 /**
  * Structural AI-tell detection — pure rule-based analysis (no LLM).
  *
@@ -19,7 +21,7 @@ export interface AITellResult {
   readonly issues: ReadonlyArray<AITellIssue>;
 }
 
-type AITellLanguage = "zh" | "en";
+type AITellLanguage = ScaffoldLanguage;
 
 const HEDGE_WORDS: Record<AITellLanguage, ReadonlyArray<string>> = {
   zh: ["似乎", "可能", "或许", "大概", "某种程度上", "一定程度上", "在某种意义上"],

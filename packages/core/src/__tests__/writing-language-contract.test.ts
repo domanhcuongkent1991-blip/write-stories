@@ -5,6 +5,9 @@ import {
   resolveWritingLanguageProfile,
   inferLanguage,
 } from "../index.js";
+import { BookConfigSchema } from "../models/book.js";
+import { GenreProfileSchema } from "../models/genre-profile.js";
+import { RuntimeStateLanguageSchema, StateManifestSchema } from "../models/runtime-state.js";
 
 describe("writing language contract", () => {
   it("parses zh, en and explicit vi", () => {
@@ -19,8 +22,30 @@ describe("writing language contract", () => {
     expect(inferLanguage("")).toBe("zh");
   });
 
-  it("does not widen project language to VI", () => {
+  it("accepts VI in persisted book and runtime state contracts", () => {
+    expect(BookConfigSchema.parse({
+      id: "vi-book",
+      title: "Vietnamese Book",
+      platform: "other",
+      genre: "other",
+      status: "outlining",
+      language: "vi",
+      createdAt: "2026-08-28T00:00:00.000Z",
+      updatedAt: "2026-08-28T00:00:00.000Z",
+    }).language).toBe("vi");
+    expect(RuntimeStateLanguageSchema.parse("vi")).toBe("vi");
+    expect(StateManifestSchema.parse({
+      schemaVersion: 2,
+      language: "vi",
+      lastAppliedChapter: 0,
+      projectionVersion: 1,
+      migrationWarnings: [],
+    }).language).toBe("vi");
+  });
+
+  it("does not widen project or genre-profile language to VI", () => {
     expect(() => ProjectConfigSchema.shape.language.parse("vi")).toThrow();
+    expect(() => GenreProfileSchema.shape.language.parse("vi")).toThrow();
   });
 
   it("resolves VI to an explicit English-scaffold strategy", () => {

@@ -1,4 +1,4 @@
-import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -18,6 +18,28 @@ describe("runtime-state-store memory helpers", () => {
       await rm(root, { recursive: true, force: true });
       root = "";
     }
+  });
+
+  it("bootstraps and loads a Vietnamese runtime manifest from book.json", async () => {
+    root = await mkdtemp(join(tmpdir(), "inkos-runtime-state-vi-"));
+    const bookDir = join(root, "book");
+    const storyDir = join(bookDir, "story");
+    await mkdir(storyDir, { recursive: true });
+    await Promise.all([
+      writeFile(join(bookDir, "book.json"), JSON.stringify({ language: "vi" }), "utf-8"),
+      writeFile(join(storyDir, "current_state.md"), "# Current State\n", "utf-8"),
+      writeFile(join(storyDir, "pending_hooks.md"), "", "utf-8"),
+      writeFile(join(storyDir, "chapter_summaries.md"), "", "utf-8"),
+    ]);
+
+    const snapshot = await loadRuntimeStateSnapshot(bookDir);
+    const manifest = JSON.parse(await readFile(
+      join(storyDir, "state", "manifest.json"),
+      "utf-8",
+    )) as { language?: unknown };
+
+    expect(snapshot.manifest.language).toBe("vi");
+    expect(manifest.language).toBe("vi");
   });
 
   it("prefers structured runtime state over stale markdown projections for narrative memory", async () => {

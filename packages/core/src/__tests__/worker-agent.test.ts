@@ -2,6 +2,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { Type } from "@sinclair/typebox";
 import { runWorkerAgent, runWorkerAgentTool } from "../agent/worker-agent.js";
 import { BaseAgent, type AgentContext } from "../agents/base.js";
+import type { ActivatedSkillGuidance } from "../agent/skill-tool.js";
+import type { LLMMessage } from "../llm/provider.js";
+import { resolveWritingLanguageProfile } from "../utils/language.js";
 
 const chatCompletionMock = vi.hoisted(() => vi.fn());
 const guardedPiStreamMock = vi.hoisted(() => vi.fn());
@@ -49,6 +52,90 @@ class TwoStepWorker extends BaseAgent {
     await this.chat([{ role: "user", content: "第一步" }]);
     await this.chat([{ role: "user", content: "第二步" }]);
   }
+}
+
+class ContractProbeAgent extends BaseAgent {
+  get name(): string { return "contract-probe"; }
+
+  async runChat(messages: ReadonlyArray<LLMMessage>) {
+    return this.chat(messages);
+  }
+
+  async runSubmitStructured(messages: ReadonlyArray<LLMMessage>) {
+    return this.submitStructured(messages, {
+      name: "submit_state",
+      label: "Submit state",
+      description: "Submit host-consumed state.",
+      parameters: Type.Object({ chapter: Type.Integer() }),
+    });
+  }
+
+  async runNativeSearch(messages: ReadonlyArray<LLMMessage>) {
+    return this.chatWithSearch(messages);
+  }
+}
+
+const viSkillGuidance: ReadonlyArray<ActivatedSkillGuidance> = [{
+  skill: {
+    id: "vi-contract-skill",
+    name: "VI Contract Skill",
+    description: "Custom skill guidance for contract ordering.",
+    body: "CUSTOM SKILL GUIDANCE",
+    source: "builtin",
+  },
+  resources: [],
+}];
+
+function viContext(): AgentContext & {
+  readonly writingProfile: ReturnType<typeof resolveWritingLanguageProfile>;
+} {
+  return {
+    client: client(),
+    model: "deepseek-v4-flash",
+    projectRoot: "/tmp/inkos-worker-test",
+    activatedSkills: viSkillGuidance,
+    writingProfile: resolveWritingLanguageProfile("vi"),
+  };
+}
+
+function expectSingleViContract(content: string): void {
+  const header = "HOST-ENFORCED VI OUTPUT CONTRACT";
+  expect(content).toContain("CUSTOM SKILL GUIDANCE");
+  expect(content).toContain(header);
+  expect(content.indexOf(header)).toBeGreaterThan(content.indexOf("CUSTOM SKILL GUIDANCE"));
+  expect((content.match(new RegExp(header, "g")) ?? [])).toHaveLength(1);
+}
+
+async function mockStructuredStateToolCall(): Promise<void> {
+  const { createAssistantMessageEventStream } = await import("@mariozechner/pi-ai");
+  guardedPiStreamMock.mockImplementation((model: AgentContext["client"]["_piModel"]) => {
+    const stream = createAssistantMessageEventStream();
+    const message = {
+      role: "assistant" as const,
+      content: [{
+        type: "toolCall" as const,
+        id: "state-vi-1",
+        name: "submit_state",
+        arguments: { chapter: 1 },
+      }],
+      api: model?.api ?? "openai-completions",
+      provider: model?.provider ?? "openai",
+      model: model?.id ?? "deepseek-v4-flash",
+      usage: {
+        input: 0,
+        output: 0,
+        cacheRead: 0,
+        cacheWrite: 0,
+        totalTokens: 0,
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+      },
+      stopReason: "toolUse" as const,
+      timestamp: Date.now(),
+    };
+    stream.push({ type: "done", reason: "toolUse", message });
+    stream.end(message);
+    return stream;
+  });
 }
 
 describe("Pi worker harness", () => {
@@ -184,5 +271,52 @@ describe("Pi worker harness", () => {
 
     expect(result).toEqual({ label: "母亲", status: "等待退烧药" });
     expect(guardedPiStreamMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("adds one VI contract after activated skill guidance at the chat provider boundary", async () => {
+    chatCompletionMock.mockResolvedValue({
+      content: "Vietnamese chapter prose",
+      usage: { promptTokens: 12, completionTokens: 3, totalTokens: 15 },
+    });
+    const agent = new ContractProbeAgent(viContext());
+
+    await agent.runChat([
+      { role: "system", content: "CUSTOM PROJECT GUIDANCE" },
+      { role: "user", content: "Write chapter one" },
+    ]);
+
+    const providerMessages = chatCompletionMock.mock.calls[0]?.[2] ?? [];
+    expectSingleViContract(providerMessages[0]?.content ?? "");
+  });
+
+  it("adds one VI contract to the guarded Pi stream context for structured submission", async () => {
+    await mockStructuredStateToolCall();
+    const agent = new ContractProbeAgent(viContext());
+
+    await expect(agent.runSubmitStructured([
+      { role: "system", content: "CUSTOM PROJECT GUIDANCE" },
+      { role: "user", content: "Submit chapter state" },
+    ])).resolves.toEqual({ chapter: 1 });
+
+    expect(guardedPiStreamMock).toHaveBeenCalledTimes(1);
+    const streamContext = guardedPiStreamMock.mock.calls[0]?.[1] as { systemPrompt?: string } | undefined;
+    expectSingleViContract(streamContext?.systemPrompt ?? "");
+  });
+
+  it("adds one VI contract through the native OpenAI search provider path", async () => {
+    chatCompletionMock.mockResolvedValue({
+      content: "Vietnamese researched prose",
+      usage: { promptTokens: 12, completionTokens: 3, totalTokens: 15 },
+    });
+    const agent = new ContractProbeAgent(viContext());
+
+    await agent.runNativeSearch([
+      { role: "system", content: "CUSTOM PROJECT GUIDANCE" },
+      { role: "user", content: "Research and write chapter one" },
+    ]);
+
+    expect(chatCompletionMock.mock.calls[0]?.[3]).toMatchObject({ webSearch: true });
+    const providerMessages = chatCompletionMock.mock.calls[0]?.[2] ?? [];
+    expectSingleViContract(providerMessages[0]?.content ?? "");
   });
 });

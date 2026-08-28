@@ -2,6 +2,8 @@ import { readFile, readdir, mkdir } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { BaseAgent } from "./base.js";
 import type { BookConfig } from "../models/book.js";
+import type { ScaffoldLanguage } from "../models/writing-language.js";
+import { resolveWritingLanguageProfile } from "../utils/language.js";
 import {
   ContextPackageSchema,
   type ChapterTrace,
@@ -55,7 +57,7 @@ export interface ContextBudget {
 export interface CompressibleContextCompileRequest {
   readonly chapterNumber: number;
   readonly goal: string;
-  readonly language: "zh" | "en";
+  readonly language: ScaffoldLanguage;
   readonly maxInputTokens: number;
   readonly protectedEntries: ContextPackage["selectedContext"];
   readonly compressibleEntries: ContextPackage["selectedContext"];
@@ -69,7 +71,7 @@ export interface OutlineSectionSelectionRequest {
   readonly chapterNumber: number;
   readonly goal: string;
   readonly outlineNode: string;
-  readonly language: "zh" | "en";
+  readonly language: ScaffoldLanguage;
   readonly candidates: ReadonlyArray<{
     readonly source: string;
     readonly heading: string;
@@ -92,11 +94,14 @@ export async function composeGovernedChapter(input: ComposeChapterInput): Promis
   const storyDir = join(input.bookDir, "story");
   const runtimeDir = join(storyDir, "runtime");
   await mkdir(runtimeDir, { recursive: true });
+  const scaffoldLanguage = resolveWritingLanguageProfile(
+    input.book.language ?? "zh",
+  ).scaffoldLanguage;
 
   const baseContext = await collectSelectedContext(
     storyDir,
     input.plan,
-    input.book.language ?? "zh",
+    scaffoldLanguage,
     input.outlineSectionSelector,
     input.memorySemanticSelector,
   );
@@ -110,7 +115,7 @@ export async function composeGovernedChapter(input: ComposeChapterInput): Promis
     contextPackage: initialContextPackage,
     chapterNumber: input.chapterNumber,
     goal: input.plan.intent.goal,
-    language: input.book.language ?? "zh",
+    language: scaffoldLanguage,
     contextBudget: input.contextBudget,
     compiler: input.compressibleContextCompiler,
     onContextCompression: input.onContextCompression,
@@ -160,7 +165,7 @@ async function applyContextBudgetIfNeeded(params: {
   readonly contextPackage: ContextPackage;
   readonly chapterNumber: number;
   readonly goal: string;
-  readonly language: "zh" | "en";
+  readonly language: ScaffoldLanguage;
   readonly contextBudget?: ContextBudget;
   readonly compiler?: CompressibleContextCompiler;
   readonly onContextCompression?: ContextCompressionCallback;
@@ -546,12 +551,15 @@ export class ComposerAgent extends BaseAgent {
 async function loadReferenceContext(input: ComposeChapterInput): Promise<BookReferenceContextSelection> {
   if (!input.referenceContextProvider) return { entries: [], notes: [] };
   try {
+    const scaffoldLanguage = resolveWritingLanguageProfile(
+      input.book.language ?? "zh",
+    ).scaffoldLanguage;
     return await input.referenceContextProvider({
       chapterNumber: input.chapterNumber,
       goal: input.plan.intent.goal,
       outlineNode: input.plan.intent.outlineNode ?? "",
       mustKeep: input.plan.intent.mustKeep,
-      language: input.book.language ?? "zh",
+      language: scaffoldLanguage,
     });
   } catch {
     return { entries: [], notes: ["book-reference-context-unavailable"] };
@@ -572,7 +580,7 @@ export function contextBudgetFromClient(client: LLMClient): ContextBudget | unde
 async function collectSelectedContext(
   storyDir: string,
   plan: PlanChapterOutput,
-  language: "zh" | "en",
+  language: ScaffoldLanguage,
   outlineSectionSelector?: OutlineSectionSelector,
   memorySemanticSelector?: MemorySemanticSelector,
 ): Promise<{
@@ -822,7 +830,7 @@ async function buildHookDebtEntries(
       readonly payoffTiming?: string;
       readonly notes: string;
     }>,
-  language: "zh" | "en",
+  language: ScaffoldLanguage,
 ): Promise<ContextPackage["selectedContext"]> {
     const targetHookIds = [...new Set(plan.memo.threadRefs)];
     if (targetHookIds.length === 0) {
@@ -911,7 +919,7 @@ async function maybeOutlineSectionSources(
   reason: string,
   plan: PlanChapterOutput,
   kind: "story-frame" | "volume-map",
-  language: "zh" | "en",
+  language: ScaffoldLanguage,
   outlineSectionSelector?: OutlineSectionSelector,
 ): Promise<ContextPackage["selectedContext"]> {
     const path = join(storyDir, fileName);
@@ -950,7 +958,7 @@ async function selectOutlineSectionEntries(params: {
   readonly reason: string;
   readonly plan: PlanChapterOutput;
   readonly kind: "story-frame" | "volume-map";
-  readonly language: "zh" | "en";
+  readonly language: ScaffoldLanguage;
   readonly outlineSectionSelector?: OutlineSectionSelector;
 }): Promise<ContextPackage["selectedContext"]> {
     const sections = splitMarkdownSections(params.content);

@@ -4,6 +4,12 @@ import { join, resolve } from "node:path";
 import type { BookConfig } from "../models/book.js";
 import type { ChapterMeta } from "../models/chapter.js";
 import { bootstrapStructuredStateFromMarkdown, resolveDurableStoryProgress } from "./state-bootstrap.js";
+import {
+  WritingLanguageSchema,
+  type ScaffoldLanguage,
+  type WritingLanguage,
+} from "../models/writing-language.js";
+import { resolveWritingLanguageProfile } from "../utils/language.js";
 
 const BOOK_LOCK_HEARTBEAT_MS = 30_000;
 const BOOK_LOCK_LEASE_MS = 3 * 60_000;
@@ -46,13 +52,13 @@ export class BookWriteLockError extends Error {
 export class StateManager {
   constructor(private readonly projectRoot: string) {}
 
-  private static defaultAuthorIntent(language: "zh" | "en"): string {
+  private static defaultAuthorIntent(language: ScaffoldLanguage): string {
     return language === "zh"
       ? "# 作者意图\n\n（在这里描述这本书的长期创作方向。）\n"
       : "# Author Intent\n\n(Describe the long-horizon vision for this book here.)\n";
   }
 
-  private static defaultCurrentFocus(language: "zh" | "en"): string {
+  private static defaultCurrentFocus(language: ScaffoldLanguage): string {
     return language === "zh"
       ? "# 当前聚焦\n\n## 当前重点\n\n（描述接下来 1-3 章最需要优先推进的内容。）\n"
       : "# Current Focus\n\n## Active Focus\n\n(Describe what the next 1-3 chapters should prioritize.)\n";
@@ -65,9 +71,11 @@ export class StateManager {
 
   async ensureControlDocumentsAt(
     bookDir: string,
-    language: "zh" | "en",
+    writingLanguage: WritingLanguage,
     authorIntent?: string,
   ): Promise<void> {
+    const language = WritingLanguageSchema.parse(writingLanguage);
+    const scaffoldLanguage = resolveWritingLanguageProfile(language).scaffoldLanguage;
     const storyDir = join(bookDir, "story");
     const runtimeDir = join(storyDir, "runtime");
     const outlineDir = join(storyDir, "outline");
@@ -84,12 +92,12 @@ export class StateManager {
       join(storyDir, "author_intent.md"),
       authorIntent?.trim()
         ? authorIntent.trimEnd() + "\n"
-        : StateManager.defaultAuthorIntent(language),
+        : StateManager.defaultAuthorIntent(scaffoldLanguage),
     );
 
     await this.writeIfMissing(
       join(storyDir, "current_focus.md"),
-      StateManager.defaultCurrentFocus(language),
+      StateManager.defaultCurrentFocus(scaffoldLanguage),
     );
 
     // Ensure style_guide includes writing methodology even without reference text
@@ -98,11 +106,11 @@ export class StateManager {
       const existing = await readFile(styleGuidePath, "utf-8");
       if (!existing.includes("写作方法论") && !existing.includes("Writing Methodology")) {
         const { buildWritingMethodologySection } = await import("../utils/writing-methodology.js");
-        await writeFile(styleGuidePath, `${existing}\n\n${buildWritingMethodologySection(language)}`, "utf-8");
+        await writeFile(styleGuidePath, `${existing}\n\n${buildWritingMethodologySection(scaffoldLanguage)}`, "utf-8");
       }
     } catch {
       const { buildWritingMethodologySection } = await import("../utils/writing-methodology.js");
-      await writeFile(styleGuidePath, buildWritingMethodologySection(language), "utf-8");
+      await writeFile(styleGuidePath, buildWritingMethodologySection(scaffoldLanguage), "utf-8");
     }
   }
 
@@ -123,14 +131,23 @@ export class StateManager {
     return { authorIntent, currentFocus, runtimeDir };
   }
 
-  private async resolveControlDocumentLanguage(bookId: string): Promise<"zh" | "en"> {
+  private async resolveControlDocumentLanguage(bookId: string): Promise<WritingLanguage> {
+    let raw: string;
     try {
-      const raw = await readFile(join(this.bookDir(bookId), "book.json"), "utf-8");
-      const parsed = JSON.parse(raw) as { language?: unknown };
-      return parsed.language === "zh" ? "zh" : "en";
+      raw = await readFile(join(this.bookDir(bookId), "book.json"), "utf-8");
     } catch {
       return "en";
     }
+
+    let parsed: { language?: unknown };
+    try {
+      parsed = JSON.parse(raw) as { language?: unknown };
+    } catch {
+      return "en";
+    }
+
+    if (parsed.language === undefined) return "en";
+    return WritingLanguageSchema.parse(parsed.language);
   }
 
   async acquireBookLock(bookId: string): Promise<() => Promise<void>> {

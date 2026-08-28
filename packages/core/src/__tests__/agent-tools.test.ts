@@ -12,6 +12,7 @@ import {
   createPatchChapterTextTool,
   createReplaceChapterTextTool,
   createResyncChapterStateTool,
+  createSpinoffBookTool,
   createDeleteLatestChapterTool,
   createPlayEditTool,
   createPlayStartTool,
@@ -20,6 +21,8 @@ import {
   createScriptCreationTool,
   createStoryboardCreationTool,
   createInteractiveFilmCreationTool,
+  createContinuationImportTool,
+  createImportChaptersTool,
   createManageBookReferenceTool,
   createWriteFileTool,
   createWriteTruthFileTool,
@@ -724,6 +727,82 @@ describe("agent deterministic writing tools", () => {
       });
       expect(result.details).not.toHaveProperty("targetRoute");
     }
+  });
+
+  it("rejects a Vietnamese spinoff parent before progress or pipeline side effects", async () => {
+    await state.saveBookConfig("harbor", {
+      ...(await state.loadBookConfig("harbor")),
+      language: "vi",
+    });
+    const pipeline = contextPipeline({
+      initSpinoffBook: vi.fn(async () => undefined),
+    });
+    const onUpdate = vi.fn();
+    const tool = createSpinoffBookTool(pipeline as never, root);
+
+    await expect(tool.execute("spinoff-vi-parent", {
+      title: "Vietnamese Side Story",
+      parentBookId: "harbor",
+    }, undefined, onUpdate)).rejects.toMatchObject({
+      name: "WritingLanguagePreflightError",
+      code: "WRITING_LANGUAGE_MODE_UNSUPPORTED",
+    });
+
+    expect(onUpdate).not.toHaveBeenCalled();
+    expect(pipeline.initSpinoffBook).not.toHaveBeenCalled();
+    await expect(readFile(join(root, "books", "vietnamese-side-story", "book.json"), "utf-8"))
+      .rejects.toMatchObject({ code: "ENOENT" });
+  });
+
+  it("rejects import_chapters for an existing Vietnamese book before bootstrap or source loading", async () => {
+    await state.saveBookConfig("harbor", {
+      ...(await state.loadBookConfig("harbor")),
+      language: "vi",
+    });
+    const pipeline = contextPipeline({
+      importChapters: vi.fn(),
+    });
+    const getNextChapterNumber = vi.spyOn(StateManager.prototype, "getNextChapterNumber")
+      .mockRejectedValue(new Error("bootstrap must not run"));
+    const onUpdate = vi.fn();
+    const tool = createImportChaptersTool(pipeline as never, "harbor", root);
+
+    await expect(tool.execute("import-vi-existing", {
+      sourcePath: "missing-source.txt",
+    }, undefined, onUpdate)).rejects.toMatchObject({
+      name: "WritingLanguagePreflightError",
+      code: "WRITING_LANGUAGE_MODE_UNSUPPORTED",
+    });
+
+    expect(getNextChapterNumber).not.toHaveBeenCalled();
+    expect(onUpdate).not.toHaveBeenCalled();
+    expect(pipeline.importChapters).not.toHaveBeenCalled();
+  });
+
+  it("rejects continuation_import for an existing Vietnamese book before bootstrap or source loading", async () => {
+    await state.saveBookConfig("harbor", {
+      ...(await state.loadBookConfig("harbor")),
+      language: "vi",
+    });
+    const pipeline = contextPipeline({
+      importChapters: vi.fn(),
+    });
+    const getNextChapterNumber = vi.spyOn(StateManager.prototype, "getNextChapterNumber")
+      .mockRejectedValue(new Error("bootstrap must not run"));
+    const onUpdate = vi.fn();
+    const tool = createContinuationImportTool(pipeline as never, "harbor", root);
+
+    await expect(tool.execute("continuation-vi-existing", {
+      bookId: "harbor",
+      sourcePath: "missing-source.txt",
+    }, undefined, onUpdate)).rejects.toMatchObject({
+      name: "WritingLanguagePreflightError",
+      code: "WRITING_LANGUAGE_MODE_UNSUPPORTED",
+    });
+
+    expect(getNextChapterNumber).not.toHaveBeenCalled();
+    expect(onUpdate).not.toHaveBeenCalled();
+    expect(pipeline.importChapters).not.toHaveBeenCalled();
   });
 
   it("uses the single host-provided attachment as the derivative source when the model omits its path", async () => {

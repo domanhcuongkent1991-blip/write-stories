@@ -1,6 +1,7 @@
 import { BaseAgent } from "./base.js";
 import type { BookConfig } from "../models/book.js";
 import type { GenreProfile } from "../models/genre-profile.js";
+import type { ScaffoldLanguage } from "../models/writing-language.js";
 import type { ContextPackage, RuleStack } from "../models/input-governance.js";
 import { readGenreProfile, readBookRules } from "./rules-reader.js";
 import { parseWriterOutput, type ParsedWriterOutput } from "./writer-parser.js";
@@ -14,6 +15,7 @@ import { countChapterLength, resolveLengthCountingMode } from "../utils/length-m
 import { retrieveMemorySelection } from "../utils/memory-retrieval.js";
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
+import { resolveWritingLanguageProfile } from "../utils/language.js";
 import {
   readStoryFrame,
   readVolumeMap,
@@ -43,7 +45,10 @@ export class ChapterAnalyzerAgent extends BaseAgent {
     const { book, bookDir, chapterNumber, chapterContent, chapterTitle } = input;
     const { profile: genreProfile, body: genreBody } =
       await readGenreProfile(this.ctx.projectRoot, book.genre);
-    const resolvedLanguage = book.language ?? genreProfile.language;
+    const writingLanguage = book.language ?? genreProfile.language;
+    const resolvedLanguage = resolveWritingLanguageProfile(
+      writingLanguage,
+    ).scaffoldLanguage;
 
     // Read current truth files (same set as writer.ts). Phase 5: prefer the
     // new prose outline (story_frame / volume_map) and roles/ directory.
@@ -182,7 +187,7 @@ export class ChapterAnalyzerAgent extends BaseAgent {
       { temperature: 0.3 },
     );
 
-    const countingMode = resolveLengthCountingMode(book.language ?? genreProfile.language);
+    const countingMode = resolveLengthCountingMode(writingLanguage);
     const output = parseWriterOutput(chapterNumber, response.content, genreProfile, countingMode);
     const canonicalContent = chapterContent;
     const canonicalWordCount = countChapterLength(canonicalContent, countingMode);
@@ -215,7 +220,7 @@ export class ChapterAnalyzerAgent extends BaseAgent {
     genreProfile: GenreProfile,
     genreBody: string,
     bookRulesBody: string,
-    language: "zh" | "en",
+    language: ScaffoldLanguage,
   ): string {
     if (language === "en") {
       const numericalBlock = genreProfile.numericalSystem
@@ -434,7 +439,7 @@ ${bookRulesBody ? `## 本书规则\n\n${bookRulesBody}` : ""}
   }
 
   private buildUserPrompt(params: {
-    readonly language: "zh" | "en";
+    readonly language: ScaffoldLanguage;
     readonly chapterNumber: number;
     readonly chapterContent: string;
     readonly chapterTitle?: string;
@@ -503,7 +508,7 @@ ${params.hooksBlock}${params.volumeSummariesBlock}${params.subplotBlock}${params
     chapterIntent: string,
     contextPackage: ContextPackage,
     ruleStack: RuleStack,
-    language: "zh" | "en",
+    language: ScaffoldLanguage,
   ): string {
     const selectedContext = contextPackage.selectedContext
       .map((entry) => `- ${entry.source}: ${entry.reason}${entry.excerpt ? ` | ${entry.excerpt}` : ""}`)
@@ -579,7 +584,7 @@ ${overrides}\n`;
       mood: string;
       chapterType: string;
     }>,
-    language: "zh" | "en",
+    language: ScaffoldLanguage,
   ): string {
     if (summaries.length === 0) {
       return this.missingFilePlaceholder(language);
@@ -616,7 +621,7 @@ ${overrides}\n`;
     return value.replace(/\|/g, "\\|").replace(/\n/g, "<br>");
   }
 
-  private async readFileOrDefault(path: string, language: "zh" | "en"): Promise<string> {
+  private async readFileOrDefault(path: string, language: ScaffoldLanguage): Promise<string> {
     try {
       return await readFile(path, "utf-8");
     } catch {
@@ -624,11 +629,11 @@ ${overrides}\n`;
     }
   }
 
-  private missingFilePlaceholder(language: "zh" | "en"): string {
+  private missingFilePlaceholder(language: ScaffoldLanguage): string {
     return language === "en" ? "(file not created yet)" : "(文件尚未创建)";
   }
 
-  private defaultChapterTitle(chapterNumber: number, language: "zh" | "en"): string {
+  private defaultChapterTitle(chapterNumber: number, language: ScaffoldLanguage): string {
     return language === "en" ? `Chapter ${chapterNumber}` : `第${chapterNumber}章`;
   }
 }
