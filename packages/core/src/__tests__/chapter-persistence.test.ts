@@ -1,4 +1,12 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { mkdir, mkdtemp, readdir, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import {
+  WriterAgent,
+  type PreparedChapterFileSet,
+  type WriteChapterOutput,
+} from "../agents/writer.js";
 import type { AuditIssue, AuditResult } from "../agents/continuity.js";
 import type { ChapterMeta } from "../models/chapter.js";
 import { persistChapterArtifacts } from "../pipeline/chapter-persistence.js";
@@ -8,6 +16,13 @@ const ZERO_USAGE = {
   completionTokens: 0,
   totalTokens: 0,
 } as const;
+
+const roots: string[] = [];
+
+afterEach(async () => {
+  vi.restoreAllMocks();
+  await Promise.all(roots.splice(0).map((root) => rm(root, { recursive: true, force: true })));
+});
 
 function createIssue(overrides?: Partial<AuditIssue>): AuditIssue {
   return {
@@ -28,16 +43,184 @@ function createAuditResult(overrides?: Partial<AuditResult>): AuditResult {
   };
 }
 
+function createWriter(projectRoot: string): WriterAgent {
+  return new WriterAgent({
+    client: {
+      provider: "openai",
+      apiFormat: "chat",
+      stream: false,
+      defaults: { temperature: 0.7, maxTokens: 4096, thinkingBudget: 0, extra: {} },
+    },
+    model: "test-model",
+    projectRoot,
+  });
+}
+
+function createVietnameseOutput(): WriteChapterOutput {
+  return {
+    chapterNumber: 3,
+    title: "Mưa đêm",
+    content: "Mưa rơi trên mái ngói cũ.",
+    wordCount: 7,
+    preWriteCheck: "",
+    postSettlement: "",
+    runtimeStateDelta: { chapter: 3 } as never,
+    runtimeStateSnapshot: {
+      manifest: {
+        schemaVersion: 2,
+        language: "vi",
+        lastAppliedChapter: 3,
+        projectionVersion: 1,
+        migrationWarnings: [],
+      },
+      currentState: { chapter: 3, facts: [] },
+      hooks: { hooks: [] },
+      chapterSummaries: { rows: [] },
+    },
+    updatedState: "# Trạng thái hiện tại\n",
+    updatedLedger: "# Sổ theo dõi\n",
+    updatedHooks: "# Tình tiết cài cắm\n",
+    chapterSummary: "| 3 | Mưa đêm | Lan | Trú mưa | Chờ đợi | H01 tiến triển | Lặng lẽ | Chuyển tiếp |",
+    updatedChapterSummaries: "# Tóm tắt chương\n",
+    updatedSubplots: "# Tuyến phụ\n",
+    updatedEmotionalArcs: "# Cung cảm xúc\n",
+    updatedCharacterMatrix: "# Ma trận nhân vật\n",
+    postWriteErrors: [],
+    postWriteWarnings: [],
+  };
+}
+
+const EMPTY_FILE_SET: PreparedChapterFileSet = {
+  writes: [],
+  deletes: [],
+  chapterFileName: "0003_Chapter_Title.md",
+};
+
+describe("WriterAgent.prepareChapterFileSet", () => {
+  it("prepares chapter, truth, runtime writes and old chapter deletes without writing the filesystem", async () => {
+    const root = await mkdtemp(join(tmpdir(), "inkos-chapter-prepare-"));
+    roots.push(root);
+    const bookDir = join(root, "book");
+    const chaptersDir = join(bookDir, "chapters");
+    await mkdir(chaptersDir, { recursive: true });
+    await writeFile(join(chaptersDir, "0003_Old_title.md"), "old chapter", "utf-8");
+    const entriesBefore = (await readdir(bookDir, { recursive: true })).sort();
+
+    const fileSet = await createWriter(root).prepareChapterFileSet(
+      bookDir,
+      createVietnameseOutput(),
+      true,
+      "vi",
+    );
+
+    expect(fileSet.chapterFileName).toBe("0003_Mưa_đêm.md");
+    expect(fileSet.deletes).toEqual([join("chapters", "0003_Old_title.md")]);
+    expect(fileSet.writes.map((write) => write.relativePath)).toEqual(expect.arrayContaining([
+      join("chapters", "0003_Mưa_đêm.md"),
+      join("story", "current_state.md"),
+      join("story", "pending_hooks.md"),
+      join("story", "chapter_summaries.md"),
+      join("story", "subplot_board.md"),
+      join("story", "emotional_arcs.md"),
+      join("story", "character_matrix.md"),
+      join("story", "particle_ledger.md"),
+      join("story", "state", "manifest.json"),
+      join("story", "state", "current_state.json"),
+      join("story", "state", "hooks.json"),
+      join("story", "state", "chapter_summaries.json"),
+    ]));
+    expect((await readdir(bookDir, { recursive: true })).sort()).toEqual(entriesBefore);
+  });
+
+  it("keeps delta-only legacy preparation pure without bootstrapping runtime state", async () => {
+    const root = await mkdtemp(join(tmpdir(), "inkos-chapter-prepare-legacy-"));
+    roots.push(root);
+    const bookDir = join(root, "book");
+    await mkdir(join(bookDir, "chapters"), { recursive: true });
+    const entriesBefore = (await readdir(bookDir, { recursive: true })).sort();
+    const output: WriteChapterOutput = {
+      ...createVietnameseOutput(),
+      runtimeStateDelta: {
+        chapter: 3,
+        hookOps: { upsert: [], mention: [], resolve: [], defer: [] },
+        newHookCandidates: [],
+        subplotOps: [],
+        emotionalArcOps: [],
+        characterMatrixOps: [],
+        notes: [],
+      },
+      runtimeStateSnapshot: undefined,
+      updatedChapterSummaries: undefined,
+    };
+
+    const fileSet = await createWriter(root).prepareChapterFileSet(
+      bookDir,
+      output,
+      false,
+      "en",
+    );
+
+    expect(fileSet.writes.map((write) => write.relativePath)).not.toContain(
+      join("story", "state", "manifest.json"),
+    );
+    expect(fileSet.writes).toContainEqual(expect.objectContaining({
+      relativePath: join("story", "chapter_summaries.md"),
+      content: expect.stringContaining(output.chapterSummary),
+    }));
+    expect((await readdir(bookDir, { recursive: true })).sort()).toEqual(entriesBefore);
+  });
+
+  it("purely renders missing markdown projections from a provided snapshot", async () => {
+    const root = await mkdtemp(join(tmpdir(), "inkos-chapter-prepare-snapshot-"));
+    roots.push(root);
+    const bookDir = join(root, "book");
+    await mkdir(join(bookDir, "chapters"), { recursive: true });
+    const entriesBefore = (await readdir(bookDir, { recursive: true })).sort();
+    const output: WriteChapterOutput = {
+      ...createVietnameseOutput(),
+      updatedState: "",
+      updatedHooks: "",
+      updatedChapterSummaries: "",
+    };
+
+    const fileSet = await createWriter(root).prepareChapterFileSet(
+      bookDir,
+      output,
+      false,
+      "vi",
+    );
+
+    expect(fileSet.writes).toContainEqual(expect.objectContaining({
+      relativePath: join("story", "current_state.md"),
+      content: expect.stringContaining("#"),
+    }));
+    expect(fileSet.writes).toContainEqual(expect.objectContaining({
+      relativePath: join("story", "pending_hooks.md"),
+      content: expect.stringContaining("#"),
+    }));
+    expect(fileSet.writes).toContainEqual(expect.objectContaining({
+      relativePath: join("story", "chapter_summaries.md"),
+      content: expect.stringContaining("#"),
+    }));
+    expect((await readdir(bookDir, { recursive: true })).sort()).toEqual(entriesBefore);
+  });
+});
+
 describe("persistChapterArtifacts", () => {
-  it("persists truth files, index, drift guidance, and snapshots for reviewable chapters", async () => {
-    const saveChapter = vi.fn().mockResolvedValue(undefined);
-    const saveTruthFiles = vi.fn().mockResolvedValue(undefined);
-    const saveChapterIndex = vi.fn().mockResolvedValue(undefined);
+  it("prepares and commits the canonical file set exactly once with the updated index", async () => {
+    const prepareCanonicalFiles = vi.fn().mockResolvedValue(EMPTY_FILE_SET);
+    const commitCanonicalFiles = vi.fn().mockResolvedValue(undefined);
+    const legacy = {
+      saveChapter: vi.fn().mockResolvedValue(undefined),
+      saveTruthFiles: vi.fn().mockResolvedValue(undefined),
+      saveChapterIndex: vi.fn().mockResolvedValue(undefined),
+    };
     const markBookActiveIfNeeded = vi.fn().mockResolvedValue(undefined);
     const persistAuditDriftGuidance = vi.fn().mockResolvedValue(undefined);
     const snapshotState = vi.fn().mockResolvedValue(undefined);
     const syncCurrentStateFactHistory = vi.fn().mockResolvedValue(undefined);
     const logSnapshotStage = vi.fn();
+    const loadChapterIndex = vi.fn().mockResolvedValue([] satisfies ReadonlyArray<ChapterMeta>);
 
     await persistChapterArtifacts({
       chapterNumber: 3,
@@ -54,21 +237,22 @@ describe("persistChapterArtifacts", () => {
       lengthWarnings: ["warn"],
       degradedIssues: [],
       tokenUsage: ZERO_USAGE,
-      loadChapterIndex: async () => [] satisfies ReadonlyArray<ChapterMeta>,
-      saveChapter,
-      saveTruthFiles,
-      saveChapterIndex,
+      loadChapterIndex,
+      prepareCanonicalFiles,
+      commitCanonicalFiles,
       markBookActiveIfNeeded,
       persistAuditDriftGuidance,
       snapshotState,
       syncCurrentStateFactHistory,
       logSnapshotStage,
       now: () => "2026-04-01T00:00:00.000Z",
+      ...legacy,
     });
 
-    expect(saveChapter).toHaveBeenCalledTimes(1);
-    expect(saveTruthFiles).toHaveBeenCalledTimes(1);
-    expect(saveChapterIndex).toHaveBeenCalledWith([
+    expect(loadChapterIndex).toHaveBeenCalledTimes(1);
+    expect(prepareCanonicalFiles).toHaveBeenCalledTimes(1);
+    const updatedIndex = prepareCanonicalFiles.mock.calls[0][0] as ReadonlyArray<ChapterMeta>;
+    expect(updatedIndex).toEqual([
       expect.objectContaining({
         number: 3,
         title: "Chapter Title",
@@ -83,6 +267,15 @@ describe("persistChapterArtifacts", () => {
         tokenUsage: ZERO_USAGE,
       }),
     ]);
+    expect(commitCanonicalFiles).toHaveBeenCalledTimes(1);
+    expect(commitCanonicalFiles).toHaveBeenCalledWith(EMPTY_FILE_SET, updatedIndex);
+    expect(loadChapterIndex.mock.invocationCallOrder[0])
+      .toBeLessThan(prepareCanonicalFiles.mock.invocationCallOrder[0]);
+    expect(prepareCanonicalFiles.mock.invocationCallOrder[0])
+      .toBeLessThan(commitCanonicalFiles.mock.invocationCallOrder[0]);
+    expect(legacy.saveChapter).not.toHaveBeenCalled();
+    expect(legacy.saveTruthFiles).not.toHaveBeenCalled();
+    expect(legacy.saveChapterIndex).not.toHaveBeenCalled();
     expect(markBookActiveIfNeeded).toHaveBeenCalledTimes(1);
     expect(persistAuditDriftGuidance).toHaveBeenCalledWith([
       expect.objectContaining({ severity: "warning", description: "keep me" }),
@@ -93,17 +286,48 @@ describe("persistChapterArtifacts", () => {
     expect(syncCurrentStateFactHistory).toHaveBeenCalledTimes(1);
   });
 
-  it("skips truth persistence and snapshots for state-degraded chapters while preserving review note", async () => {
-    const saveChapter = vi.fn().mockResolvedValue(undefined);
-    const saveTruthFiles = vi.fn().mockResolvedValue(undefined);
-    const saveChapterIndex = vi.fn().mockResolvedValue(undefined);
+  it("does not run derived persistence when the canonical commit rejects", async () => {
+    const commitError = new Error("canonical commit failed");
     const markBookActiveIfNeeded = vi.fn().mockResolvedValue(undefined);
     const persistAuditDriftGuidance = vi.fn().mockResolvedValue(undefined);
     const snapshotState = vi.fn().mockResolvedValue(undefined);
     const syncCurrentStateFactHistory = vi.fn().mockResolvedValue(undefined);
     const logSnapshotStage = vi.fn();
 
-    await persistChapterArtifacts({
+    await expect(persistChapterArtifacts({
+      chapterNumber: 3,
+      chapterTitle: "Chapter Title",
+      status: "ready-for-review",
+      auditResult: createAuditResult(),
+      finalWordCount: 888,
+      lengthWarnings: [],
+      degradedIssues: [],
+      loadChapterIndex: async () => [],
+      prepareCanonicalFiles: vi.fn().mockResolvedValue(EMPTY_FILE_SET),
+      commitCanonicalFiles: vi.fn().mockRejectedValue(commitError),
+      markBookActiveIfNeeded,
+      persistAuditDriftGuidance,
+      snapshotState,
+      syncCurrentStateFactHistory,
+      logSnapshotStage,
+    })).rejects.toBe(commitError);
+
+    expect(markBookActiveIfNeeded).not.toHaveBeenCalled();
+    expect(persistAuditDriftGuidance).not.toHaveBeenCalled();
+    expect(logSnapshotStage).not.toHaveBeenCalled();
+    expect(snapshotState).not.toHaveBeenCalled();
+    expect(syncCurrentStateFactHistory).not.toHaveBeenCalled();
+  });
+
+  it("keeps state-degraded review and derived-state semantics", async () => {
+    const prepareCanonicalFiles = vi.fn().mockResolvedValue(EMPTY_FILE_SET);
+    const commitCanonicalFiles = vi.fn().mockResolvedValue(undefined);
+    const persistAuditDriftGuidance = vi.fn().mockResolvedValue(undefined);
+    const snapshotState = vi.fn().mockResolvedValue(undefined);
+    const syncCurrentStateFactHistory = vi.fn().mockResolvedValue(undefined);
+    const logSnapshotStage = vi.fn();
+
+    const result = await persistChapterArtifacts({
       chapterNumber: 4,
       chapterTitle: "Degraded Chapter",
       status: "state-degraded",
@@ -116,11 +340,10 @@ describe("persistChapterArtifacts", () => {
       lengthWarnings: [],
       degradedIssues: [createIssue({ description: "state mismatch" })],
       tokenUsage: ZERO_USAGE,
-      loadChapterIndex: async () => [] satisfies ReadonlyArray<ChapterMeta>,
-      saveChapter,
-      saveTruthFiles,
-      saveChapterIndex,
-      markBookActiveIfNeeded,
+      loadChapterIndex: async () => [],
+      prepareCanonicalFiles,
+      commitCanonicalFiles,
+      markBookActiveIfNeeded: vi.fn().mockResolvedValue(undefined),
       persistAuditDriftGuidance,
       snapshotState,
       syncCurrentStateFactHistory,
@@ -128,18 +351,9 @@ describe("persistChapterArtifacts", () => {
       now: () => "2026-04-01T00:00:00.000Z",
     });
 
-    expect(saveChapter).toHaveBeenCalledTimes(1);
-    expect(saveTruthFiles).not.toHaveBeenCalled();
-    expect(saveChapterIndex).toHaveBeenCalledWith([
-      expect.objectContaining({
-        number: 4,
-        title: "Degraded Chapter",
-        status: "state-degraded",
-        reviewNote: expect.any(String),
-      }),
-    ]);
-    const reviewNote = saveChapterIndex.mock.calls[0]?.[0]?.[0]?.reviewNote as string;
-    expect(JSON.parse(reviewNote)).toMatchObject({
+    expect(prepareCanonicalFiles).toHaveBeenCalledTimes(1);
+    expect(commitCanonicalFiles).toHaveBeenCalledTimes(1);
+    expect(JSON.parse(result.entry.reviewNote ?? "")).toMatchObject({
       kind: "state-degraded",
       baseStatus: "audit-failed",
       injectedIssues: ["[warning] state mismatch"],
@@ -150,8 +364,7 @@ describe("persistChapterArtifacts", () => {
     expect(syncCurrentStateFactHistory).not.toHaveBeenCalled();
   });
 
-  it("replaces existing entry for the same chapter number instead of appending", async () => {
-    const saveChapterIndex = vi.fn().mockResolvedValue(undefined);
+  it("replaces an existing entry while preserving createdAt and explicit telemetry", async () => {
     const existingEntry: ChapterMeta = {
       number: 1,
       title: "Old Title",
@@ -162,20 +375,36 @@ describe("persistChapterArtifacts", () => {
       auditIssues: [],
       lengthWarnings: [],
     };
+    const lengthTelemetry = {
+      language: "vi" as const,
+      target: 2000,
+      softMin: 1800,
+      softMax: 2200,
+      hardMin: 1600,
+      hardMax: 2400,
+      countingMode: "vi_wordlike_tokens_v1" as const,
+      writerCount: 1990,
+      postReviseCount: 2001,
+      finalCount: 2001,
+      repairApplied: true,
+      lengthWarning: false,
+    };
+    const prepareCanonicalFiles = vi.fn().mockResolvedValue(EMPTY_FILE_SET);
+    const commitCanonicalFiles = vi.fn().mockResolvedValue(undefined);
 
     await persistChapterArtifacts({
       chapterNumber: 1,
       chapterTitle: "New Title",
       status: "ready-for-review",
       auditResult: createAuditResult(),
-      finalWordCount: 2000,
+      finalWordCount: 2001,
       lengthWarnings: [],
+      lengthTelemetry,
       degradedIssues: [],
       tokenUsage: ZERO_USAGE,
       loadChapterIndex: async () => [existingEntry],
-      saveChapter: vi.fn().mockResolvedValue(undefined),
-      saveTruthFiles: vi.fn().mockResolvedValue(undefined),
-      saveChapterIndex,
+      prepareCanonicalFiles,
+      commitCanonicalFiles,
       markBookActiveIfNeeded: vi.fn().mockResolvedValue(undefined),
       persistAuditDriftGuidance: vi.fn().mockResolvedValue(undefined),
       snapshotState: vi.fn().mockResolvedValue(undefined),
@@ -184,15 +413,17 @@ describe("persistChapterArtifacts", () => {
       now: () => "2026-04-01T00:00:00.000Z",
     });
 
-    const savedIndex = saveChapterIndex.mock.calls[0][0] as ChapterMeta[];
-    // Must have exactly 1 entry, not 2
-    expect(savedIndex).toHaveLength(1);
-    expect(savedIndex[0].number).toBe(1);
-    expect(savedIndex[0].title).toBe("New Title");
-    expect(savedIndex[0].wordCount).toBe(2000);
-    expect(savedIndex[0].status).toBe("ready-for-review");
-    // Must preserve original createdAt
-    expect(savedIndex[0].createdAt).toBe("2026-01-01T00:00:00.000Z");
-    expect(savedIndex[0].updatedAt).toBe("2026-04-01T00:00:00.000Z");
+    const updatedIndex = prepareCanonicalFiles.mock.calls[0][0] as ChapterMeta[];
+    expect(updatedIndex).toHaveLength(1);
+    expect(updatedIndex[0]).toMatchObject({
+      number: 1,
+      title: "New Title",
+      wordCount: 2001,
+      status: "ready-for-review",
+      createdAt: "2026-01-01T00:00:00.000Z",
+      updatedAt: "2026-04-01T00:00:00.000Z",
+      lengthTelemetry,
+    });
+    expect(commitCanonicalFiles).toHaveBeenCalledWith(EMPTY_FILE_SET, updatedIndex);
   });
 });

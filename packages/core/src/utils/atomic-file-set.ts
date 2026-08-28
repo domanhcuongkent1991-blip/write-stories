@@ -65,6 +65,7 @@ export async function commitAtomicFileSet(input: AtomicFileSet): Promise<void> {
   const touchedPaths = [...writePaths, ...deletes];
   const backups: Array<{ readonly target: string; readonly backup: string }> = [];
   const committedTargets: string[] = [];
+  let preserveTransactionDir = false;
 
   try {
     for (const entry of writes) {
@@ -107,10 +108,13 @@ export async function commitAtomicFileSet(input: AtomicFileSet): Promise<void> {
     }
 
     if (rollbackErrors.length > 0) {
+      preserveTransactionDir = true;
       throw new AggregateError([error, ...rollbackErrors], "Atomic file commit failed and rollback was incomplete");
     }
     throw error;
   } finally {
-    await rm(transactionDir, { recursive: true, force: true }).catch(() => undefined);
+    if (!preserveTransactionDir) {
+      await rm(transactionDir, { recursive: true, force: true }).catch(() => undefined);
+    }
   }
 }

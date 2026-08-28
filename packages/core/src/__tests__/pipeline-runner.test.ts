@@ -33,6 +33,7 @@ import {
   resolveWritingLanguageProfile,
   type WritingLanguageProfile,
 } from "../utils/language.js";
+import * as atomicFileSetModule from "../utils/atomic-file-set.js";
 
 const require = createRequire(import.meta.url);
 const hasNodeSqlite = (() => {
@@ -1611,6 +1612,211 @@ describe("PipelineRunner", () => {
     }
   }, SLOW_PIPELINE_TEST_TIMEOUT_MS);
 
+  it("commits writeDraft chapter, truth, runtime state and index through one canonical file set", async () => {
+    const { root, runner, state, bookId } = await createRunnerFixture();
+    const bookDir = state.bookDir(bookId);
+    const output = createWriterOutput({
+      chapterNumber: 1,
+      title: "Prepared Draft",
+      content: "Prepared draft body.",
+      wordCount: "Prepared draft body.".length,
+    });
+    vi.spyOn(WriterAgent.prototype, "writeChapter").mockResolvedValue(output);
+    const prepareChapterFileSet = vi.spyOn(WriterAgent.prototype, "prepareChapterFileSet")
+      .mockResolvedValue({
+        chapterFileName: "0001_prepared-draft.md",
+        writes: [
+          { relativePath: join("chapters", "0001_prepared-draft.md"), content: "prepared chapter" },
+          { relativePath: join("story", "current_state.md"), content: "prepared truth" },
+          { relativePath: join("story", "pending_hooks.md"), content: "prepared hooks" },
+          { relativePath: join("story", "state", "manifest.json"), content: "prepared manifest" },
+        ],
+        deletes: [],
+      });
+    const saveChapter = vi.spyOn(WriterAgent.prototype, "saveChapter");
+    const saveChapterIndex = vi.spyOn(StateManager.prototype, "saveChapterIndex");
+    const syncLegacyStructuredStateFromMarkdown = vi.fn(async () => undefined);
+    let canonicalCommitCompleted = false;
+    const originalCommitAtomicFileSet = atomicFileSetModule.commitAtomicFileSet;
+    const commitAtomicFileSet = vi.spyOn(atomicFileSetModule, "commitAtomicFileSet")
+      .mockImplementation(async (input) => {
+        await originalCommitAtomicFileSet(input);
+        if (input.writes.some((write) => write.relativePath === join("chapters", "index.json"))) {
+          canonicalCommitCompleted = true;
+        }
+      });
+    const markBookActiveIfNeeded = vi.fn(async () => {
+      expect(canonicalCommitCompleted).toBe(true);
+    });
+    const syncNarrativeMemoryIndex = vi.fn(async () => {
+      expect(canonicalCommitCompleted).toBe(true);
+    });
+    const syncCurrentStateFactHistory = vi.fn(async () => {
+      expect(canonicalCommitCompleted).toBe(true);
+    });
+    const emitWebhook = vi.fn(async () => {
+      expect(canonicalCommitCompleted).toBe(true);
+    });
+    Object.assign(runner as object, {
+      syncLegacyStructuredStateFromMarkdown,
+      markBookActiveIfNeeded,
+      syncNarrativeMemoryIndex,
+      syncCurrentStateFactHistory,
+      emitWebhook,
+    });
+    const snapshotState = vi.spyOn(StateManager.prototype, "snapshotState")
+      .mockImplementation(async () => {
+        expect(canonicalCommitCompleted).toBe(true);
+      });
+
+    try {
+      const result = await runner.writeDraft(bookId);
+      const committedInput = commitAtomicFileSet.mock.calls[0]?.[0];
+      const committedIndex = JSON.parse(
+        await readFile(join(bookDir, "chapters", "index.json"), "utf-8"),
+      ) as ChapterMeta[];
+
+      expect(prepareChapterFileSet).toHaveBeenCalledTimes(1);
+      expect(commitAtomicFileSet).toHaveBeenCalledTimes(1);
+      expect(committedInput?.writes.map((write) => write.relativePath)).toEqual(
+        expect.arrayContaining([
+          join("chapters", "0001_prepared-draft.md"),
+          join("story", "current_state.md"),
+          join("story", "pending_hooks.md"),
+          join("story", "state", "manifest.json"),
+          join("chapters", "index.json"),
+        ]),
+      );
+      expect(result.filePath).toBe(join(bookDir, "chapters", "0001_prepared-draft.md"));
+      expect(committedIndex[0]?.lengthTelemetry).toMatchObject({
+        language: "zh",
+        countingMode: "zh_chars",
+      });
+      expect(saveChapter).not.toHaveBeenCalled();
+      expect(saveChapterIndex).not.toHaveBeenCalled();
+      expect(syncLegacyStructuredStateFromMarkdown).not.toHaveBeenCalled();
+      expect(snapshotState).toHaveBeenCalledTimes(1);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  }, SLOW_PIPELINE_TEST_TIMEOUT_MS);
+
+  it("commits writeNext chapter artifacts and index once before derived work", async () => {
+    const { root, runner, state, bookId } = await createRunnerFixture();
+    const bookDir = state.bookDir(bookId);
+    vi.spyOn(WriterAgent.prototype, "writeChapter").mockResolvedValue(
+      createWriterOutput({ content: "Canonical next chapter." }),
+    );
+    vi.spyOn(ContinuityAuditor.prototype, "auditChapter").mockResolvedValue(
+      createAuditResult({ passed: true, issues: [] }),
+    );
+    const prepareChapterFileSet = vi.spyOn(WriterAgent.prototype, "prepareChapterFileSet")
+      .mockResolvedValue({
+        chapterFileName: "0001_canonical-next.md",
+        writes: [
+          { relativePath: join("chapters", "0001_canonical-next.md"), content: "prepared chapter" },
+          { relativePath: join("story", "current_state.md"), content: "prepared truth" },
+          { relativePath: join("story", "state", "manifest.json"), content: "prepared manifest" },
+        ],
+        deletes: [],
+      });
+    const saveChapter = vi.spyOn(WriterAgent.prototype, "saveChapter");
+    const saveChapterIndex = vi.spyOn(StateManager.prototype, "saveChapterIndex");
+    const syncLegacyStructuredStateFromMarkdown = vi.fn(async () => undefined);
+    let canonicalCommitCompleted = false;
+    const originalCommitAtomicFileSet = atomicFileSetModule.commitAtomicFileSet;
+    const commitAtomicFileSet = vi.spyOn(atomicFileSetModule, "commitAtomicFileSet")
+      .mockImplementation(async (input) => {
+        await originalCommitAtomicFileSet(input);
+        if (input.writes.some((write) => write.relativePath === join("chapters", "index.json"))) {
+          canonicalCommitCompleted = true;
+        }
+      });
+    const assertAfterCommit = vi.fn(async () => {
+      expect(canonicalCommitCompleted).toBe(true);
+    });
+    Object.assign(runner as object, {
+      syncLegacyStructuredStateFromMarkdown,
+      markBookActiveIfNeeded: assertAfterCommit,
+      persistAuditDriftGuidance: assertAfterCommit,
+      syncNarrativeMemoryIndex: assertAfterCommit,
+      syncCurrentStateFactHistory: assertAfterCommit,
+      emitWebhook: assertAfterCommit,
+    });
+    vi.spyOn(StateManager.prototype, "snapshotState").mockImplementation(assertAfterCommit);
+
+    try {
+      await runner.writeNextChapter(bookId);
+      const canonicalCommits = commitAtomicFileSet.mock.calls
+        .map(([input]) => input)
+        .filter((input) => input.writes.some(
+          (write) => write.relativePath === join("chapters", "index.json"),
+        ));
+      const committedPaths = canonicalCommits[0]?.writes.map((write) => write.relativePath);
+
+      expect(prepareChapterFileSet).toHaveBeenCalledTimes(1);
+      expect(canonicalCommits).toHaveLength(1);
+      expect(committedPaths).toEqual(expect.arrayContaining([
+        join("chapters", "0001_canonical-next.md"),
+        join("story", "current_state.md"),
+        join("story", "state", "manifest.json"),
+        join("chapters", "index.json"),
+      ]));
+      expect(saveChapter).not.toHaveBeenCalled();
+      expect(saveChapterIndex).not.toHaveBeenCalled();
+      expect(syncLegacyStructuredStateFromMarkdown).not.toHaveBeenCalled();
+      await expect(readFile(join(bookDir, "chapters", "index.json"), "utf-8"))
+        .resolves.toContain('"language": "zh"');
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  }, SLOW_PIPELINE_TEST_TIMEOUT_MS);
+
+  it("keeps canonical draft files when a derived step fails", async () => {
+    const { root, runner, state, bookId } = await createRunnerFixture();
+    const bookDir = state.bookDir(bookId);
+    vi.spyOn(WriterAgent.prototype, "writeChapter").mockResolvedValue(
+      createWriterOutput({ title: "Durable Draft", content: "Durable draft body." }),
+    );
+    vi.spyOn(StateManager.prototype, "snapshotState").mockRejectedValue(
+      new Error("snapshot unavailable"),
+    );
+
+    try {
+      const result = await runner.writeDraft(bookId);
+
+      await expect(readFile(result.filePath, "utf-8")).resolves.toContain("Durable draft body.");
+      await expect(readFile(join(bookDir, "chapters", "index.json"), "utf-8"))
+        .resolves.toContain("Durable Draft");
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  }, SLOW_PIPELINE_TEST_TIMEOUT_MS);
+
+  it("rejects a failed canonical draft commit without running derived work", async () => {
+    const { root, runner, bookId } = await createRunnerFixture();
+    vi.spyOn(WriterAgent.prototype, "writeChapter").mockResolvedValue(createWriterOutput());
+    vi.spyOn(atomicFileSetModule, "commitAtomicFileSet").mockRejectedValue(
+      new Error("canonical commit failed"),
+    );
+    const derivedWork = vi.fn(async () => undefined);
+    Object.assign(runner as object, {
+      markBookActiveIfNeeded: derivedWork,
+      syncNarrativeMemoryIndex: derivedWork,
+      syncCurrentStateFactHistory: derivedWork,
+      emitWebhook: derivedWork,
+    });
+    const snapshotState = vi.spyOn(StateManager.prototype, "snapshotState");
+
+    try {
+      await expect(runner.writeDraft(bookId)).rejects.toThrow("canonical commit failed");
+      expect(derivedWork).not.toHaveBeenCalled();
+      expect(snapshotState).not.toHaveBeenCalled();
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  }, SLOW_PIPELINE_TEST_TIMEOUT_MS);
+
   it("cleans staged files when initBook fails before foundation is complete", async () => {
     const root = await mkdtemp(join(tmpdir(), "inkos-init-rollback-"));
     const runner = new PipelineRunner({
@@ -1883,6 +2089,58 @@ describe("PipelineRunner", () => {
         chapterSummary: [
           "| 1 | Ferry Debt | Lin Yue | Lin Yue crosses the ferry and recommits to the mentor trail | The debt hardens into the core conflict | mentor-debt advanced | tense | mainline |",
         ].join("\n"),
+        runtimeStateDelta: {
+          chapter: 1,
+          hookOps: { upsert: [], mention: [], resolve: [], defer: [] },
+          newHookCandidates: [],
+          subplotOps: [],
+          emotionalArcOps: [],
+          characterMatrixOps: [],
+          notes: [],
+        },
+        runtimeStateSnapshot: {
+          manifest: {
+            schemaVersion: 2,
+            language: "zh",
+            lastAppliedChapter: 1,
+            projectionVersion: 1,
+            migrationWarnings: [],
+          },
+          currentState: {
+            chapter: 1,
+            facts: [{
+              subject: "protagonist",
+              predicate: "Current Conflict",
+              object: "Mentor debt blocks every choice.",
+              validFromChapter: 1,
+              validUntilChapter: null,
+              sourceChapter: 1,
+            }],
+          },
+          hooks: {
+            hooks: [{
+              hookId: "mentor-debt",
+              startChapter: 1,
+              type: "relationship",
+              status: "open",
+              lastAdvancedChapter: 1,
+              expectedPayoff: "6",
+              notes: "The mentor debt remains unresolved",
+            }],
+          },
+          chapterSummaries: {
+            rows: [{
+              chapter: 1,
+              title: "Ferry Debt",
+              characters: "Lin Yue",
+              events: "Lin Yue crosses the ferry and recommits to the mentor trail",
+              stateChanges: "The debt hardens into the core conflict",
+              hookActivity: "mentor-debt advanced",
+              mood: "tense",
+              chapterType: "mainline",
+            }],
+          },
+        },
       }),
     );
 
@@ -2069,6 +2327,48 @@ describe("PipelineRunner", () => {
           "| --- | --- | --- | --- | --- | --- | --- |",
           "| mentor-debt | 1 | relationship | open | 1 | 3 | Draft hook |",
         ].join("\n"),
+        runtimeStateDelta: {
+          chapter: 1,
+          hookOps: { upsert: [], mention: [], resolve: [], defer: [] },
+          newHookCandidates: [],
+          subplotOps: [],
+          emotionalArcOps: [],
+          characterMatrixOps: [],
+          notes: [],
+        },
+        runtimeStateSnapshot: {
+          manifest: {
+            schemaVersion: 2,
+            language: "zh",
+            lastAppliedChapter: 1,
+            projectionVersion: 1,
+            migrationWarnings: [],
+          },
+          currentState: { chapter: 1, facts: [] },
+          hooks: {
+            hooks: [{
+              hookId: "mentor-debt",
+              startChapter: 1,
+              type: "relationship",
+              status: "open",
+              lastAdvancedChapter: 1,
+              expectedPayoff: "3",
+              notes: "Draft hook",
+            }],
+          },
+          chapterSummaries: {
+            rows: [{
+              chapter: 1,
+              title: "Draft summary",
+              characters: "Lin Yue",
+              events: "Draft event",
+              stateChanges: "Draft shift",
+              hookActivity: "hook advanced",
+              mood: "tense",
+              chapterType: "transition",
+            }],
+          },
+        },
       }),
     );
 
@@ -3221,6 +3521,29 @@ describe("PipelineRunner", () => {
         wordCount: countChapterLength("Lin Yue follows the debt into the river-port ledger.", "en_words"),
         postWriteErrors: [],
         postWriteWarnings: [],
+        updatedState: createStateCard({
+          chapter: 1,
+          location: "River port",
+          protagonistState: "Lin Yue studies the guild ledger.",
+          goal: "Follow the debt through the river-port ledger.",
+          conflict: "Guild pressure keeps pulling against the debt trail.",
+        }),
+        updatedHooks: [
+          "# Pending Hooks",
+          "",
+          "| hook_id | start_chapter | type | status | last_advanced_chapter | expected_payoff | notes |",
+          "| --- | --- | --- | --- | --- | --- | --- |",
+          "| mentor-debt | 1 | relationship | open | 1 | Reveal why the mentor vanished. | The river-port ledger sharpens the debt line. |",
+          "",
+        ].join("\n"),
+        updatedChapterSummaries: [
+          "# Chapter Summaries",
+          "",
+          "| Chapter | Title | Characters | Key Events | State Changes | Hook Activity | Mood | Chapter Type |",
+          "| --- | --- | --- | --- | --- | --- | --- | --- |",
+          "| 1 | River Ledger | Lin Yue | Lin Yue follows the debt into the river-port ledger. | The debt line sharpens. | mentor-debt advanced | tense | investigation |",
+          "",
+        ].join("\n"),
         runtimeStateDelta: {
           chapter: 1,
           currentStatePatch: {
@@ -3259,6 +3582,59 @@ describe("PipelineRunner", () => {
           characterMatrixOps: [],
           notes: [],
         },
+        runtimeStateSnapshot: {
+          manifest: {
+            schemaVersion: 2,
+            language: "zh",
+            lastAppliedChapter: 1,
+            projectionVersion: 1,
+            migrationWarnings: [],
+          },
+          currentState: {
+            chapter: 1,
+            facts: [
+              {
+                subject: "protagonist",
+                predicate: "Current Goal",
+                object: "Follow the debt through the river-port ledger.",
+                validFromChapter: 1,
+                validUntilChapter: null,
+                sourceChapter: 1,
+              },
+              {
+                subject: "protagonist",
+                predicate: "Current Conflict",
+                object: "Guild pressure keeps pulling against the debt trail.",
+                validFromChapter: 1,
+                validUntilChapter: null,
+                sourceChapter: 1,
+              },
+            ],
+          },
+          hooks: {
+            hooks: [{
+              hookId: "mentor-debt",
+              startChapter: 1,
+              type: "relationship",
+              status: "open",
+              lastAdvancedChapter: 1,
+              expectedPayoff: "Reveal why the mentor vanished.",
+              notes: "The river-port ledger sharpens the debt line.",
+            }],
+          },
+          chapterSummaries: {
+            rows: [{
+              chapter: 1,
+              title: "River Ledger",
+              characters: "Lin Yue",
+              events: "Lin Yue follows the debt into the river-port ledger.",
+              stateChanges: "The debt line sharpens.",
+              hookActivity: "mentor-debt advanced",
+              mood: "tense",
+              chapterType: "investigation",
+            }],
+          },
+        },
       }),
     );
     vi.spyOn(ContinuityAuditor.prototype, "auditChapter").mockResolvedValue(
@@ -3291,7 +3667,7 @@ describe("PipelineRunner", () => {
     await rm(root, { recursive: true, force: true });
   });
 
-  it("repairs chapter-number drift in writer delta before persisting runtime state", async () => {
+  it("persists the chapter number normalized by the writer before canonical commit", async () => {
     const { root, runner, state, bookId } = await createRunnerFixture({
     });
     const storyDir = join(state.bookDir(bookId), "story");
@@ -3332,14 +3708,39 @@ describe("PipelineRunner", () => {
         postWriteErrors: [],
         postWriteWarnings: [],
         runtimeStateDelta: {
-          chapter: 0,
+          chapter: 1,
           hookOps: {
             upsert: [],
+            mention: [],
             resolve: [],
             defer: [],
           },
+          newHookCandidates: [],
+          subplotOps: [],
+          emotionalArcOps: [],
+          characterMatrixOps: [],
           notes: [],
-        } as unknown as NonNullable<ReturnType<typeof createWriterOutput>["runtimeStateDelta"]>,
+        },
+        runtimeStateSnapshot: {
+          manifest: {
+            schemaVersion: 2,
+            language: "en",
+            lastAppliedChapter: 1,
+            projectionVersion: 1,
+            migrationWarnings: [],
+          },
+          currentState: { chapter: 1, facts: [] },
+          hooks: { hooks: [] },
+          chapterSummaries: { rows: [] },
+        },
+        updatedState: createStateCard({
+          chapter: 1,
+          location: "Ashen ferry crossing",
+          protagonistState: "Lin Yue still hides the oath token.",
+          goal: "Find the vanished mentor.",
+          conflict: "The mentor debt is still personal.",
+        }),
+        updatedHooks: "# Pending Hooks\n",
       }),
     );
     vi.spyOn(ContinuityAuditor.prototype, "auditChapter").mockResolvedValue(
@@ -3361,7 +3762,7 @@ describe("PipelineRunner", () => {
     await rm(root, { recursive: true, force: true });
   });
 
-  it("rolls back persisted runtime state when writer delta contains natural-language numeric drift", async () => {
+  it("keeps canonical runtime state unchanged when writer state preparation rejects", async () => {
     const { root, runner, state, bookId } = await createRunnerFixture({
     });
     const storyDir = join(state.bookDir(bookId), "story");
@@ -3404,26 +3805,10 @@ describe("PipelineRunner", () => {
         wordCount: countChapterLength("Broken chapter body.", "en_words"),
         postWriteErrors: [],
         postWriteWarnings: [],
-        runtimeStateDelta: {
-          chapter: 1,
-          hookOps: {
-            upsert: [
-              {
-                hookId: "mentor-debt",
-                startChapter: 1,
-                type: "relationship",
-                status: "open",
-                lastAdvancedChapter: "chapter one",
-                expectedPayoff: "Reveal the debt.",
-                notes: "Bad numeric drift.",
-              },
-            ],
-            resolve: [],
-            defer: [],
-          },
-          notes: [],
-        } as unknown as NonNullable<ReturnType<typeof createWriterOutput>["runtimeStateDelta"]>,
       }),
+    );
+    vi.spyOn(WriterAgent.prototype, "prepareChapterFileSet").mockRejectedValue(
+      new Error("Invalid runtime state delta: lastAdvancedChapter must be a number"),
     );
     vi.spyOn(ContinuityAuditor.prototype, "auditChapter").mockResolvedValue(
       createAuditResult({
@@ -3433,7 +3818,7 @@ describe("PipelineRunner", () => {
       }),
     );
 
-    await expect(runner.writeNextChapter(bookId)).rejects.toThrow();
+    await expect(runner.writeNextChapter(bookId)).rejects.toThrow("Invalid runtime state delta");
 
     await expect(readFile(join(storyDir, "current_state.md"), "utf-8")).resolves.toBe(beforeState);
     await expect(readFile(join(storyDir, "state", "manifest.json"), "utf-8")).resolves.toBe(beforeManifest);
@@ -5693,6 +6078,195 @@ describe("PipelineRunner", () => {
 
     return { ...fixture, chaptersDir, revisedBody };
   }
+
+  it("commits a latest revision and its updated index through one canonical file set", async () => {
+    const { root, runner, state, bookId, revisedBody } = await createRevisionGateFixture("always");
+    const bookDir = state.bookDir(bookId);
+    vi.spyOn(ContinuityAuditor.prototype, "auditChapter")
+      .mockResolvedValueOnce(createAuditResult({ passed: false, issues: [CRITICAL_ISSUE] }))
+      .mockResolvedValueOnce(createAuditResult({ passed: true, issues: [] }));
+    const prepareChapterFileSet = vi.spyOn(WriterAgent.prototype, "prepareChapterFileSet")
+      .mockResolvedValue({
+        chapterFileName: "0001_Test_Chapter.md",
+        writes: [
+          {
+            relativePath: join("chapters", "0001_Test_Chapter.md"),
+            content: `# 第1章 Test Chapter\n\n${revisedBody}`,
+          },
+          { relativePath: join("story", "current_state.md"), content: "revised truth" },
+          { relativePath: join("story", "pending_hooks.md"), content: "revised hooks" },
+          { relativePath: join("story", "state", "manifest.json"), content: "revised manifest" },
+        ],
+        deletes: [],
+      });
+    const saveChapter = vi.spyOn(WriterAgent.prototype, "saveChapter");
+    const saveChapterIndex = vi.spyOn(StateManager.prototype, "saveChapterIndex");
+    const originalCommitAtomicFileSet = atomicFileSetModule.commitAtomicFileSet;
+    let canonicalCommitCompleted = false;
+    const commitAtomicFileSet = vi.spyOn(atomicFileSetModule, "commitAtomicFileSet")
+      .mockImplementation(async (input) => {
+        await originalCommitAtomicFileSet(input);
+        canonicalCommitCompleted = true;
+      });
+    const snapshotState = vi.spyOn(StateManager.prototype, "snapshotState")
+      .mockImplementation(async () => {
+        expect(canonicalCommitCompleted).toBe(true);
+      });
+    Object.assign(runner as object, {
+      persistAuditDriftGuidance: vi.fn(async () => {
+        expect(canonicalCommitCompleted).toBe(true);
+      }),
+      syncNarrativeMemoryIndex: vi.fn(async () => {
+        expect(canonicalCommitCompleted).toBe(true);
+      }),
+      syncCurrentStateFactHistory: vi.fn(async () => {
+        expect(canonicalCommitCompleted).toBe(true);
+      }),
+      emitWebhook: vi.fn(async () => {
+        expect(canonicalCommitCompleted).toBe(true);
+      }),
+    });
+
+    try {
+      const result = await runner.reviseDraft(bookId, 1, "rework");
+      const committedPaths = commitAtomicFileSet.mock.calls[0]?.[0].writes
+        .map((write) => write.relativePath);
+
+      expect(result.applied).toBe(true);
+      expect(prepareChapterFileSet).toHaveBeenCalledTimes(1);
+      expect(commitAtomicFileSet).toHaveBeenCalledTimes(1);
+      expect(committedPaths).toEqual(expect.arrayContaining([
+        join("chapters", "0001_Test_Chapter.md"),
+        join("story", "current_state.md"),
+        join("story", "pending_hooks.md"),
+        join("story", "state", "manifest.json"),
+        join("chapters", "index.json"),
+      ]));
+      expect(saveChapter).not.toHaveBeenCalled();
+      expect(saveChapterIndex).not.toHaveBeenCalled();
+      expect(snapshotState).toHaveBeenCalledTimes(1);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  }, SLOW_PIPELINE_TEST_TIMEOUT_MS);
+
+  it("commits an older Vietnamese revision with its index and a Vietnamese heading", async () => {
+    const root = await mkdtemp(join(tmpdir(), "inkos-runner-vi-older-revision-"));
+    const state = new StateManager(root);
+    const bookId = "vi-older-revision";
+    const bookDir = state.bookDir(bookId);
+    const storyDir = join(bookDir, "story");
+    const chaptersDir = join(bookDir, "chapters");
+    const restoreVi = await enableViWriting(root);
+    await state.saveBookConfig(bookId, {
+      id: bookId,
+      title: "Sửa chương cũ",
+      platform: "other",
+      genre: "other",
+      language: "vi",
+      status: "active",
+      targetChapters: 10,
+      chapterWordCount: 2000,
+      createdAt: "2026-08-28T00:00:00.000Z",
+      updatedAt: "2026-08-28T00:00:00.000Z",
+    });
+    await mkdir(chaptersDir, { recursive: true });
+    await mkdir(storyDir, { recursive: true });
+    await state.ensureControlDocuments(bookId);
+    await Promise.all([
+      writeFile(join(storyDir, "current_state.md"), createStateCard({
+        chapter: 0,
+        location: "Hiên mưa",
+        protagonistState: "Lan đang chờ tin.",
+        goal: "Tìm cuốn sổ cũ.",
+        conflict: "Dấu vết đã bị xóa.",
+      }), "utf-8"),
+      writeFile(join(storyDir, "pending_hooks.md"), "# Tình tiết cài cắm\n", "utf-8"),
+      writeFile(join(chaptersDir, "0001_Mưa.md"), "# Chương 1: Mưa\n\nLan đứng dưới hiên.", "utf-8"),
+      writeFile(join(chaptersDir, "0002_Gió.md"), "# Chương 2: Gió\n\nGió lùa qua cửa.", "utf-8"),
+    ]);
+    await state.snapshotState(bookId, 0);
+    const telemetry = {
+      language: "vi" as const,
+      target: 2000,
+      softMin: 1728,
+      softMax: 2272,
+      hardMin: 1455,
+      hardMax: 2545,
+      countingMode: "vi_wordlike_tokens_v1" as const,
+      writerCount: 5,
+      postReviseCount: 0,
+      finalCount: 5,
+      repairApplied: false,
+      lengthWarning: true,
+    };
+    await state.saveChapterIndex(bookId, [
+      {
+        number: 1,
+        title: "Mưa",
+        status: "audit-failed",
+        wordCount: 5,
+        createdAt: "2026-08-28T00:00:00.000Z",
+        updatedAt: "2026-08-28T00:00:00.000Z",
+        auditIssues: [],
+        lengthWarnings: [],
+        lengthTelemetry: telemetry,
+      },
+      {
+        number: 2,
+        title: "Gió",
+        status: "ready-for-review",
+        wordCount: 5,
+        createdAt: "2026-08-28T00:00:00.000Z",
+        updatedAt: "2026-08-28T00:00:00.000Z",
+        auditIssues: [],
+        lengthWarnings: [],
+        lengthTelemetry: telemetry,
+      },
+    ]);
+    const runner = new PipelineRunner({
+      client: {} as ConstructorParameters<typeof PipelineRunner>[0]["client"],
+      model: "test-model",
+      projectRoot: root,
+    });
+    vi.spyOn(ContinuityAuditor.prototype, "auditChapter")
+      .mockResolvedValueOnce(createAuditResult({ passed: false, issues: [CRITICAL_ISSUE] }))
+      .mockResolvedValueOnce(createAuditResult({ passed: true, issues: [] }));
+    vi.spyOn(ReviserAgent.prototype, "reviseChapter").mockResolvedValue(createReviseOutput({
+      revisedContent: "Lan khép ô rồi bước khỏi hiên.",
+      wordCount: 7,
+    }));
+    const prepareChapterFileSet = vi.spyOn(WriterAgent.prototype, "prepareChapterFileSet");
+    const saveChapter = vi.spyOn(WriterAgent.prototype, "saveChapter");
+    const saveChapterIndex = vi.spyOn(StateManager.prototype, "saveChapterIndex");
+    const originalCommitAtomicFileSet = atomicFileSetModule.commitAtomicFileSet;
+    const commitAtomicFileSet = vi.spyOn(atomicFileSetModule, "commitAtomicFileSet")
+      .mockImplementation((input) => originalCommitAtomicFileSet(input));
+    Object.assign(runner as object, {
+      syncNarrativeMemoryIndex: vi.fn(async () => undefined),
+      emitWebhook: vi.fn(async () => undefined),
+    });
+
+    try {
+      const result = await runner.reviseDraft(bookId, 1, "rework");
+      const committedWrites = commitAtomicFileSet.mock.calls[0]?.[0].writes;
+      const savedChapter = await readFile(join(chaptersDir, "0001_Mưa.md"), "utf-8");
+
+      expect(result.applied).toBe(true);
+      expect(commitAtomicFileSet).toHaveBeenCalledTimes(1);
+      expect(committedWrites.map((write) => write.relativePath)).toEqual([
+        join("chapters", "0001_Mưa.md"),
+        join("chapters", "index.json"),
+      ]);
+      expect(savedChapter.startsWith("# Chương 1: Mưa\n\n")).toBe(true);
+      expect(prepareChapterFileSet).not.toHaveBeenCalled();
+      expect(saveChapter).not.toHaveBeenCalled();
+      expect(saveChapterIndex).not.toHaveBeenCalled();
+    } finally {
+      restoreVi();
+      await rm(root, { recursive: true, force: true });
+    }
+  }, SLOW_PIPELINE_TEST_TIMEOUT_MS);
 
   const GATE_WARNING_ISSUE: AuditIssue = {
     severity: "warning",

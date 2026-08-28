@@ -14,7 +14,12 @@ import {
 } from "../agents/foundation-reviewer.js";
 import { PlannerAgent, type PlanChapterOutput } from "../agents/planner.js";
 import { ComposerAgent, composeGovernedChapter, contextBudgetFromClient, type ComposeChapterOutput } from "../agents/composer.js";
-import { WriterAgent, type WriteChapterInput, type WriteChapterOutput } from "../agents/writer.js";
+import {
+  WriterAgent,
+  type PreparedChapterFileSet,
+  type WriteChapterInput,
+  type WriteChapterOutput,
+} from "../agents/writer.js";
 import { ChapterAnalyzerAgent } from "../agents/chapter-analyzer.js";
 import { ContinuityAuditor } from "../agents/continuity.js";
 import { ReviserAgent, DEFAULT_REVISE_MODE, type ReviseMode } from "../agents/reviser.js";
@@ -70,6 +75,7 @@ import { loadPersistedPlan, relativeToBookDir, savePersistedPlan } from "./persi
 import { selectBookReferenceContext } from "../references/reference-context.js";
 import type { ActivatedSkillGuidance } from "../agent/skill-tool.js";
 import { commitAtomicFileSet } from "../utils/atomic-file-set.js";
+import { chapterHeading } from "../utils/writing-surface.js";
 import { toPosixPath } from "../utils/posix-path.js";
 import {
   createProductionRunSnapshot,
@@ -708,6 +714,40 @@ export class PipelineRunner {
 
   private logWarn(language: ScaffoldLanguage, message: { zh: string; en: string }): void {
     this.config.logger?.warn(this.localize(language, message));
+  }
+
+  private async commitCanonicalChapterFileSet(
+    bookDir: string,
+    fileSet: PreparedChapterFileSet,
+    updatedIndex: ReadonlyArray<ChapterMeta>,
+  ): Promise<void> {
+    await commitAtomicFileSet({
+      rootDir: bookDir,
+      writes: [
+        ...fileSet.writes,
+        {
+          relativePath: join("chapters", "index.json"),
+          content: JSON.stringify(updatedIndex, null, 2),
+        },
+      ],
+      deletes: fileSet.deletes,
+    });
+  }
+
+  private async runDerivedStep(
+    language: ScaffoldLanguage,
+    label: string,
+    operation: () => Promise<void>,
+  ): Promise<void> {
+    try {
+      await operation();
+    } catch (error) {
+      const detail = error instanceof Error ? error.message : String(error);
+      this.logWarn(language, {
+        zh: `派生步骤 ${label} 失败，已保留权威文件：${detail}`,
+        en: `Derived step ${label} failed; canonical files were preserved: ${detail}`,
+      });
+    }
   }
 
   private async tryGenerateStyleGuide(
@@ -1400,21 +1440,7 @@ export class PipelineRunner {
       });
       this.logLengthWarnings(lengthWarnings);
 
-      // Save chapter file
-      const chaptersDir = join(bookDir, "chapters");
-      const paddedNum = String(chapterNumber).padStart(4, "0");
-      const sanitized = draftOutput.title.replace(/[/\\?%*:|"<>]/g, "").replace(/\s+/g, "_").slice(0, 50);
-      const filename = `${paddedNum}_${sanitized}.md`;
-      const filePath = join(chaptersDir, filename);
-
       const resolvedLang = profile.language;
-      // Persist the chapter and its complete truth update as one atomic file set.
-      this.logStage(stageLanguage, { zh: "落盘草稿与真相文件", en: "persisting draft and truth files" });
-      await writer.saveChapter(bookDir, draftOutput, gp.numericalSystem, resolvedLang);
-      await this.syncLegacyStructuredStateFromMarkdown(bookDir, chapterNumber, draftOutput);
-      await this.syncNarrativeMemoryIndex(bookId);
-
-      // Update index
       const existingIndex = await this.state.loadChapterIndex(bookId);
       const now = new Date().toISOString();
       const newEntry: ChapterMeta = {
@@ -1433,18 +1459,34 @@ export class PipelineRunner {
       const updatedIndex = existingIdx >= 0
         ? existingIndex.map((e, i) => i === existingIdx ? newEntry : e)
         : [...existingIndex, newEntry];
-      await this.state.saveChapterIndex(bookId, updatedIndex);
-      await this.markBookActiveIfNeeded(bookId);
+      const fileSet = await writer.prepareChapterFileSet(
+        bookDir,
+        draftOutput,
+        gp.numericalSystem,
+        resolvedLang,
+      );
+      const filePath = join(bookDir, "chapters", fileSet.chapterFileName);
+
+      this.logStage(stageLanguage, { zh: "落盘草稿与真相文件", en: "persisting draft and truth files" });
+      await this.commitCanonicalChapterFileSet(bookDir, fileSet, updatedIndex);
+
+      await this.runDerivedStep(stageLanguage, "mark book active", () =>
+        this.markBookActiveIfNeeded(bookId));
 
       // Snapshot
       this.logStage(stageLanguage, { zh: "更新章节索引与快照", en: "updating chapter index and snapshots" });
-      await this.state.snapshotState(bookId, chapterNumber);
-      await this.syncCurrentStateFactHistory(bookId, chapterNumber);
+      await this.runDerivedStep(stageLanguage, "snapshot state", () =>
+        this.state.snapshotState(bookId, chapterNumber));
+      await this.runDerivedStep(stageLanguage, "sync narrative memory", () =>
+        this.syncNarrativeMemoryIndex(bookId));
+      await this.runDerivedStep(stageLanguage, "sync current-state facts", () =>
+        this.syncCurrentStateFactHistory(bookId, chapterNumber));
 
-      await this.emitWebhook("chapter-complete", bookId, chapterNumber, {
-        title: draftOutput.title,
-        wordCount: draftOutput.wordCount,
-      });
+      await this.runDerivedStep(stageLanguage, "emit chapter webhook", () =>
+        this.emitWebhook("chapter-complete", bookId, chapterNumber, {
+          title: draftOutput.title,
+          wordCount: draftOutput.wordCount,
+        }));
 
       return {
         chapterNumber,
@@ -1930,27 +1972,7 @@ export class PipelineRunner {
       if (!existingFile) {
         throw new Error(`Chapter ${targetChapter} file not found in ${chaptersDir} (expected filename starting with ${paddedNum})`);
       }
-      await archiveChapterVersion(bookDir, targetChapter, content, "revision");
       const reviseLang = profile.language;
-      const reviseHeading = reviseLang === "en"
-        ? `# Chapter ${targetChapter}: ${chapterMeta.title}`
-        : `# 第${targetChapter}章 ${chapterMeta.title}`;
-
-      // Only the latest chapter owns current truth. Reworking an older chapter
-      // invalidates its descendants, but must not rewind the live story state.
-      if (isLatestChapter) {
-        await writer.saveChapter(bookDir, settledRevision, gp.numericalSystem, reviseLang);
-      } else {
-        await commitAtomicFileSet({
-          rootDir: bookDir,
-          writes: [{
-            relativePath: join("chapters", existingFile),
-            content: `${reviseHeading}\n\n${revisedContent}`,
-          }],
-        });
-      }
-
-      // Update index
       const downstreamRevisionNotice = language === "en"
         ? `[warning] Chapter ${targetChapter} changed; re-review this downstream chapter for continuity.`
         : `[warning] 第${targetChapter}章已重写，请重新检查本章与前文的连续性。`;
@@ -1979,16 +2001,38 @@ export class PipelineRunner {
         }
         return ch;
       });
-      await this.state.saveChapterIndex(bookId, updatedIndex);
+
+      // Only the latest chapter owns current truth. Reworking an older chapter
+      // invalidates its descendants, but must not rewind the live story state.
+      const fileSet: PreparedChapterFileSet = isLatestChapter
+        ? await writer.prepareChapterFileSet(
+            bookDir,
+            settledRevision,
+            gp.numericalSystem,
+            reviseLang,
+          )
+        : {
+            chapterFileName: existingFile,
+            writes: [{
+              relativePath: join("chapters", existingFile),
+              content: `${chapterHeading(targetChapter, chapterMeta.title, reviseLang)}\n\n${revisedContent}`,
+            }],
+            deletes: [],
+          };
+      await this.commitCanonicalChapterFileSet(bookDir, fileSet, updatedIndex);
+
+      await this.runDerivedStep(stageLanguage, "archive previous chapter version", () =>
+        archiveChapterVersion(bookDir, targetChapter, content, "revision").then(() => undefined));
       if (isLatestChapter) {
-        await this.persistAuditDriftGuidance({
-          bookDir,
-          chapterNumber: targetChapter,
-          issues: effectivePostRevision.auditResult.issues.filter(
-            (issue) => issue.severity === "critical" || issue.severity === "warning",
-          ),
-          language,
-        }).catch(() => undefined);
+        await this.runDerivedStep(stageLanguage, "persist audit drift guidance", () =>
+          this.persistAuditDriftGuidance({
+            bookDir,
+            chapterNumber: targetChapter,
+            issues: effectivePostRevision.auditResult.issues.filter(
+              (issue) => issue.severity === "critical" || issue.severity === "warning",
+            ),
+            language,
+          }));
       }
 
       // Re-snapshot
@@ -1997,17 +2041,21 @@ export class PipelineRunner {
         en: `updating chapter index and snapshots for chapter ${targetChapter}`,
       });
       if (isLatestChapter) {
-        await this.state.snapshotState(bookId, targetChapter);
+        await this.runDerivedStep(stageLanguage, "snapshot state", () =>
+          this.state.snapshotState(bookId, targetChapter));
       }
-      await this.syncNarrativeMemoryIndex(bookId);
+      await this.runDerivedStep(stageLanguage, "sync narrative memory", () =>
+        this.syncNarrativeMemoryIndex(bookId));
       if (isLatestChapter) {
-        await this.syncCurrentStateFactHistory(bookId, targetChapter);
+        await this.runDerivedStep(stageLanguage, "sync current-state facts", () =>
+          this.syncCurrentStateFactHistory(bookId, targetChapter));
       }
 
-      await this.emitWebhook("revision-complete", bookId, targetChapter, {
-        wordCount: revisedCount,
-        fixedCount: reviseOutput.fixedIssues.length,
-      });
+      await this.runDerivedStep(stageLanguage, "emit revision webhook", () =>
+        this.emitWebhook("revision-complete", bookId, targetChapter, {
+          wordCount: revisedCount,
+          fixedCount: reviseOutput.fixedIssues.length,
+        }));
 
       return {
         chapterNumber: targetChapter,
@@ -2669,25 +2717,40 @@ export class PipelineRunner {
       degradedIssues,
       tokenUsage: totalUsage,
       loadChapterIndex: () => this.state.loadChapterIndex(bookId),
-      saveChapter: () => writer.saveChapter(bookDir, persistenceOutput, gp.numericalSystem, writingLanguage),
-      saveTruthFiles: async () => {
-        await this.syncLegacyStructuredStateFromMarkdown(bookDir, chapterNumber, persistenceOutput);
-        this.logStage(stageLanguage, { zh: "同步记忆索引", en: "syncing memory indexes" });
-        await this.syncNarrativeMemoryIndex(bookId);
-      },
-      saveChapterIndex: (index) => this.state.saveChapterIndex(bookId, index),
-      markBookActiveIfNeeded: () => this.markBookActiveIfNeeded(bookId),
-      persistAuditDriftGuidance: (issues) => this.persistAuditDriftGuidance({
+      prepareCanonicalFiles: () => writer.prepareChapterFileSet(
         bookDir,
-        chapterNumber,
-        issues,
-        language: stageLanguage,
-      }).catch(() => undefined),
-      snapshotState: () => this.state.snapshotState(bookId, chapterNumber),
-      syncCurrentStateFactHistory: () => this.syncCurrentStateFactHistory(bookId, chapterNumber),
+        persistenceOutput,
+        gp.numericalSystem,
+        writingLanguage,
+      ),
+      commitCanonicalFiles: (fileSet, updatedIndex) =>
+        this.commitCanonicalChapterFileSet(bookDir, fileSet, updatedIndex),
+      markBookActiveIfNeeded: () => this.runDerivedStep(stageLanguage, "mark book active", () =>
+        this.markBookActiveIfNeeded(bookId)),
+      persistAuditDriftGuidance: (issues) => this.runDerivedStep(
+        stageLanguage,
+        "persist audit drift guidance",
+        () => this.persistAuditDriftGuidance({
+          bookDir,
+          chapterNumber,
+          issues,
+          language: stageLanguage,
+        }),
+      ),
+      snapshotState: () => this.runDerivedStep(stageLanguage, "snapshot state", () =>
+        this.state.snapshotState(bookId, chapterNumber)),
+      syncCurrentStateFactHistory: () => this.runDerivedStep(
+        stageLanguage,
+        "sync current-state facts",
+        () => this.syncCurrentStateFactHistory(bookId, chapterNumber),
+      ),
       logSnapshotStage: () =>
         this.logStage(stageLanguage, { zh: "更新章节索引与快照", en: "updating chapter index and snapshots" }),
     });
+
+    this.logStage(stageLanguage, { zh: "同步记忆索引", en: "syncing memory indexes" });
+    await this.runDerivedStep(stageLanguage, "sync narrative memory", () =>
+      this.syncNarrativeMemoryIndex(bookId));
 
     // 6. Send notification
     if (this.config.notifyChannels && this.config.notifyChannels.length > 0) {
@@ -2695,7 +2758,8 @@ export class PipelineRunner {
         ? "🧯"
         : auditResult.passed ? "✅" : "⚠️";
       const chapterLength = formatLengthCount(finalWordCount, lengthSpec.countingMode);
-      await dispatchNotification(this.config.notifyChannels, {
+      await this.runDerivedStep(stageLanguage, "dispatch chapter notification", () =>
+        dispatchNotification(this.config.notifyChannels!, {
         title: `${statusEmoji} ${book.title} 第${chapterNumber}章`,
         body: [
           `**${persistenceOutput.title}** | ${chapterLength}`,
@@ -2709,16 +2773,17 @@ export class PipelineRunner {
         ]
           .filter(Boolean)
           .join("\n"),
-      });
+        }));
     }
 
-    await this.emitWebhook("pipeline-complete", bookId, chapterNumber, {
-      title: persistenceOutput.title,
-      wordCount: finalWordCount,
-      passed: auditResult.passed,
-      revised,
-      status: resolvedStatus,
-    });
+    await this.runDerivedStep(stageLanguage, "emit pipeline webhook", () =>
+      this.emitWebhook("pipeline-complete", bookId, chapterNumber, {
+        title: persistenceOutput.title,
+        wordCount: finalWordCount,
+        passed: auditResult.passed,
+        revised,
+        status: resolvedStatus,
+      }));
 
     return {
       chapterNumber,

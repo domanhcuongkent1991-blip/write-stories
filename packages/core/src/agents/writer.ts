@@ -49,6 +49,11 @@ import {
   type RuntimeStateArtifacts,
 } from "../state/runtime-state-store.js";
 import type { RuntimeStateSnapshot } from "../state/state-reducer.js";
+import {
+  renderChapterSummariesProjection,
+  renderCurrentStateProjection,
+  renderHooksProjection,
+} from "../state/state-projections.js";
 import { parsePendingHooksMarkdown } from "../utils/memory-retrieval.js";
 import { analyzeHookHealth } from "../utils/hook-health.js";
 import {
@@ -62,7 +67,7 @@ import {
   renderNarrativeSelectedContext,
   sanitizeNarrativeEvidenceBlock,
 } from "../utils/narrative-control.js";
-import { readFile, writeFile, mkdir, readdir } from "node:fs/promises";
+import { readFile, readdir } from "node:fs/promises";
 import { join } from "node:path";
 import { commitAtomicFileSet, type AtomicFileWrite } from "../utils/atomic-file-set.js";
 import { WritingLanguagePreflightError } from "../state/writing-language-preflight.js";
@@ -135,6 +140,12 @@ export interface WriteChapterOutput {
     readonly suggestion: string;
   }>;
   readonly tokenUsage?: TokenUsage;
+}
+
+export interface PreparedChapterFileSet {
+  readonly writes: ReadonlyArray<AtomicFileWrite>;
+  readonly deletes: ReadonlyArray<string>;
+  readonly chapterFileName: string;
 }
 
 export class WriterAgent extends BaseAgent {
@@ -664,6 +675,25 @@ export class WriterAgent extends BaseAgent {
     numericalSystem: boolean = true,
     writingLanguage: WritingLanguage = "zh",
   ): Promise<void> {
+    const fileSet = await this.prepareChapterFileSet(
+      bookDir,
+      output,
+      numericalSystem,
+      writingLanguage,
+    );
+    await commitAtomicFileSet({
+      rootDir: bookDir,
+      writes: fileSet.writes,
+      deletes: fileSet.deletes,
+    });
+  }
+
+  async prepareChapterFileSet(
+    bookDir: string,
+    output: WriteChapterOutput,
+    numericalSystem: boolean,
+    writingLanguage: WritingLanguage,
+  ): Promise<PreparedChapterFileSet> {
     if (
       writingLanguage === "vi"
       && (!output.runtimeStateDelta || !output.runtimeStateSnapshot)
@@ -675,8 +705,6 @@ export class WriterAgent extends BaseAgent {
     }
 
     const chaptersDir = join(bookDir, "chapters");
-    await mkdir(chaptersDir, { recursive: true });
-
     const paddedNum = String(output.chapterNumber).padStart(4, "0");
     const filename = `${paddedNum}_${this.sanitizeFilename(output.title)}.md`;
     const existingChapterFiles = await readdir(chaptersDir).catch(() => []);
@@ -689,27 +717,34 @@ export class WriterAgent extends BaseAgent {
       "",
       output.content,
     ].join("\n");
-    const runtimeStateArtifacts = await this.resolveRuntimeStateArtifactsForOutput(
-      bookDir,
-      output,
-      writingLanguage,
-    );
-    const chapterSummariesMarkdown = runtimeStateArtifacts?.chapterSummariesMarkdown
-      ?? (!output.runtimeStateDelta && output.updatedChapterSummaries
-        ? output.updatedChapterSummaries
-        : !output.runtimeStateDelta && output.chapterSummary
-          ? await this.renderAppendedChapterSummary(bookDir, output.chapterSummary, writingLanguage)
-          : undefined);
+    const runtimeStateSnapshot = output.runtimeStateSnapshot;
+    const currentStateMarkdown = output.updatedState
+      || (runtimeStateSnapshot
+        ? renderCurrentStateProjection(runtimeStateSnapshot.currentState, writingLanguage)
+        : output.updatedState);
+    const hooksMarkdown = output.updatedHooks
+      || (runtimeStateSnapshot
+        ? renderHooksProjection(runtimeStateSnapshot.hooks, writingLanguage, {
+            currentChapter: runtimeStateSnapshot.manifest.lastAppliedChapter,
+          })
+        : output.updatedHooks);
+    const chapterSummariesMarkdown = output.updatedChapterSummaries
+      || (runtimeStateSnapshot
+        ? renderChapterSummariesProjection(runtimeStateSnapshot.chapterSummaries, writingLanguage)
+        : undefined)
+      || (output.chapterSummary
+        ? await this.renderAppendedChapterSummary(bookDir, output.chapterSummary, writingLanguage)
+        : undefined);
 
     const writes: AtomicFileWrite[] = [
       { relativePath: join("chapters", filename), content: chapterContent },
       {
         relativePath: join("story", "current_state.md"),
-        content: runtimeStateArtifacts?.currentStateMarkdown ?? output.updatedState,
+        content: currentStateMarkdown,
       },
       {
         relativePath: join("story", "pending_hooks.md"),
-        content: runtimeStateArtifacts?.hooksMarkdown ?? output.updatedHooks,
+        content: hooksMarkdown,
       },
     ];
 
@@ -730,7 +765,6 @@ export class WriterAgent extends BaseAgent {
       writes.push({ relativePath: join("story", "character_matrix.md"), content: output.updatedCharacterMatrix });
     }
 
-    const runtimeStateSnapshot = runtimeStateArtifacts?.snapshot ?? output.runtimeStateSnapshot;
     if (runtimeStateSnapshot) {
       writes.push(
         {
@@ -756,11 +790,11 @@ export class WriterAgent extends BaseAgent {
       writes.push({ relativePath: join("story", "particle_ledger.md"), content: output.updatedLedger });
     }
 
-    await commitAtomicFileSet({
-      rootDir: bookDir,
+    return {
       writes,
       deletes: supersededChapterFiles.map((file) => join("chapters", file)),
-    });
+      chapterFileName: filename,
+    };
   }
 
   private buildGovernedUserPrompt(params: {
@@ -1139,39 +1173,6 @@ ${overrides}\n`;
       language,
       allowReapply,
       allowNewHooks,
-    });
-  }
-
-  private async resolveRuntimeStateArtifactsForOutput(
-    bookDir: string,
-    output: WriteChapterOutput,
-    language: WritingLanguage,
-  ): Promise<RuntimeStateArtifacts | null> {
-    if (!output.runtimeStateDelta) return null;
-    const safeDelta = this.normalizeRuntimeStateDeltaChapter(
-      output.runtimeStateDelta,
-      output.chapterNumber,
-    );
-    if (
-      safeDelta === output.runtimeStateDelta
-      && output.runtimeStateSnapshot
-      && output.updatedChapterSummaries
-      && output.updatedState
-      && output.updatedHooks
-    ) {
-      return {
-        snapshot: output.runtimeStateSnapshot,
-        resolvedDelta: safeDelta,
-        currentStateMarkdown: output.updatedState,
-        hooksMarkdown: output.updatedHooks,
-        chapterSummariesMarkdown: output.updatedChapterSummaries,
-      };
-    }
-
-    return buildRuntimeStateArtifacts({
-      bookDir,
-      delta: safeDelta,
-      language,
     });
   }
 

@@ -1,4 +1,5 @@
 import type { AuditIssue, AuditResult } from "../agents/continuity.js";
+import type { PreparedChapterFileSet } from "../agents/writer.js";
 import type { ChapterMeta } from "../models/chapter.js";
 import type { LengthTelemetry } from "../models/length-governance.js";
 import { buildStateDegradedReviewNote } from "./chapter-state-recovery.js";
@@ -22,9 +23,13 @@ export async function persistChapterArtifacts(params: {
   readonly degradedIssues: ReadonlyArray<AuditIssue>;
   readonly tokenUsage?: ChapterPersistenceUsage;
   readonly loadChapterIndex: () => Promise<ReadonlyArray<ChapterMeta>>;
-  readonly saveChapter: () => Promise<void>;
-  readonly saveTruthFiles: () => Promise<void>;
-  readonly saveChapterIndex: (index: ReadonlyArray<ChapterMeta>) => Promise<void>;
+  readonly prepareCanonicalFiles: (
+    updatedIndex: ReadonlyArray<ChapterMeta>,
+  ) => Promise<PreparedChapterFileSet>;
+  readonly commitCanonicalFiles: (
+    fileSet: PreparedChapterFileSet,
+    updatedIndex: ReadonlyArray<ChapterMeta>,
+  ) => Promise<void>;
   readonly markBookActiveIfNeeded: () => Promise<void>;
   readonly persistAuditDriftGuidance: (issues: ReadonlyArray<AuditIssue>) => Promise<void>;
   readonly snapshotState: () => Promise<void>;
@@ -32,11 +37,6 @@ export async function persistChapterArtifacts(params: {
   readonly logSnapshotStage: () => void;
   readonly now?: () => string;
 }): Promise<{ readonly entry: ChapterMeta }> {
-  await params.saveChapter();
-  if (params.status !== "state-degraded") {
-    await params.saveTruthFiles();
-  }
-
   const existingIndex = await params.loadChapterIndex();
   const now = params.now?.() ?? new Date().toISOString();
   const entry: ChapterMeta = {
@@ -58,10 +58,14 @@ export async function persistChapterArtifacts(params: {
     tokenUsage: params.tokenUsage,
   };
   const existingIdx = existingIndex.findIndex((e) => e.number === params.chapterNumber);
+  const persistedEntry = existingIdx >= 0
+    ? { ...entry, createdAt: existingIndex[existingIdx].createdAt }
+    : entry;
   const updatedIndex = existingIdx >= 0
-    ? existingIndex.map((e, i) => i === existingIdx ? { ...entry, createdAt: e.createdAt } : e)
-    : [...existingIndex, entry];
-  await params.saveChapterIndex(updatedIndex);
+    ? existingIndex.map((e, i) => i === existingIdx ? persistedEntry : e)
+    : [...existingIndex, persistedEntry];
+  const fileSet = await params.prepareCanonicalFiles(updatedIndex);
+  await params.commitCanonicalFiles(fileSet, updatedIndex);
   await params.markBookActiveIfNeeded();
 
   const driftIssues = params.auditResult.issues.filter(
@@ -75,5 +79,5 @@ export async function persistChapterArtifacts(params: {
     await params.syncCurrentStateFactHistory();
   }
 
-  return { entry };
+  return { entry: persistedEntry };
 }
