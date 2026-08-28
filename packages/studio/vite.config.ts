@@ -3,6 +3,10 @@ import react from "@vitejs/plugin-react";
 import tailwindcss from "@tailwindcss/vite";
 import { resolve } from "node:path";
 
+const apiPort = process.env.INKOS_STUDIO_PORT ?? "4569";
+const webHost = process.env.INKOS_STUDIO_WEB_HOST ?? "127.0.0.1";
+const webPort = Number(process.env.INKOS_STUDIO_WEB_PORT ?? "4567");
+
 export default defineConfig({
   plugins: [react(), tailwindcss()],
   resolve: {
@@ -11,10 +15,12 @@ export default defineConfig({
     },
   },
   server: {
-    port: 4567,
+    host: webHost,
+    port: webPort,
+    strictPort: true,
     proxy: {
       "/api/v1/events": {
-        target: `http://localhost:${process.env.INKOS_STUDIO_PORT ?? "4569"}`,
+        target: `http://127.0.0.1:${apiPort}`,
         changeOrigin: true,
         // SSE needs unbuffered streaming — bypass http-proxy response handling
         selfHandleResponse: true,
@@ -26,7 +32,7 @@ export default defineConfig({
         },
       },
       "/api": {
-        target: `http://localhost:${process.env.INKOS_STUDIO_PORT ?? "4569"}`,
+        target: `http://127.0.0.1:${apiPort}`,
         changeOrigin: true,
       },
     },

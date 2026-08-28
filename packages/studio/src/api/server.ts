@@ -145,6 +145,10 @@ import { access, mkdir, readFile, readdir, rename, rm, stat, writeFile } from "n
 import { dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { isSafeBookId } from "./safety.js";
 import { ApiError } from "./errors.js";
+import {
+  isAllowedMutationOrigin,
+  type StudioAccessPolicy,
+} from "./network-policy.js";
 import { buildStudioBookConfig } from "./book-create.js";
 import {
   deleteStudioTaskSnapshot,
@@ -2656,9 +2660,30 @@ async function probeServiceCapabilities(args: {
 
 // --- Server factory ---
 
-export function createStudioServer(initialConfig: ProjectConfig, root: string, overrides: { readonly nodeImageGenerator?: NodeImageDeps } = {}) {
+export interface StudioServerOverrides {
+  readonly nodeImageGenerator?: NodeImageDeps;
+  readonly accessPolicy?: StudioAccessPolicy;
+}
+
+export interface StartStudioServerOptions {
+  readonly staticDir?: string;
+  readonly hostname?: string;
+  readonly accessPolicy?: StudioAccessPolicy;
+}
+
+const DEFAULT_STUDIO_ACCESS_POLICY: StudioAccessPolicy = {
+  mode: "local",
+  allowedOrigins: ["http://127.0.0.1:4567", "http://localhost:4567"],
+};
+
+export function createStudioServer(
+  initialConfig: ProjectConfig,
+  root: string,
+  overrides: StudioServerOverrides = {},
+) {
   const app = new Hono();
   const state = new StateManager(root);
+  const accessPolicy = overrides.accessPolicy ?? DEFAULT_STUDIO_ACCESS_POLICY;
   let cachedConfig = initialConfig;
   const activeConfirmedTasks = new Map<string, AbortController>();
   // 确认式生产任务的单任务名额（sessionId → taskId）。原来的检查是"await 读快照
@@ -2759,7 +2784,29 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
     return task ? activeConfirmedTasks.get(task.execution.id) : undefined;
   };
 
-  app.use("/*", cors());
+  app.use(
+    "/*",
+    accessPolicy.mode === "trusted-lan"
+      ? cors({
+          origin: (origin) => origin !== undefined && accessPolicy.allowedOrigins.includes(origin) ? origin : undefined,
+        })
+      : cors(),
+  );
+
+  // Trusted-LAN mode is a CSRF/origin boundary, not authentication. Requests
+  // without Origin remain allowed for loopback CLI tooling; browser mutations
+  // must match one of the explicitly configured origins exactly.
+  app.use("/*", async (c, next) => {
+    const mutationMethods = new Set(["POST", "PUT", "PATCH", "DELETE"]);
+    if (
+      accessPolicy.mode === "trusted-lan"
+      && mutationMethods.has(c.req.method)
+      && !isAllowedMutationOrigin(c.req.header("Origin"), accessPolicy.allowedOrigins)
+    ) {
+      throw new ApiError(403, "ORIGIN_NOT_ALLOWED", "Mutation origin is not allowed.");
+    }
+    await next();
+  });
 
   // Structured error handler — ApiError returns typed JSON, others return 500
   app.onError((error, c) => {
@@ -6773,11 +6820,13 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
 export async function startStudioServer(
   root: string,
   port = 4567,
-  options?: { readonly staticDir?: string },
+  options?: StartStudioServerOptions,
 ): Promise<void> {
   const config = await loadProjectConfig(root, { consumer: "studio", requireApiKey: false });
 
-  const app = createStudioServer(config, root);
+  const app = createStudioServer(config, root, {
+    ...(options?.accessPolicy ? { accessPolicy: options.accessPolicy } : {}),
+  });
 
   // Serve frontend static files — single process for API + frontend
   if (options?.staticDir) {
@@ -6818,6 +6867,7 @@ export async function startStudioServer(
     }
   }
 
-  console.log(`InkOS Studio running on http://localhost:${port}`);
-  serve({ fetch: app.fetch, port });
+  const hostname = options?.hostname ?? "127.0.0.1";
+  console.log(`InkOS Studio running on http://${hostname}:${port}`);
+  serve({ fetch: app.fetch, port, hostname });
 }

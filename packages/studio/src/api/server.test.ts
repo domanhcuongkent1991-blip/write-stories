@@ -30,6 +30,7 @@ const createLLMClientMock = vi.fn(() => ({}));
 const chatCompletionMock = vi.fn();
 const runWorkerAgentMock = vi.fn();
 const loadProjectConfigMock = vi.fn();
+const serveMock = vi.fn();
 const pipelineConfigs: unknown[] = [];
 const pipelineAbortSignals: Array<AbortSignal | undefined> = [];
 const processProjectInteractionRequestMock = vi.fn();
@@ -197,6 +198,8 @@ const logger = {
   warn: vi.fn(),
   error: vi.fn(),
 };
+
+vi.mock("@hono/node-server", () => ({ serve: serveMock }));
 
 vi.mock("@actalk/inkos-core", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@actalk/inkos-core")>();
@@ -636,6 +639,7 @@ describe("createStudioServer daemon lifecycle", () => {
       usage: { promptTokens: 1, completionTokens: 1, totalTokens: 2 },
     });
     loadProjectConfigMock.mockReset();
+    serveMock.mockReset();
     processProjectInteractionRequestMock.mockReset();
     createInteractionToolsFromDepsMock.mockReset();
     loadProjectSessionMock.mockReset();
@@ -1161,6 +1165,78 @@ describe("createStudioServer daemon lifecycle", () => {
     expect(save.status).toBe(400);
     const persisted = JSON.parse(await readFile(join(root, "inkos.json"), "utf-8")) as { language?: string };
     expect(persisted.language).toBe("zh");
+  });
+
+  it("blocks foreign mutation origins in trusted-lan mode before route side effects", async () => {
+    const { createStudioServer } = await import("./server.js");
+    const app = createStudioServer(cloneProjectConfig() as never, root, {
+      accessPolicy: {
+        mode: "trusted-lan",
+        allowedOrigins: ["http://192.168.1.20:4568"],
+      },
+    });
+
+    const response = await app.request("http://localhost/api/v1/project/language", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Origin: "https://evil.example" },
+      body: JSON.stringify({ language: "en" }),
+    });
+
+    expect(response.status).toBe(403);
+    await expect(response.json()).resolves.toMatchObject({ error: { code: "ORIGIN_NOT_ALLOWED" } });
+    const persisted = JSON.parse(await readFile(join(root, "inkos.json"), "utf-8")) as { language?: string };
+    expect(persisted.language).toBe("zh");
+  });
+
+  it("allows an exact trusted-lan origin and preserves missing-origin tooling", async () => {
+    const { createStudioServer } = await import("./server.js");
+    const app = createStudioServer(cloneProjectConfig() as never, root, {
+      accessPolicy: {
+        mode: "trusted-lan",
+        allowedOrigins: ["http://192.168.1.20:4568"],
+      },
+    });
+
+    const allowed = await app.request("http://localhost/api/v1/project/language", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Origin: "http://192.168.1.20:4568" },
+      body: JSON.stringify({ language: "en" }),
+    });
+    expect(allowed.status).toBe(200);
+
+    const missingOrigin = await app.request("http://localhost/api/v1/project/language", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ language: "zh" }),
+    });
+    expect(missingOrigin.status).toBe(200);
+  });
+
+  it("startStudioServer forwards trusted-lan access policy to the served app", async () => {
+    const { startStudioServer } = await import("./server.js");
+    await startStudioServer(root, 4570, {
+      hostname: "127.0.0.1",
+      accessPolicy: {
+        mode: "trusted-lan",
+        allowedOrigins: ["http://192.168.1.20:4568"],
+      },
+    });
+
+    expect(serveMock).toHaveBeenCalledTimes(1);
+    const served = serveMock.mock.calls[0]?.[0] as {
+      readonly fetch: (request: Request) => Promise<Response>;
+      readonly port: number;
+      readonly hostname: string;
+    };
+    expect(served).toMatchObject({ port: 4570, hostname: "127.0.0.1" });
+
+    const blocked = await served.fetch(new Request("http://localhost/api/v1/project/language", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Origin: "https://evil.example" },
+      body: JSON.stringify({ language: "en" }),
+    }));
+    expect(blocked.status).toBe(403);
+    await expect(blocked.json()).resolves.toMatchObject({ error: { code: "ORIGIN_NOT_ALLOWED" } });
   });
 
   it("writes parseable custom genre frontmatter when user text contains YAML punctuation", async () => {
