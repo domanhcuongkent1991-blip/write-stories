@@ -599,6 +599,16 @@ export { ScriptCreationAgent, StoryboardCreationAgent, InteractiveFilmCreationAg
 
 // State
 export { BookWriteLockError, StateManager } from "./state/manager.js";
+export {
+  VI_WRITING_CONTRACT_VERSION,
+  VI_WRITING_MARKER_RELATIVE_PATH,
+  WritingLanguagePreflightError,
+  preflightWritingLanguage,
+  resolveViWritingCapability,
+  type LongFictionOperation,
+  type WritingLanguagePreflightCode,
+  type ViWritingCapability,
+} from "./state/writing-language-preflight.js";
 export { syncChapterWordCounts, type ChapterWordCountChange, type ChapterWordSyncDeps, type ChapterWordSyncResult } from "./state/chapter-word-sync.js";
 export { deleteLatestChapter, type ChapterDeleteDeps, type DeleteLatestChapterOptions, type DeleteLatestChapterResult } from "./state/chapter-delete.js";
 export {
