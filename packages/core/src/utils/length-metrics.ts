@@ -1,4 +1,6 @@
 import type { LengthCountingMode, LengthSpec } from "../models/length-governance.js";
+import type { WritingLanguage } from "../models/writing-language.js";
+import { resolveWritingLanguageProfile } from "./language.js";
 
 export type LengthLanguage = "zh" | "en";
 
@@ -12,8 +14,11 @@ const HARD_RANGE_DELTA = 600;
 export const DEFAULT_CHAPTER_LENGTH_ZH = 3000;
 export const DEFAULT_CHAPTER_LENGTH_EN = 2000;
 
-export function defaultChapterLength(language: LengthLanguage = "zh"): number {
-  return language === "en" ? DEFAULT_CHAPTER_LENGTH_EN : DEFAULT_CHAPTER_LENGTH_ZH;
+const VI_WORDLIKE_TOKEN_RE =
+  /[\p{L}\p{M}\p{N}]+(?:['’\-][\p{L}\p{M}\p{N}]+)*/gu;
+
+export function defaultChapterLength(language: WritingLanguage = "zh"): number {
+  return resolveWritingLanguageProfile(language).defaultChapterLength;
 }
 
 export function countChapterLength(
@@ -27,25 +32,31 @@ export function countChapterLength(
     return words?.length ?? 0;
   }
 
+  if (countingMode === "vi_wordlike_tokens_v1") {
+    return normalized.normalize("NFC").match(VI_WORDLIKE_TOKEN_RE)?.length ?? 0;
+  }
+
   return normalized.replace(/\s+/g, "").length;
 }
 
 export function resolveLengthCountingMode(
-  language: LengthLanguage = "zh",
+  language: WritingLanguage = "zh",
 ): LengthCountingMode {
-  return language === "en" ? "en_words" : "zh_chars";
+  return resolveWritingLanguageProfile(language).countingMode;
 }
 
 export function formatLengthCount(
   count: number,
   countingMode: LengthCountingMode,
 ): string {
-  return countingMode === "en_words" ? `${count} words` : `${count}字`;
+  if (countingMode === "zh_chars") return `${count}字`;
+  if (countingMode === "vi_wordlike_tokens_v1") return `${count} từ`;
+  return `${count} words`;
 }
 
 export function buildLengthSpec(
   target: number,
-  language: LengthLanguage = "zh",
+  language: WritingLanguage = "zh",
 ): LengthSpec {
   const softDelta = scaleRangeDelta(target, SOFT_RANGE_DELTA);
   const hardDelta = Math.max(softDelta, scaleRangeDelta(target, HARD_RANGE_DELTA));

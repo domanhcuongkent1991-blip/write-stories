@@ -1,6 +1,11 @@
 import { z } from "zod";
+import { WritingLanguageSchema } from "./writing-language.js";
 
-export const LengthCountingModeSchema = z.enum(["zh_chars", "en_words"]);
+export const LengthCountingModeSchema = z.enum([
+  "zh_chars",
+  "en_words",
+  "vi_wordlike_tokens_v1",
+]);
 export type LengthCountingMode = z.infer<typeof LengthCountingModeSchema>;
 
 export const LengthSpecSchema = z.object({
@@ -15,6 +20,7 @@ export const LengthSpecSchema = z.object({
 export type LengthSpec = z.infer<typeof LengthSpecSchema>;
 
 export const LengthTelemetrySchema = z.object({
+  language: WritingLanguageSchema.optional(),
   target: z.number().int().min(1),
   softMin: z.number().int().min(1),
   softMax: z.number().int().min(1),

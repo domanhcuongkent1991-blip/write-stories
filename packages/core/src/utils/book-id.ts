@@ -1,9 +1,15 @@
 const UNSAFE_BOOK_ID_RE = /[\u0000-\u001f\u007f/\\:*?"'`{}<>|]/u;
 
+function foldVietnameseForBookId(value: string): string {
+  return value
+    .replace(/[đĐ]/g, (letter) => letter === "Đ" ? "D" : "d")
+    .normalize("NFD")
+    .replace(/\p{M}+/gu, "")
+    .normalize("NFC");
+}
+
 export function deriveBookIdFromTitle(title: string): string {
-  return title
-    .trim()
-    .toLowerCase()
+  return foldVietnameseForBookId(title.trim().toLowerCase())
     .replace(/[^a-z0-9\u4e00-\u9fff]/gu, "-")
     .replace(/-+/g, "-")
     .replace(/^-+|-+$/g, "")

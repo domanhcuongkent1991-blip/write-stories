@@ -3,8 +3,10 @@ import {
   buildLengthSpec,
   countChapterLength,
   defaultChapterLength,
+  formatLengthCount,
   isOutsideHardRange,
   isOutsideSoftRange,
+  resolveLengthCountingMode,
 } from "../utils/length-metrics.js";
 
 describe("length metrics", () => {
@@ -75,6 +77,35 @@ describe("length metrics", () => {
     expect(isOutsideSoftRange(2200, spec)).toBe(false);
     expect(isOutsideHardRange(1500, spec)).toBe(true);
     expect(isOutsideHardRange(2200, spec)).toBe(false);
+  });
+
+  it("counts Vietnamese Unicode word-like tokens deterministically", () => {
+    expect(countChapterLength("Một đêm, thành-phố thức giấc năm 2026.", "vi_wordlike_tokens_v1")).toBe(7);
+    expect(countChapterLength("người’s lời", "vi_wordlike_tokens_v1")).toBe(2);
+  });
+
+  it("normalizes NFC only for Vietnamese measurement", () => {
+    const nfc = "Tiếng Việt rất đẹp";
+    const nfd = nfc.normalize("NFD");
+    expect(countChapterLength(nfc, "vi_wordlike_tokens_v1"))
+      .toBe(countChapterLength(nfd, "vi_wordlike_tokens_v1"));
+  });
+
+  it("keeps markdown metadata outside Vietnamese prose counts", () => {
+    const markdown = "---\ntitle: Thử\n---\n# Chương 1\n\nMột ngày bình yên.";
+    expect(countChapterLength(markdown, "vi_wordlike_tokens_v1")).toBe(4);
+  });
+
+  it("builds VI defaults without changing zh/en", () => {
+    expect(defaultChapterLength("vi")).toBe(2000);
+    expect(resolveLengthCountingMode("vi")).toBe("vi_wordlike_tokens_v1");
+    expect(buildLengthSpec(2200, "vi").countingMode).toBe("vi_wordlike_tokens_v1");
+    expect(defaultChapterLength("zh")).toBe(3000);
+    expect(defaultChapterLength("en")).toBe(2000);
+  });
+
+  it("formats Vietnamese length counts in words", () => {
+    expect(formatLengthCount(7, "vi_wordlike_tokens_v1")).toBe("7 từ");
   });
 
 });

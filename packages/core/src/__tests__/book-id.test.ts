@@ -23,4 +23,13 @@ describe("book id safety", () => {
     expect(() => assertSafeBookId("bad\nid", "activeBookId"))
       .toThrow('Invalid activeBookId: "bad\\nid"');
   });
+
+  it("derives deterministic ASCII ids from Vietnamese titles", () => {
+    expect(deriveBookIdFromTitle("Đêm Trắng Ở Sài Gòn")).toBe("dem-trang-o-sai-gon");
+    expect(deriveBookIdFromTitle("đ")).toBe("d");
+  });
+
+  it("makes equivalent Vietnamese title shapes collide deterministically", () => {
+    expect(deriveBookIdFromTitle("Đêm Trắng")).toBe(deriveBookIdFromTitle("Dem-Trang"));
+  });
 });
