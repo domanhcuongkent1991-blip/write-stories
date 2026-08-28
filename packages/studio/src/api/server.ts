@@ -66,6 +66,13 @@ import {
   normalizeRequestedIntent as normalizeCoreRequestedIntent,
   normalizeSkillIdList as normalizeCoreSkillIdList,
   inferLanguage,
+  BookConfigSchema,
+  BookStatusSchema,
+  WritingLanguageSchema,
+  deriveBookIdFromTitle,
+  preflightWritingLanguage,
+  resolveViWritingCapability,
+  WritingLanguagePreflightError,
   ingestMaterial,
   createSkillRegistry,
   loadAvailableAgentSkills,
@@ -149,6 +156,7 @@ import {
 // -- Studio server language (read per request from the project config's `language`) --
 
 type StudioLanguage = "zh" | "en";
+type WritingLanguage = "zh" | "en" | "vi";
 
 function normalizeStudioLanguage(value: unknown): StudioLanguage {
   return value === "en" ? "en" : "zh";
@@ -1682,14 +1690,111 @@ function broadcast(event: string, data: unknown): void {
   }
 }
 
-function deriveBookIdFromTitle(title: string): string {
-  return title
-    .trim()
-    .toLowerCase()
-    .replace(/[^a-z0-9\u4e00-\u9fff]/g, "-")
-    .replace(/-+/g, "-")
-    .replace(/^-+|-+$/g, "")
-    .slice(0, 30);
+type StudioCreateBookPayload = {
+  readonly title: string;
+  readonly genre: string;
+  readonly language: WritingLanguage;
+  readonly platform?: string;
+  readonly chapterWordCount?: number;
+  readonly targetChapters?: number;
+  readonly blurb?: string;
+};
+
+type StudioBookUpdatePayload = {
+  readonly chapterWordCount?: number;
+  readonly targetChapters?: number;
+  readonly status?: "incubating" | "outlining" | "active" | "paused" | "completed" | "dropped";
+  readonly language?: WritingLanguage;
+};
+
+function invalidPayload(code: string, message: string): never {
+  throw new ApiError(400, code, message);
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function hasOnlyKeys(value: Record<string, unknown>, keys: ReadonlySet<string>): boolean {
+  return Object.keys(value).every((key) => keys.has(key));
+}
+
+function parseStudioCreateBookPayload(value: unknown): StudioCreateBookPayload {
+  if (!isRecord(value) || !hasOnlyKeys(value, new Set(["title", "genre", "language", "platform", "chapterWordCount", "targetChapters", "blurb"]))) {
+    return invalidPayload("INVALID_BOOK_CREATE_PAYLOAD", "Book create payload must be valid JSON with supported fields.");
+  }
+  const title = typeof value.title === "string" ? value.title.trim() : "";
+  const genre = typeof value.genre === "string" ? value.genre.trim() : "";
+  if (!title || !genre) return invalidPayload("INVALID_BOOK_CREATE_PAYLOAD", "Book title and genre are required.");
+  const parsedLanguage = WritingLanguageSchema.safeParse(value.language);
+  if (!parsedLanguage.success) return invalidPayload("INVALID_BOOK_CREATE_PAYLOAD", "Book writing language must be zh, en, or vi.");
+  const language = parsedLanguage.data;
+  if (value.platform !== undefined && typeof value.platform !== "string") {
+    return invalidPayload("INVALID_BOOK_CREATE_PAYLOAD", "Book platform must be a string.");
+  }
+  if (value.blurb !== undefined && typeof value.blurb !== "string") {
+    return invalidPayload("INVALID_BOOK_CREATE_PAYLOAD", "Book blurb must be a string.");
+  }
+  if (typeof value.blurb === "string" && !value.blurb.trim()) {
+    return invalidPayload("INVALID_BOOK_CREATE_PAYLOAD", "Book blurb must not be empty.");
+  }
+  if (value.chapterWordCount !== undefined && (typeof value.chapterWordCount !== "number" || !Number.isInteger(value.chapterWordCount) || value.chapterWordCount < 1000)) {
+    return invalidPayload("INVALID_BOOK_CREATE_PAYLOAD", "chapterWordCount must be an integer of at least 1000.");
+  }
+  if (value.targetChapters !== undefined && (typeof value.targetChapters !== "number" || !Number.isInteger(value.targetChapters) || value.targetChapters < 1)) {
+    return invalidPayload("INVALID_BOOK_CREATE_PAYLOAD", "targetChapters must be a positive integer.");
+  }
+  return {
+    title,
+    genre,
+    language,
+    ...(value.platform !== undefined ? { platform: value.platform } : {}),
+    ...(value.chapterWordCount !== undefined ? { chapterWordCount: value.chapterWordCount } : {}),
+    ...(value.targetChapters !== undefined ? { targetChapters: value.targetChapters } : {}),
+    ...(value.blurb !== undefined ? { blurb: value.blurb.trim() } : {}),
+  };
+}
+
+function parseProjectLanguagePayload(value: unknown): "zh" | "en" {
+  if (!isRecord(value) || !hasOnlyKeys(value, new Set(["language"])) || (value.language !== "zh" && value.language !== "en")) {
+    return invalidPayload("INVALID_PROJECT_LANGUAGE", "Project language must be zh or en.");
+  }
+  return value.language;
+}
+
+function parseBookUpdatePayload(value: unknown): StudioBookUpdatePayload {
+  if (!isRecord(value) || !hasOnlyKeys(value, new Set(["chapterWordCount", "targetChapters", "status", "language"]))) {
+    return invalidPayload("INVALID_BOOK_UPDATE_PAYLOAD", "Book update payload must be valid JSON with supported fields.");
+  }
+  if (value.chapterWordCount !== undefined && (typeof value.chapterWordCount !== "number" || !Number.isInteger(value.chapterWordCount) || value.chapterWordCount < 1000)) {
+    return invalidPayload("INVALID_BOOK_UPDATE_PAYLOAD", "chapterWordCount must be an integer of at least 1000.");
+  }
+  if (value.targetChapters !== undefined && (typeof value.targetChapters !== "number" || !Number.isInteger(value.targetChapters) || value.targetChapters < 1)) {
+    return invalidPayload("INVALID_BOOK_UPDATE_PAYLOAD", "targetChapters must be a positive integer.");
+  }
+  if (value.status !== undefined && !BookStatusSchema.safeParse(value.status).success) {
+    return invalidPayload("INVALID_BOOK_UPDATE_PAYLOAD", "status is invalid.");
+  }
+  let language: WritingLanguage | undefined;
+  if (value.language !== undefined) {
+    const parsedLanguage = WritingLanguageSchema.safeParse(value.language);
+    if (!parsedLanguage.success) return invalidPayload("INVALID_BOOK_UPDATE_PAYLOAD", "language is invalid.");
+    language = parsedLanguage.data;
+  }
+  return {
+    ...(value.chapterWordCount !== undefined ? { chapterWordCount: value.chapterWordCount } : {}),
+    ...(value.targetChapters !== undefined ? { targetChapters: value.targetChapters } : {}),
+    ...(value.status !== undefined ? { status: value.status as StudioBookUpdatePayload["status"] } : {}),
+    ...(language ? { language } : {}),
+  };
+}
+
+function mapWritingLanguagePreflightError(error: unknown): never {
+  if (error instanceof WritingLanguagePreflightError) {
+    const details = error as unknown as { readonly code: string; readonly message: string };
+    throw new ApiError(409, details.code, details.message);
+  }
+  throw error;
 }
 
 async function completeBookExists(bookDir: string): Promise<boolean> {
@@ -2829,23 +2934,30 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
   // --- Book Create ---
 
   app.post("/api/v1/books/create", async (c) => {
-    const body = await c.req.json<{
-      title: string;
-      genre: string;
-      language?: string;
-      platform?: string;
-      chapterWordCount?: number;
-      targetChapters?: number;
-      blurb?: string;
-    }>();
+    const rawBody = await c.req.json<unknown>().catch(() => null);
+    const body = parseStudioCreateBookPayload(rawBody);
 
     const now = new Date().toISOString();
     const bookConfig = buildStudioBookConfig(body, now);
     const bookId = bookConfig.id;
-    const bookDir = state.bookDir(bookId);
 
     if (!bookId) {
-      return c.json({ error: "Could not derive a valid book id from title" }, 400);
+      return c.json({ error: { code: "INVALID_BOOK_ID", message: "Could not derive a valid book id from title." } }, 400);
+    }
+
+    const bookDir = state.bookDir(bookId);
+    if (body.language === "vi") {
+      try {
+        await preflightWritingLanguage({
+          operation: "create",
+          projectRoot: root,
+          bookDir,
+          language: body.language,
+          env: process.env,
+        });
+      } catch (error) {
+        mapWritingLanguagePreflightError(error);
+      }
     }
     if (await completeBookExists(bookDir)) {
       return c.json({ error: `Book "${bookId}" already exists` }, 409);
@@ -2862,7 +2974,7 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
         intent: "create_book",
         title: body.title,
         genre: body.genre,
-        language: body.language === "en" ? "en" : body.language === "zh" ? "zh" : undefined,
+        language: body.language,
         platform: body.platform,
         chapterWordCount: body.chapterWordCount,
         targetChapters: body.targetChapters,
@@ -3391,13 +3503,27 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
 
   app.post("/api/v1/books/:id/foundation/revise", async (c) => {
     const id = c.req.param("id");
-    const { feedback } = await c.req.json<{ feedback?: string }>().catch(() => ({ feedback: undefined }));
-    if (!feedback?.trim()) {
+    const rawBody = await c.req.json<unknown>().catch(() => null);
+    const parsedBody = isRecord(rawBody)
+      && typeof rawBody.feedback === "string"
+      ? rawBody.feedback.trim()
+      : "";
+    if (!parsedBody) {
       return c.json({ error: "feedback is required" }, 400);
     }
+    const feedback = parsedBody;
     try {
+      const book = BookConfigSchema.parse(await state.loadBookConfig(id));
+      if ((book.language as string | undefined) === "vi") {
+        return c.json({
+          error: {
+            code: "WRITING_LANGUAGE_MODE_UNSUPPORTED",
+            message: "Vietnamese foundation revision is not supported in Studio.",
+          },
+        }, 409);
+      }
       const pipeline = new PipelineRunner(await buildPipelineConfig());
-      await pipeline.reviseFoundation(id, feedback.trim());
+      await pipeline.reviseFoundation(id, feedback);
       broadcast("foundation:revised", { bookId: id });
       return c.json({ ok: true });
     } catch (e) {
@@ -3995,6 +4121,10 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
       );
     }
     const languageExplicit = "language" in raw && raw.language !== "";
+    const writingCapability = await resolveViWritingCapability({
+      projectRoot: root,
+      env: process.env,
+    });
 
     return c.json({
       name: currentConfig.name,
@@ -4005,6 +4135,9 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
       baseUrl: currentConfig.llm.baseUrl,
       stream: currentConfig.llm.stream,
       temperature: currentConfig.llm.temperature,
+      writingLanguages: writingCapability.writingLanguages,
+      writingLanguageContractVersion: writingCapability.contractVersion,
+      accessMode: "local" as const,
     });
   });
 
@@ -4685,7 +4818,12 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
       }
       const configLanguage = config.language === "en" ? "en" : "zh";
       const bookLanguage = activeBookConfig?.language === "en" ? "en" : activeBookConfig?.language === "zh" ? "zh" : undefined;
-      const requestedLanguage = actionPayload?.shortRun?.language ?? actionPayload?.createBook?.language;
+      const requestedLanguage =
+        actionPayload?.shortRun?.language === "en" || actionPayload?.createBook?.language === "en"
+          ? "en"
+          : actionPayload?.shortRun?.language === "zh" || actionPayload?.createBook?.language === "zh"
+            ? "zh"
+            : undefined;
       const surfaceLanguage = agentBookId
         ? (bookLanguage ?? configLanguage)
         : (requestedLanguage ?? inferLanguage(instruction));
@@ -5302,7 +5440,8 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
   // --- Language setup ---
 
   app.post("/api/v1/project/language", async (c) => {
-    const { language } = await c.req.json<{ language: "zh" | "en" }>();
+    const rawBody = await c.req.json<unknown>().catch(() => null);
+    const language = parseProjectLanguagePayload(rawBody);
     const configPath = join(root, "inkos.json");
     try {
       const raw = await readFile(configPath, "utf-8");
@@ -5717,24 +5856,29 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
 
   app.put("/api/v1/books/:id", async (c) => {
     const id = c.req.param("id");
-    const updates = await c.req.json<{
-      chapterWordCount?: number;
-      targetChapters?: number;
-      status?: string;
-      language?: string;
-    }>();
+    const rawBody = await c.req.json<unknown>().catch(() => null);
+    const updates = parseBookUpdatePayload(rawBody);
     try {
-      const book = await state.loadBookConfig(id);
+      const book = BookConfigSchema.parse(await state.loadBookConfig(id));
+      if (updates.language !== undefined && book.language !== undefined && updates.language !== book.language) {
+        return c.json({
+          error: {
+            code: "BOOK_LANGUAGE_IMMUTABLE",
+            message: "Book writing language cannot be changed after creation.",
+          },
+        }, 409);
+      }
       const updated = {
         ...book,
         ...(updates.chapterWordCount !== undefined ? { chapterWordCount: Number(updates.chapterWordCount) } : {}),
         ...(updates.targetChapters !== undefined ? { targetChapters: Number(updates.targetChapters) } : {}),
-        ...(updates.status !== undefined ? { status: updates.status as typeof book.status } : {}),
-        ...(updates.language !== undefined ? { language: updates.language as "zh" | "en" } : {}),
+        ...(updates.status !== undefined ? { status: updates.status } : {}),
+        ...(updates.language !== undefined && book.language === undefined ? { language: updates.language } : {}),
         updatedAt: new Date().toISOString(),
       };
-      await state.saveBookConfig(id, updated);
-      return c.json({ ok: true, book: updated });
+      const validated = BookConfigSchema.parse(updated);
+      await state.saveBookConfig(id, validated);
+      return c.json({ ok: true, book: validated });
     } catch (e) {
       return c.json({ error: String(e) }, 500);
     }
@@ -6133,7 +6277,20 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
     } catch {
       return c.json({ error: `Parent book "${body.parentBookId}" not found` }, 404);
     }
-    const language = (body.language ?? parent.language) as "zh" | "en" | undefined;
+    const rawLanguage = body.language ?? parent.language;
+    const parsedLanguage = rawLanguage === undefined ? undefined : WritingLanguageSchema.safeParse(rawLanguage);
+    if (parsedLanguage && !parsedLanguage.success) {
+      return c.json({ error: { code: "INVALID_WRITING_LANGUAGE", message: "Writing language must be zh, en, or vi." } }, 400);
+    }
+    const language = parsedLanguage?.data;
+    if (language === "vi") {
+      return c.json({
+        error: {
+          code: "WRITING_LANGUAGE_MODE_UNSUPPORTED",
+          message: "Vietnamese spinoff creation is not supported in Studio.",
+        },
+      }, 409);
+    }
     const now = new Date().toISOString();
     const bookConfig = buildStudioBookConfig({
       title: body.title,
@@ -6181,6 +6338,19 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
     if (!body.title?.trim() || !body.referenceText?.trim() || !body.storyIdea?.trim()) {
       return c.json({ error: "title, referenceText and storyIdea are required" }, 400);
     }
+    const parsedLanguage = body.language === undefined ? undefined : WritingLanguageSchema.safeParse(body.language);
+    if (parsedLanguage && !parsedLanguage.success) {
+      return c.json({ error: { code: "INVALID_WRITING_LANGUAGE", message: "Writing language must be zh, en, or vi." } }, 400);
+    }
+    const language = parsedLanguage?.data;
+    if (language === "vi") {
+      return c.json({
+        error: {
+          code: "WRITING_LANGUAGE_MODE_UNSUPPORTED",
+          message: "Vietnamese imitation creation is not supported in Studio.",
+        },
+      }, 409);
+    }
     const now = new Date().toISOString();
     const bookConfig = buildStudioBookConfig({
       title: body.title,
@@ -6188,7 +6358,7 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
       platform: body.platform,
       targetChapters: body.targetChapters,
       chapterWordCount: body.chapterWordCount,
-      ...(body.language ? { language: body.language as "zh" | "en" } : {}),
+      ...(language ? { language } : {}),
     }, now);
     const bookId = bookConfig.id;
     if (!bookId) {

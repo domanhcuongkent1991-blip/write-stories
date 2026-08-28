@@ -1,8 +1,11 @@
+import { readFile } from "node:fs/promises";
+import { join } from "node:path";
 import type { AutomationMode } from "./modes.js";
 import { routeInteractionRequest } from "./request-router.js";
 import type { InteractionRequest } from "./intents.js";
 import type { ExecutionState, InteractionEvent } from "./events.js";
 import type { PendingDecision, InteractionSession } from "./session.js";
+import type { WritingLanguage } from "../models/writing-language.js";
 import {
   appendInteractionEvent,
   bindActiveBook,
@@ -21,7 +24,7 @@ export interface InteractionRuntimeTools {
     readonly title: string;
     readonly genre?: string;
     readonly platform?: string;
-    readonly language?: "zh" | "en";
+    readonly language?: WritingLanguage;
     readonly chapterWordCount?: number;
     readonly targetChapters?: number;
     readonly blurb?: string;
@@ -109,8 +112,21 @@ function extractToolMetadata(value: unknown): InteractionToolMetadata {
   };
 }
 
-function resolveRuntimeLanguage(request: InteractionRequest): RuntimeLanguage {
-  return request.language === "en" ? "en" : "zh";
+async function resolveRuntimeLanguage(
+  request: InteractionRequest,
+  projectRoot: string,
+): Promise<RuntimeLanguage> {
+  if (request.language !== "vi") {
+    return request.language === "en" ? "en" : "zh";
+  }
+
+  try {
+    const raw = await readFile(join(projectRoot, "inkos.json"), "utf-8");
+    const project = JSON.parse(raw) as { readonly language?: unknown };
+    return project.language === "en" ? "en" : "zh";
+  } catch {
+    return "zh";
+  }
 }
 
 function localize<T>(language: RuntimeLanguage, messages: { zh: T; en: T }): T {
@@ -514,7 +530,7 @@ export async function runInteractionRequest(params: {
   readonly tools: InteractionRuntimeTools;
 }): Promise<InteractionRuntimeResult> {
   const request = routeInteractionRequest(params.request);
-  const language = resolveRuntimeLanguage(request);
+  const language = await resolveRuntimeLanguage(request, params.session.projectRoot);
   let session = params.session;
   const addEvent = (
     nextSession: InteractionSession,

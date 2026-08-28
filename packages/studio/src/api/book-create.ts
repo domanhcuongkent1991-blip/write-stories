@@ -1,11 +1,18 @@
-import { normalizePlatformOrOther, defaultChapterLength, type Platform } from "@actalk/inkos-core";
+import {
+  defaultChapterLength,
+  deriveBookIdFromTitle,
+  normalizePlatformOrOther,
+  type Platform,
+} from "@actalk/inkos-core";
 export { waitForStudioBookReady } from "../lib/book-ready.js";
 export type { StudioBookDetail, WaitForStudioBookReadyOptions } from "../lib/book-ready.js";
+
+type WritingLanguage = "zh" | "en" | "vi";
 
 export interface StudioCreateBookBody {
   readonly title: string;
   readonly genre: string;
-  readonly language?: string;
+  readonly language?: WritingLanguage;
   readonly platform?: string;
   readonly chapterWordCount?: number;
   readonly targetChapters?: number;
@@ -20,7 +27,7 @@ export interface StudioBookConfigDraft {
   readonly status: "outlining";
   readonly targetChapters: number;
   readonly chapterWordCount: number;
-  readonly language?: "zh" | "en";
+  readonly language?: WritingLanguage;
   readonly createdAt: string;
   readonly updatedAt: string;
 }
@@ -31,22 +38,14 @@ export function normalizeStudioPlatform(platform?: string): Platform {
 
 export function buildStudioBookConfig(body: StudioCreateBookBody, now: string): StudioBookConfigDraft {
   return {
-    id: body.title
-      .toLowerCase()
-      .replace(/[^a-z0-9\u4e00-\u9fff]/g, "-")
-      .replace(/-+/g, "-")
-      .slice(0, 30),
+    id: deriveBookIdFromTitle(body.title),
     title: body.title,
     platform: normalizeStudioPlatform(body.platform),
     genre: body.genre,
     status: "outlining",
     targetChapters: body.targetChapters ?? 200,
-    chapterWordCount: body.chapterWordCount ?? defaultChapterLength(body.language === "en" ? "en" : "zh"),
-    ...(body.language === "en"
-      ? { language: "en" as const }
-      : body.language === "zh"
-        ? { language: "zh" as const }
-        : {}),
+    chapterWordCount: body.chapterWordCount ?? defaultChapterLength(body.language ?? "zh"),
+    ...(body.language ? { language: body.language } : {}),
     createdAt: now,
     updatedAt: now,
   };

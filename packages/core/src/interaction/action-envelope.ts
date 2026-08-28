@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { PlayModeSchema, type PlayMode } from "./session.js";
 import { StoryNodeSchema } from "../interactive-film/graph-schema.js";
+import { WritingLanguageSchema } from "../models/writing-language.js";
 import {
   SHORT_FICTION_EN_MAX_WORDS_PER_CHAPTER,
   SHORT_FICTION_EN_MIN_WORDS_PER_CHAPTER,
@@ -42,7 +43,7 @@ export const CreateBookActionPayloadSchema = z.object({
   title: z.string().min(1).optional(),
   genre: z.string().min(1).optional(),
   platform: z.enum(["tomato", "qidian", "feilu", "other"]).optional(),
-  language: z.enum(["zh", "en"]).optional(),
+  language: WritingLanguageSchema.optional(),
   targetChapters: z.number().int().min(1).optional(),
   chapterWordCount: z.number().int().min(1).optional(),
 }).strict();

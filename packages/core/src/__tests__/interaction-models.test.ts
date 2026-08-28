@@ -4,7 +4,9 @@ import {
   ActionPayloadSchema,
   ActionSourceSchema,
   BookCreationDraftSchema,
+  CreateBookActionPayloadSchema,
   InteractionIntentTypeSchema,
+  InteractionRequestSchema,
   ExecutionStatusSchema,
   InteractionSessionSchema,
   PlayModeSchema,
@@ -18,6 +20,7 @@ import {
   ScriptTargetFormatSchema,
   SessionKindSchema,
   StoryboardCreateActionPayloadSchema,
+  ProjectConfigSchema,
   bindActiveBook,
   clearPendingDecision,
   isTerminalExecutionStatus,
@@ -149,6 +152,68 @@ describe("interaction models", () => {
       title: "缺少参考",
       storyIdea: "原创故事",
     }).success).toBe(false);
+  });
+
+  it("accepts Vietnamese only on the create-book interaction contract", () => {
+    expect(CreateBookActionPayloadSchema.parse({
+      title: "Đêm Trắng",
+      language: "vi",
+    })).toMatchObject({ language: "vi" });
+    expect(BookCreationDraftSchema.parse({
+      concept: "Một đêm mất điện ở Sài Gòn.",
+      language: "vi",
+    })).toMatchObject({ language: "vi" });
+    expect(InteractionRequestSchema.parse({
+      intent: "create_book",
+      title: "Đêm Trắng",
+      language: "vi",
+    })).toMatchObject({ language: "vi" });
+
+    expect(InteractionRequestSchema.safeParse({
+      intent: "write_next",
+      bookId: "dem-trang",
+      language: "vi",
+    }).success).toBe(false);
+    expect(ActionPayloadSchema.safeParse({
+      shortRun: { title: "Truyện ngắn", language: "vi" },
+    }).success).toBe(false);
+    expect(FanficCreateActionPayloadSchema.safeParse({
+      title: "Ngoại truyện",
+      sourcePath: "canon.md",
+      language: "vi",
+    }).success).toBe(false);
+    expect(ContinuationImportActionPayloadSchema.safeParse({
+      title: "Viết tiếp",
+      sourcePath: "novel.md",
+      language: "vi",
+    }).success).toBe(false);
+    expect(SpinoffCreateActionPayloadSchema.safeParse({
+      title: "Truyện nhánh",
+      parentBookId: "parent",
+      language: "vi",
+    }).success).toBe(false);
+    expect(ImitationCreateActionPayloadSchema.safeParse({
+      title: "Mô phỏng",
+      referenceText: "sample",
+      language: "vi",
+    }).success).toBe(false);
+  });
+
+  it("keeps project surface language limited to Chinese and English", () => {
+    const validProject = {
+      name: "interaction-project",
+      version: "0.1.0" as const,
+      llm: {
+        provider: "openai" as const,
+        baseUrl: "https://api.example.com/v1",
+        apiKey: "test-key",
+        model: "test-model",
+      },
+      notify: [],
+    };
+
+    expect(ProjectConfigSchema.safeParse({ ...validProject, language: "en" }).success).toBe(true);
+    expect(ProjectConfigSchema.safeParse({ ...validProject, language: "vi" }).success).toBe(false);
   });
 
   it("recognizes terminal execution statuses", () => {

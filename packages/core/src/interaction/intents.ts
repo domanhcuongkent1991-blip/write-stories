@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { AutomationModeSchema } from "./modes.js";
+import { WritingLanguageSchema } from "../models/writing-language.js";
 
 export const InteractionIntentTypeSchema = z.enum([
   "develop_book",
@@ -35,7 +36,7 @@ export const InteractionRequestSchema = z.object({
   title: z.string().min(1).optional(),
   genre: z.string().min(1).optional(),
   platform: z.string().min(1).optional(),
-  language: z.enum(["zh", "en"]).optional(),
+  language: WritingLanguageSchema.optional(),
   chapterWordCount: z.number().int().min(1).optional(),
   targetChapters: z.number().int().min(1).optional(),
   blurb: z.string().min(1).optional(),
@@ -59,6 +60,14 @@ export const InteractionRequestSchema = z.object({
   fullText: z.string().min(1).optional(),
   instruction: z.string().min(1).optional(),
   mode: AutomationModeSchema.optional(),
+}).superRefine((request, ctx) => {
+  if (request.language === "vi" && request.intent !== "create_book") {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ["language"],
+      message: "Vietnamese writing language is supported only for create_book.",
+    });
+  }
 });
 
 export type InteractionRequest = z.infer<typeof InteractionRequestSchema>;

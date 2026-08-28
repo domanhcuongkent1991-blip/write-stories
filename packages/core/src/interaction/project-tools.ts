@@ -9,6 +9,7 @@ import type {
   LLMClient,
   BookConfig,
 } from "../index.js";
+import type { WritingLanguage } from "../models/writing-language.js";
 import { runWorkerAgent } from "../agent/worker-agent.js";
 import { executeEditTransaction } from "./edit-controller.js";
 import { defaultChapterLength } from "../utils/length-metrics.js";
@@ -87,19 +88,26 @@ function buildBookConfig(input: {
   readonly title: string;
   readonly genre?: string;
   readonly platform?: string;
-  readonly language?: "zh" | "en";
+  readonly language?: WritingLanguage;
   readonly chapterWordCount?: number;
   readonly targetChapters?: number;
 }): BookConfig {
   const now = new Date().toISOString();
+  const id = deriveBookIdFromTitle(input.title);
+  if (!id) {
+    throw Object.assign(
+      new Error("Unable to derive a valid book id from the title."),
+      { code: "INVALID_BOOK_ID" as const },
+    );
+  }
   return {
-    id: deriveBookIdFromTitle(input.title) || `book-${Date.now().toString(36)}`,
+    id,
     title: input.title,
     platform: normalizePlatformOrOther(input.platform),
     genre: input.genre ?? "other",
     status: "outlining",
     targetChapters: input.targetChapters ?? 200,
-    chapterWordCount: input.chapterWordCount ?? defaultChapterLength(input.language === "en" ? "en" : "zh"),
+    chapterWordCount: input.chapterWordCount ?? defaultChapterLength(input.language ?? "zh"),
     ...(input.language ? { language: input.language } : {}),
     createdAt: now,
     updatedAt: now,

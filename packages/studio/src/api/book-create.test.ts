@@ -51,6 +51,36 @@ describe("buildStudioBookConfig", () => {
     expect(config.language).toBe("en");
     expect(config.id).toBe("english-book");
   });
+
+  it("uses the Core Vietnamese book id and chapter-length defaults", () => {
+    const config = buildStudioBookConfig(
+      {
+        title: "Đêm Trắng Ở Sài Gòn",
+        genre: "urban",
+        language: "vi",
+      },
+      "2026-03-30T00:00:00.000Z",
+    );
+
+    expect(config).toMatchObject({
+      id: "dem-trang-o-sai-gon",
+      language: "vi",
+      chapterWordCount: 2000,
+    });
+  });
+
+  it("keeps an empty Core-derived book id stable", () => {
+    const config = buildStudioBookConfig(
+      {
+        title: "!!!",
+        genre: "other",
+        language: "vi",
+      },
+      "2026-03-30T00:00:00.000Z",
+    );
+
+    expect(config.id).toBe("");
+  });
 });
 
 describe("waitForStudioBookReady", () => {

@@ -23,6 +23,7 @@ const writeChaptersMock = vi.fn();
 const rollbackToChapterMock = vi.fn();
 const deleteLatestChapterMock = vi.fn();
 const saveChapterIndexMock = vi.fn();
+const saveBookConfigMock = vi.fn();
 const loadChapterIndexMock = vi.fn();
 const loadBookConfigMock = vi.fn();
 const createLLMClientMock = vi.fn(() => ({}));
@@ -227,6 +228,10 @@ vi.mock("@actalk/inkos-core", async (importOriginal) => {
       await saveChapterIndexMock(bookId, index);
     }
 
+    async saveBookConfig(bookId: string, config: unknown): Promise<void> {
+      await saveBookConfigMock(bookId, config);
+    }
+
     async rollbackToChapter(bookId: string, chapterNumber: number): Promise<number[]> {
       return (await rollbackToChapterMock(bookId, chapterNumber)) as number[];
     }
@@ -325,6 +330,12 @@ vi.mock("@actalk/inkos-core", async (importOriginal) => {
     isSafeBookId: actual.isSafeBookId,
     normalizePlatformOrOther: actual.normalizePlatformOrOther,
     defaultChapterLength: actual.defaultChapterLength,
+    deriveBookIdFromTitle: actual.deriveBookIdFromTitle,
+    BookConfigSchema: actual.BookConfigSchema,
+    WritingLanguageSchema: actual.WritingLanguageSchema,
+    WritingLanguagePreflightError: actual.WritingLanguagePreflightError,
+    preflightWritingLanguage: actual.preflightWritingLanguage,
+    resolveViWritingCapability: actual.resolveViWritingCapability,
     inferLanguage: actual.inferLanguage,
     ingestMaterial: actual.ingestMaterial,
     chatCompletion: chatCompletionMock,
@@ -483,6 +494,16 @@ async function writeCompleteBookFixture(root: string, bookId: string, title = "N
   await writeFile(join(bookDir, "story", "story_bible.md"), "# Story Bible\n\nReady.\n", "utf-8");
 }
 
+async function enableViWriting(root: string): Promise<void> {
+  vi.stubEnv("INKOS_EXPERIMENTAL_WRITING_VI", "1");
+  await mkdir(join(root, ".inkos"), { recursive: true });
+  await writeFile(join(root, ".inkos", "vi-writing-v1.json"), JSON.stringify({
+    schemaVersion: 1,
+    contractVersion: "vi-writing-v1",
+    projectRoot: root,
+  }), "utf-8");
+}
+
 describe("createStudioServer daemon lifecycle", () => {
   let root: string;
 
@@ -512,6 +533,7 @@ describe("createStudioServer daemon lifecycle", () => {
     rollbackToChapterMock.mockReset();
     deleteLatestChapterMock.mockReset();
     saveChapterIndexMock.mockReset();
+    saveBookConfigMock.mockReset();
     loadChapterIndexMock.mockReset();
     loadBookConfigMock.mockReset();
     generatePlayImageMock.mockClear();
@@ -672,6 +694,7 @@ describe("createStudioServer daemon lifecycle", () => {
       updatedAt: "2026-04-12T00:00:00.000Z",
     });
     saveChapterIndexMock.mockResolvedValue(undefined);
+    saveBookConfigMock.mockResolvedValue(undefined);
     rollbackToChapterMock.mockResolvedValue([]);
     deleteLatestChapterMock.mockResolvedValue({
       bookId: "demo-book",
@@ -746,6 +769,7 @@ describe("createStudioServer daemon lifecycle", () => {
   });
 
   afterEach(async () => {
+    vi.unstubAllEnvs();
     await rm(root, { recursive: true, force: true });
     await rm(join(tmpdir(), "inkos-global.env"), { force: true });
   });
@@ -913,6 +937,35 @@ describe("createStudioServer daemon lifecycle", () => {
     const body = await response.json() as { error: { code: string; message: string } };
     expect(body.error.code).toBe("PROJECT_CONFIG_INVALID");
     expect(body.error.message).toContain("inkos.json");
+  });
+
+  it("reports only legacy writing languages when the Vietnamese marker or env gate is unavailable", async () => {
+    const { createStudioServer } = await import("./server.js");
+    const app = createStudioServer(cloneProjectConfig() as never, root);
+
+    const response = await app.request("http://localhost/api/v1/project");
+
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toMatchObject({
+      language: "zh",
+      writingLanguages: ["zh", "en"],
+      writingLanguageContractVersion: "vi-writing-v1",
+      accessMode: "local",
+    });
+  });
+
+  it("reports Vietnamese writing capability when the env gate and root-bound marker are valid", async () => {
+    await enableViWriting(root);
+    const { createStudioServer } = await import("./server.js");
+    const app = createStudioServer(cloneProjectConfig() as never, root);
+
+    const response = await app.request("http://localhost/api/v1/project");
+
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toMatchObject({
+      writingLanguages: ["zh", "en", "vi"],
+      writingLanguageContractVersion: "vi-writing-v1",
+    });
   });
 
   it("reloads latest llm config for doctor checks without restarting the studio server", async () => {
@@ -1093,6 +1146,21 @@ describe("createStudioServer daemon lifecycle", () => {
       language: "en",
       languageExplicit: true,
     });
+  });
+
+  it("rejects Vietnamese as a Studio UI locale without changing project config", async () => {
+    const { createStudioServer } = await import("./server.js");
+    const app = createStudioServer(cloneProjectConfig() as never, root);
+
+    const save = await app.request("http://localhost/api/v1/project/language", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ language: "vi" }),
+    });
+
+    expect(save.status).toBe(400);
+    const persisted = JSON.parse(await readFile(join(root, "inkos.json"), "utf-8")) as { language?: string };
+    expect(persisted.language).toBe("zh");
   });
 
   it("writes parseable custom genre frontmatter when user text contains YAML punctuation", async () => {
@@ -2577,6 +2645,83 @@ describe("createStudioServer daemon lifecycle", () => {
     await expect(access(join(root, "books", "existing-book", "story", "story_bible.md"))).resolves.toBeUndefined();
   });
 
+  it.each([
+    ["invalid JSON", "{"],
+    ["invalid writing language", JSON.stringify({ title: "Bad Language", genre: "urban", language: "fr" })],
+    ["missing writing language", JSON.stringify({ title: "Missing Language", genre: "urban" })],
+  ])("rejects %s before create side effects", async (_caseName, body) => {
+    const { createStudioServer } = await import("./server.js");
+    const app = createStudioServer(cloneProjectConfig() as never, root);
+
+    const response = await app.request("http://localhost/api/v1/books/create", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body,
+    });
+
+    expect(response.status).toBe(400);
+    expect(processProjectInteractionRequestMock).not.toHaveBeenCalled();
+    expect(createInteractionToolsFromDepsMock).not.toHaveBeenCalled();
+  });
+
+  it("returns a stable INVALID_BOOK_ID error when the validated title cannot form an id", async () => {
+    const { createStudioServer } = await import("./server.js");
+    const app = createStudioServer(cloneProjectConfig() as never, root);
+
+    const response = await app.request("http://localhost/api/v1/books/create", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ title: "!!!", genre: "urban", language: "zh" }),
+    });
+
+    expect(response.status).toBe(400);
+    await expect(response.json()).resolves.toMatchObject({ error: { code: "INVALID_BOOK_ID" } });
+    expect(processProjectInteractionRequestMock).not.toHaveBeenCalled();
+  });
+
+  it("rejects Vietnamese creation while capability is disabled without creating a book directory", async () => {
+    const derivedBookDir = join(root, "books", "viet-nam-tuong-lai");
+    const { createStudioServer } = await import("./server.js");
+    const app = createStudioServer(cloneProjectConfig() as never, root);
+
+    const response = await app.request("http://localhost/api/v1/books/create", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ title: "Việt Nam Tương Lai", genre: "urban", language: "vi" }),
+    });
+
+    expect(response.status).toBe(409);
+    await expect(response.json()).resolves.toMatchObject({
+      error: { code: "WRITING_LANGUAGE_DISABLED" },
+    });
+    await expect(access(derivedBookDir)).rejects.toMatchObject({ code: "ENOENT" });
+    expect(processProjectInteractionRequestMock).not.toHaveBeenCalled();
+    expect(createInteractionToolsFromDepsMock).not.toHaveBeenCalled();
+    expect(saveBookConfigMock).not.toHaveBeenCalled();
+  });
+
+  it("forwards an explicitly confirmed Vietnamese create request when capability is enabled", async () => {
+    await enableViWriting(root);
+    const { createStudioServer } = await import("./server.js");
+    const app = createStudioServer(cloneProjectConfig() as never, root);
+
+    const response = await app.request("http://localhost/api/v1/books/create", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ title: "Việt Nam Tương Lai", genre: "urban", language: "vi" }),
+    });
+
+    expect(response.status).toBe(200);
+    expect(processProjectInteractionRequestMock).toHaveBeenCalledWith(expect.objectContaining({
+      projectRoot: root,
+      request: expect.objectContaining({
+        intent: "create_book",
+        title: "Việt Nam Tương Lai",
+        language: "vi",
+      }),
+    }));
+  });
+
   it("reports async create failures through the create-status endpoint", async () => {
     processProjectInteractionRequestMock.mockRejectedValueOnce(new Error("INKOS_LLM_API_KEY not set"));
 
@@ -2802,6 +2947,81 @@ describe("createStudioServer daemon lifecycle", () => {
     expect(response.status).toBe(200);
     expect(pipelineConfigs.at(-1)).toMatchObject({ externalContext: "把注意力拉回师债主线。" });
     expect(reviseDraftMock).toHaveBeenCalledWith("demo-book", 3, "rewrite");
+  });
+
+  it("rejects changing an existing book from Vietnamese to English", async () => {
+    loadBookConfigMock.mockResolvedValue({
+      id: "demo-book",
+      title: "Demo Book",
+      platform: "qidian",
+      genre: "urban",
+      status: "active",
+      targetChapters: 100,
+      chapterWordCount: 2000,
+      language: "vi",
+      createdAt: "2026-04-12T00:00:00.000Z",
+      updatedAt: "2026-04-12T00:00:00.000Z",
+    });
+    const { createStudioServer } = await import("./server.js");
+    const app = createStudioServer(cloneProjectConfig() as never, root);
+
+    const response = await app.request("http://localhost/api/v1/books/demo-book", {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ language: "en" }),
+    });
+
+    expect(response.status).toBe(409);
+    await expect(response.json()).resolves.toEqual({
+      error: {
+        code: "BOOK_LANGUAGE_IMMUTABLE",
+        message: "Book writing language cannot be changed after creation.",
+      },
+    });
+    expect(saveBookConfigMock).not.toHaveBeenCalled();
+  });
+
+  it("ignores a same-language update while applying other validated book fields", async () => {
+    loadBookConfigMock.mockResolvedValue({
+      id: "demo-book",
+      title: "Demo Book",
+      platform: "qidian",
+      genre: "urban",
+      status: "active",
+      targetChapters: 100,
+      chapterWordCount: 2000,
+      language: "vi",
+      createdAt: "2026-04-12T00:00:00.000Z",
+      updatedAt: "2026-04-12T00:00:00.000Z",
+    });
+    const { createStudioServer } = await import("./server.js");
+    const app = createStudioServer(cloneProjectConfig() as never, root);
+
+    const response = await app.request("http://localhost/api/v1/books/demo-book", {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ language: "vi", targetChapters: 120 }),
+    });
+
+    expect(response.status).toBe(200);
+    expect(saveBookConfigMock).toHaveBeenCalledWith("demo-book", expect.objectContaining({
+      language: "vi",
+      targetChapters: 120,
+    }));
+  });
+
+  it("rejects malformed book updates before persistence", async () => {
+    const { createStudioServer } = await import("./server.js");
+    const app = createStudioServer(cloneProjectConfig() as never, root);
+
+    const response = await app.request("http://localhost/api/v1/books/demo-book", {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ chapterWordCount: 999, unexpected: true }),
+    });
+
+    expect(response.status).toBe(400);
+    expect(saveBookConfigMock).not.toHaveBeenCalled();
   });
 
   it("exposes editable chapter briefs, generated plans, and archived versions", async () => {
@@ -6571,6 +6791,38 @@ describe("createStudioServer daemon lifecycle", () => {
     expect(reviseFoundationMock).toHaveBeenCalledWith("demo-book", "make the protagonist colder");
   });
 
+  it("rejects foundation revision for Vietnamese books before constructing a runner", async () => {
+    loadBookConfigMock.mockResolvedValue({
+      id: "demo-book",
+      title: "Demo Book",
+      platform: "qidian",
+      genre: "urban",
+      status: "active",
+      targetChapters: 100,
+      chapterWordCount: 2000,
+      language: "vi",
+      createdAt: "2026-04-12T00:00:00.000Z",
+      updatedAt: "2026-04-12T00:00:00.000Z",
+    });
+    const { createStudioServer } = await import("./server.js");
+    const app = createStudioServer(cloneProjectConfig() as never, root);
+    const pipelineCountBefore = pipelineConfigs.length;
+
+    const response = await app.request("http://localhost/api/v1/books/demo-book/foundation/revise", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ feedback: "Tăng sức ép ở hồi hai." }),
+    });
+
+    expect(response.status).toBe(409);
+    await expect(response.json()).resolves.toMatchObject({
+      error: { code: "WRITING_LANGUAGE_MODE_UNSUPPORTED" },
+    });
+    expect(pipelineConfigs).toHaveLength(pipelineCountBefore);
+    expect(reviseFoundationMock).not.toHaveBeenCalled();
+    expect(saveBookConfigMock).not.toHaveBeenCalled();
+  });
+
   it("uploads an external motherbook and imports its extracted text as canon", async () => {
     loadBookConfigMock.mockResolvedValue({ id: "demo-book", fanficMode: "canon" });
     const { createStudioServer } = await import("./server.js");
@@ -6673,6 +6925,50 @@ describe("createStudioServer daemon lifecycle", () => {
     await expect(ok.json()).resolves.toMatchObject({ status: "creating", bookId: "仿写新书" });
     await vi.waitFor(() => expect(initImitationBookMock).toHaveBeenCalledTimes(1));
     expect(initImitationBookMock.mock.calls[0]?.[2]).toBe("一个原创故事");
+  });
+
+  it("rejects Vietnamese spinoff creation before status, broadcast, or pipeline side effects", async () => {
+    const { createStudioServer } = await import("./server.js");
+    const app = createStudioServer(cloneProjectConfig() as never, root);
+    const pipelineCountBefore = pipelineConfigs.length;
+
+    const response = await app.request("http://localhost/api/v1/spinoff/init", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        title: "番外越南篇", parentBookId: "memory-clinic", language: "vi",
+      }),
+    });
+
+    expect(response.status).toBe(409);
+    await expect(response.json()).resolves.toMatchObject({
+      error: { code: "WRITING_LANGUAGE_MODE_UNSUPPORTED" },
+    });
+    expect(initSpinoffBookMock).not.toHaveBeenCalled();
+    expect(pipelineConfigs).toHaveLength(pipelineCountBefore);
+    const status = await app.request("http://localhost/api/v1/books/番外越南篇/create-status");
+    expect(status.status).toBe(404);
+  });
+
+  it("rejects Vietnamese imitation creation before status, broadcast, or pipeline side effects", async () => {
+    const { createStudioServer } = await import("./server.js");
+    const app = createStudioServer(cloneProjectConfig() as never, root);
+    const pipelineCountBefore = pipelineConfigs.length;
+
+    const response = await app.request("http://localhost/api/v1/imitation/init", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        title: "仿写越南篇", referenceText: "参考文本", storyIdea: "原创故事", language: "vi",
+      }),
+    });
+
+    expect(response.status).toBe(409);
+    await expect(response.json()).resolves.toMatchObject({
+      error: { code: "WRITING_LANGUAGE_MODE_UNSUPPORTED" },
+    });
+    expect(initImitationBookMock).not.toHaveBeenCalled();
+    expect(pipelineConfigs).toHaveLength(pipelineCountBefore);
+    const status = await app.request("http://localhost/api/v1/books/仿写越南篇/create-status");
+    expect(status.status).toBe(404);
   });
 
   it("uploads a translation source, creates a translation project, lists it, and exports markdown", async () => {
