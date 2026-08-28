@@ -102,7 +102,7 @@ describe("applyRuntimeStateDelta", () => {
     expect(result.chapterSummaries.rows.map((row) => row.chapter)).toEqual([11, 12]);
   });
 
-  it("uses the English scaffold labels for Vietnamese runtime state", () => {
+  it("uses Vietnamese canonical labels for Vietnamese runtime state", () => {
     const result = applyRuntimeStateDelta({
       snapshot: {
         manifest: {
@@ -118,7 +118,7 @@ describe("applyRuntimeStateDelta", () => {
       },
       delta: RuntimeStateDeltaSchema.parse({
         chapter: 1,
-        currentStatePatch: { currentGoal: "Find the missing ledger." },
+        currentStatePatch: { currentGoal: "Tìm cuốn sổ bị thất lạc." },
         hookOps: { upsert: [], resolve: [], defer: [] },
         notes: [],
       }),
@@ -128,11 +128,60 @@ describe("applyRuntimeStateDelta", () => {
     expect(result.currentState.facts).toEqual(
       expect.arrayContaining([
         expect.objectContaining({
-          predicate: "Current Goal",
-          object: "Find the missing ledger.",
+          predicate: "Mục tiêu hiện tại",
+          object: "Tìm cuốn sổ bị thất lạc.",
         }),
       ]),
     );
+    expect(result.currentState.facts).not.toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ predicate: "Current Goal" }),
+      ]),
+    );
+  });
+
+  it("keeps legacy English alias replacement semantics unchanged", () => {
+    const result = applyRuntimeStateDelta({
+      snapshot: {
+        manifest: {
+          schemaVersion: 2,
+          language: "en",
+          lastAppliedChapter: 0,
+          projectionVersion: 1,
+          migrationWarnings: [],
+        },
+        currentState: {
+          chapter: 0,
+          facts: [{
+            subject: "protagonist",
+            predicate: "Mục tiêu hiện tại",
+            object: "Giá trị ngoài alias legacy.",
+            validFromChapter: 0,
+            validUntilChapter: null,
+            sourceChapter: 0,
+          }],
+        },
+        hooks: { hooks: [] },
+        chapterSummaries: { rows: [] },
+      },
+      delta: RuntimeStateDeltaSchema.parse({
+        chapter: 1,
+        currentStatePatch: { currentGoal: "Find the ledger." },
+        hookOps: { upsert: [], resolve: [], defer: [] },
+        notes: [],
+      }),
+    });
+
+    expect(result.currentState.facts).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        predicate: "Mục tiêu hiện tại",
+        object: "Giá trị ngoài alias legacy.",
+      }),
+      expect.objectContaining({
+        predicate: "Current Goal",
+        object: "Find the ledger.",
+      }),
+    ]));
   });
 
   it("rejects duplicate summary rows for the same chapter", () => {

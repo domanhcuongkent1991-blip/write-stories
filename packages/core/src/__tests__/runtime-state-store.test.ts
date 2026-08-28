@@ -42,6 +42,49 @@ describe("runtime-state-store memory helpers", () => {
     expect(manifest.language).toBe("vi");
   });
 
+  it("builds Vietnamese canonical artifacts without changing the manifest language", async () => {
+    root = await mkdtemp(join(tmpdir(), "inkos-runtime-state-vi-artifacts-"));
+    const bookDir = join(root, "book");
+    const storyDir = join(bookDir, "story");
+    const stateDir = join(storyDir, "state");
+    await mkdir(stateDir, { recursive: true });
+    await Promise.all([
+      writeFile(join(stateDir, "manifest.json"), JSON.stringify({
+        schemaVersion: 2,
+        language: "vi",
+        lastAppliedChapter: 0,
+        projectionVersion: 1,
+        migrationWarnings: [],
+      }), "utf-8"),
+      writeFile(join(stateDir, "current_state.json"), JSON.stringify({ chapter: 0, facts: [] }), "utf-8"),
+      writeFile(join(stateDir, "hooks.json"), JSON.stringify({ hooks: [] }), "utf-8"),
+      writeFile(join(stateDir, "chapter_summaries.json"), JSON.stringify({ rows: [] }), "utf-8"),
+    ]);
+
+    const artifacts = await buildRuntimeStateArtifacts({
+      bookDir,
+      language: "vi",
+      delta: {
+        chapter: 1,
+        currentStatePatch: { currentLocation: "Bến sông" },
+        hookOps: { upsert: [], mention: [], resolve: [], defer: [] },
+        newHookCandidates: [],
+        notes: [],
+        subplotOps: [],
+        emotionalArcOps: [],
+        characterMatrixOps: [],
+      },
+    });
+
+    expect(artifacts.snapshot.manifest.language).toBe("vi");
+    expect(artifacts.snapshot.currentState.facts).toEqual(expect.arrayContaining([
+      expect.objectContaining({ predicate: "Vị trí hiện tại", object: "Bến sông" }),
+    ]));
+    expect(artifacts.currentStateMarkdown).toContain("# Trạng thái hiện tại");
+    expect(artifacts.hooksMarkdown).toContain("# Tình tiết cài cắm đang chờ");
+    expect(artifacts.chapterSummariesMarkdown).toContain("# Tóm tắt chương");
+  });
+
   it("prefers structured runtime state over stale markdown projections for narrative memory", async () => {
     root = await mkdtemp(join(tmpdir(), "inkos-runtime-state-store-"));
     const bookDir = join(root, "book");

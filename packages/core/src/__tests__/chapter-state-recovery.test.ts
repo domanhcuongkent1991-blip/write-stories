@@ -87,6 +87,93 @@ function createChapterMeta(
 }
 
 describe("chapter-state-recovery", () => {
+  it("fails closed for Vietnamese recovery when the caller passes its English scaffold", async () => {
+    const validator = {
+      validate: vi.fn(async () => createValidationResult({ passed: true, warnings: [] })),
+    };
+
+    await expect(retrySettlementAfterValidationFailure({
+      writer: {
+        settleChapterState: vi.fn(async () => createWriteChapterOutput({
+          runtimeStateDelta: undefined,
+          runtimeStateSnapshot: undefined,
+        })),
+      } as never,
+      validator: validator as never,
+      book: { ...createBook(), language: "vi" },
+      bookDir: "/tmp/test-book",
+      chapterNumber: 3,
+      title: "Chương ba",
+      content: "Tấm thẻ đồng nằm trước ngực.",
+      oldState: "trạng thái cũ",
+      oldHooks: "tình tiết cũ",
+      originalValidation: createValidationResult(),
+      language: "en",
+      logWarn: vi.fn(),
+      logger: { warn: vi.fn() } as never,
+    })).rejects.toMatchObject({
+      name: "WritingLanguagePreflightError",
+      code: "STATE_PREFLIGHT_FAILED",
+    });
+    expect(validator.validate).not.toHaveBeenCalled();
+  });
+
+  it("uses the English prompt scaffold but Vietnamese canonical degraded messages", async () => {
+    let validationFeedback = "";
+    let validatorLanguage = "";
+    const result = await retrySettlementAfterValidationFailure({
+      writer: {
+        settleChapterState: vi.fn(async (input: { validationFeedback?: string }) => {
+          validationFeedback = input.validationFeedback ?? "";
+          return createWriteChapterOutput({
+            runtimeStateDelta: { chapter: 3 } as never,
+            runtimeStateSnapshot: {
+              manifest: {
+                schemaVersion: 2,
+                language: "vi",
+                lastAppliedChapter: 3,
+                projectionVersion: 1,
+                migrationWarnings: [],
+              },
+              currentState: { chapter: 3, facts: [] },
+              hooks: { hooks: [] },
+              chapterSummaries: { rows: [] },
+            },
+          });
+        }),
+      } as never,
+      validator: {
+        validate: vi.fn(async (...args: unknown[]) => {
+          validatorLanguage = String(args[6]);
+          return createValidationResult({ passed: false, warnings: [] });
+        }),
+      } as never,
+      book: { ...createBook(), language: "vi" },
+      bookDir: "/tmp/test-book",
+      chapterNumber: 3,
+      title: "Chương ba",
+      content: "Tấm thẻ đồng nằm trước ngực.",
+      oldState: "trạng thái cũ",
+      oldHooks: "tình tiết cũ",
+      originalValidation: createValidationResult({ warnings: [] }),
+      language: "en",
+      logWarn: vi.fn(),
+      logger: { warn: vi.fn() } as never,
+    });
+
+    expect(validationFeedback).toContain("The previous settlement contradicted");
+    expect(validatorLanguage).toBe("en");
+    expect(result).toEqual({
+      kind: "degraded",
+      issues: [{
+        severity: "warning",
+        category: "state-validation",
+        description: "Xác thực trạng thái vẫn thất bại sau khi thử cập nhật lại.",
+        suggestion: "Hãy sửa trạng thái chương dựa trên nội dung đã lưu trước khi tiếp tục.",
+      }],
+    });
+  });
+
   it("retries settlement with localized validation feedback and recovers on a clean retry", async () => {
     let capturedFeedback = "";
     const writer = {

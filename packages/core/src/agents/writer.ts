@@ -51,6 +51,10 @@ import {
 import type { RuntimeStateSnapshot } from "../state/state-reducer.js";
 import { parsePendingHooksMarkdown } from "../utils/memory-retrieval.js";
 import { analyzeHookHealth } from "../utils/hook-health.js";
+import {
+  chapterHeading,
+  chapterSummariesHeader,
+} from "../utils/writing-surface.js";
 import { buildEnglishVarianceBrief } from "../utils/long-span-fatigue.js";
 import {
   buildNarrativeIntentBrief,
@@ -61,6 +65,7 @@ import {
 import { readFile, writeFile, mkdir, readdir } from "node:fs/promises";
 import { join } from "node:path";
 import { commitAtomicFileSet, type AtomicFileWrite } from "../utils/atomic-file-set.js";
+import { WritingLanguagePreflightError } from "../state/writing-language-preflight.js";
 
 import {
   readVolumeMap,
@@ -253,7 +258,12 @@ export class WriterAgent extends BaseAgent {
     );
     const creativeUsage = creativeResponse.usage;
 
-    const creative = parseCreativeOutput(chapterNumber, creativeResponse.content, resolvedLengthSpec.countingMode);
+    const creative = parseCreativeOutput(
+      chapterNumber,
+      creativeResponse.content,
+      writingLanguage,
+      resolvedLengthSpec.countingMode,
+    );
 
     // Phase 4: soft-check that PRE_WRITE_CHECK aligns with the chapter memo.
     // Memo was already parse-validated in the planner, so this only warns —
@@ -313,7 +323,7 @@ export class WriterAgent extends BaseAgent {
     const runtimeStateArtifacts = await this.buildRuntimeStateArtifactsIfPresent(
       bookDir,
       settlement.runtimeStateDelta,
-      resolvedLanguage,
+      writingLanguage,
       chapterNumber,
     );
     const resolvedRuntimeStateDelta = runtimeStateArtifacts?.resolvedDelta ?? settlement.runtimeStateDelta;
@@ -477,7 +487,7 @@ export class WriterAgent extends BaseAgent {
     const runtimeStateArtifacts = await this.buildRuntimeStateArtifactsIfPresent(
       input.bookDir,
       settlement.runtimeStateDelta,
-      resolvedLanguage,
+      writingLanguage,
       input.chapterNumber,
       input.allowReapply,
       input.baselineChapter,
@@ -654,7 +664,16 @@ export class WriterAgent extends BaseAgent {
     numericalSystem: boolean = true,
     writingLanguage: WritingLanguage = "zh",
   ): Promise<void> {
-    const language = resolveWritingLanguageProfile(writingLanguage).scaffoldLanguage;
+    if (
+      writingLanguage === "vi"
+      && (!output.runtimeStateDelta || !output.runtimeStateSnapshot)
+    ) {
+      throw new WritingLanguagePreflightError(
+        "STATE_PREFLIGHT_FAILED",
+        "Vietnamese chapter persistence requires an explicit runtime state delta and snapshot.",
+      );
+    }
+
     const chaptersDir = join(bookDir, "chapters");
     await mkdir(chaptersDir, { recursive: true });
 
@@ -664,9 +683,7 @@ export class WriterAgent extends BaseAgent {
     const supersededChapterFiles = existingChapterFiles
       .filter((file) => file.startsWith(`${paddedNum}_`) && file.endsWith(".md") && file !== filename);
 
-    const heading = language === "en"
-      ? `# Chapter ${output.chapterNumber}: ${output.title}`
-      : `# 第${output.chapterNumber}章 ${output.title}`;
+    const heading = chapterHeading(output.chapterNumber, output.title, writingLanguage);
     const chapterContent = [
       heading,
       "",
@@ -675,13 +692,13 @@ export class WriterAgent extends BaseAgent {
     const runtimeStateArtifacts = await this.resolveRuntimeStateArtifactsForOutput(
       bookDir,
       output,
-      language,
+      writingLanguage,
     );
     const chapterSummariesMarkdown = runtimeStateArtifacts?.chapterSummariesMarkdown
       ?? (!output.runtimeStateDelta && output.updatedChapterSummaries
         ? output.updatedChapterSummaries
         : !output.runtimeStateDelta && output.chapterSummary
-          ? await this.renderAppendedChapterSummary(bookDir, output.chapterSummary, language)
+          ? await this.renderAppendedChapterSummary(bookDir, output.chapterSummary, writingLanguage)
           : undefined);
 
     const writes: AtomicFileWrite[] = [
@@ -1092,7 +1109,7 @@ ${overrides}\n`;
   private async buildRuntimeStateArtifactsIfPresent(
     bookDir: string,
     delta: RuntimeStateDelta | undefined,
-    language: ScaffoldLanguage,
+    language: WritingLanguage,
     authoritativeChapterNumber?: number,
     allowReapply?: boolean,
     baselineChapter?: number,
@@ -1128,7 +1145,7 @@ ${overrides}\n`;
   private async resolveRuntimeStateArtifactsForOutput(
     bookDir: string,
     output: WriteChapterOutput,
-    language: ScaffoldLanguage,
+    language: WritingLanguage,
   ): Promise<RuntimeStateArtifacts | null> {
     if (!output.runtimeStateDelta) return null;
     const safeDelta = this.normalizeRuntimeStateDeltaChapter(
@@ -1161,7 +1178,7 @@ ${overrides}\n`;
   private async renderAppendedChapterSummary(
     bookDir: string,
     summary: string,
-    language: ScaffoldLanguage,
+    language: WritingLanguage,
   ): Promise<string | undefined> {
     const summaryPath = join(bookDir, "story", "chapter_summaries.md");
     let existing = "";
@@ -1169,9 +1186,7 @@ ${overrides}\n`;
       existing = await readFile(summaryPath, "utf-8");
     } catch {
       // File doesn't exist yet — start with header
-      existing = language === "en"
-        ? "# Chapter Summaries\n\n| Chapter | Title | Characters | Key Events | State Changes | Hook Activity | Mood | Chapter Type |\n| --- | --- | --- | --- | --- | --- | --- | --- |\n"
-        : "# 章节摘要\n\n| 章节 | 标题 | 出场人物 | 关键事件 | 状态变化 | 伏笔动态 | 情绪基调 | 章节类型 |\n|------|------|----------|----------|----------|----------|----------|----------|\n";
+      existing = chapterSummariesHeader(language);
     }
 
     // Extract only the data row(s) from the summary (skip header lines)
@@ -1181,6 +1196,7 @@ ${overrides}\n`;
         line.startsWith("|")
         && !line.startsWith("| 章节")
         && !line.startsWith("| Chapter")
+        && !line.startsWith("| Chương")
         && !line.startsWith("|--")
         && !line.startsWith("| ---"),
       )

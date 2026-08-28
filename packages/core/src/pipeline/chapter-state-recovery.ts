@@ -10,7 +10,13 @@ import type { Logger } from "../utils/logger.js";
 import type { BookConfig } from "../models/book.js";
 import type { ChapterMeta } from "../models/chapter.js";
 import type { ContextPackage, RuleStack } from "../models/input-governance.js";
-import type { ScaffoldLanguage } from "../models/writing-language.js";
+import type { ScaffoldLanguage, WritingLanguage } from "../models/writing-language.js";
+import { WritingLanguagePreflightError } from "../state/writing-language-preflight.js";
+import { resolveWritingLanguageProfile } from "../utils/language.js";
+import {
+  stateDegradedDescription,
+  stateDegradedSuggestion,
+} from "../utils/writing-surface.js";
 
 export interface SettlementRetryParams {
   readonly writer: Pick<WriterAgent, "settleChapterState">;
@@ -49,6 +55,8 @@ export type SettlementRetryResult =
 export async function retrySettlementAfterValidationFailure(
   params: SettlementRetryParams,
 ): Promise<SettlementRetryResult> {
+  const writingLanguage = params.book.language ?? params.language;
+  const scaffoldLanguage = resolveWritingLanguageProfile(writingLanguage).scaffoldLanguage;
   params.logWarn?.({
     zh: `状态校验失败，正在仅重试结算层（第${params.chapterNumber}章）`,
     en: `State validation failed; retrying settlement only for chapter ${params.chapterNumber}`,
@@ -68,9 +76,19 @@ export async function retrySettlementAfterValidationFailure(
     ruleStack: params.reducedControlInput?.ruleStack,
     validationFeedback: buildStateValidationFeedback(
       params.originalValidation.warnings,
-      params.language,
+      scaffoldLanguage,
     ),
   });
+
+  if (
+    writingLanguage === "vi"
+    && (!retryOutput.runtimeStateDelta || !retryOutput.runtimeStateSnapshot)
+  ) {
+    throw new WritingLanguagePreflightError(
+      "STATE_PREFLIGHT_FAILED",
+      "Vietnamese chapter recovery requires an explicit runtime state delta and snapshot.",
+    );
+  }
 
   let retryValidation: ValidationResult;
   try {
@@ -81,7 +99,7 @@ export async function retrySettlementAfterValidationFailure(
       retryOutput.updatedState,
       params.oldHooks,
       retryOutput.updatedHooks,
-      params.language,
+      scaffoldLanguage,
     );
   } catch (error) {
     throw new Error(`State validation retry failed for chapter ${params.chapterNumber}: ${String(error)}`);
@@ -107,7 +125,7 @@ export async function retrySettlementAfterValidationFailure(
 
   return {
     kind: "degraded",
-    issues: buildStateDegradedIssues(retryValidation.warnings, params.language),
+    issues: buildStateDegradedIssues(retryValidation.warnings, writingLanguage),
   };
 }
 
@@ -136,28 +154,22 @@ export function buildStateValidationFeedback(
 
 export function buildStateDegradedIssues(
   warnings: ReadonlyArray<ValidationWarning>,
-  language: ScaffoldLanguage,
+  language: WritingLanguage,
 ): ReadonlyArray<AuditIssue> {
   if (warnings.length > 0) {
     return warnings.map((warning) => ({
       severity: "warning" as const,
       category: "state-validation",
       description: warning.description,
-      suggestion: language === "en"
-        ? "Repair chapter state from the persisted body before continuing."
-        : "请先基于已保存正文修复本章 state，再继续后续章节。",
+      suggestion: stateDegradedSuggestion(language),
     }));
   }
 
   return [{
     severity: "warning",
     category: "state-validation",
-    description: language === "en"
-      ? "State validation still failed after settlement retry."
-      : "状态结算重试后仍未通过校验。",
-    suggestion: language === "en"
-      ? "Repair chapter state from the persisted body before continuing."
-      : "请先基于已保存正文修复本章 state，再继续后续章节。",
+    description: stateDegradedDescription(language),
+    suggestion: stateDegradedSuggestion(language),
   }];
 }
 

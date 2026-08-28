@@ -1,7 +1,14 @@
 import type { GenreProfile } from "../models/genre-profile.js";
 import type { LengthCountingMode } from "../models/length-governance.js";
+import type { WritingLanguage } from "../models/writing-language.js";
 import type { WriteChapterOutput } from "./writer.js";
 import { countChapterLength } from "../utils/length-metrics.js";
+import {
+  defaultChapterTitle,
+  hooksPlaceholder,
+  ledgerPlaceholder,
+  statePlaceholder,
+} from "../utils/writing-surface.js";
 
 export interface CreativeOutput {
   readonly title: string;
@@ -10,9 +17,17 @@ export interface CreativeOutput {
   readonly preWriteCheck: string;
 }
 
+export class WriterOutputContractError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "WriterOutputContractError";
+  }
+}
+
 export function parseCreativeOutput(
   chapterNumber: number,
   content: string,
+  language: WritingLanguage = "zh",
   countingMode: LengthCountingMode = "zh_chars",
 ): CreativeOutput {
   const extract = (tag: string): string => {
@@ -25,15 +40,17 @@ export function parseCreativeOutput(
 
   let chapterContent = extract("CHAPTER_CONTENT");
 
+  assertVietnameseChapterContent(content, chapterContent, language);
+
   // Fallback: if === TAG === parsing fails (common with local/small models),
   // try to extract usable content from the raw output
   if (!chapterContent) {
-    chapterContent = fallbackExtractContent(content, countingMode);
+    chapterContent = fallbackExtractContent(content, language);
   }
 
   let title = extract("CHAPTER_TITLE");
   if (!title) {
-    title = fallbackExtractTitle(content, chapterNumber, countingMode);
+    title = fallbackExtractTitle(content, chapterNumber, language);
   }
 
   return {
@@ -49,14 +66,14 @@ export function parseCreativeOutput(
  * Tries common patterns from local/small models, then falls back to
  * stripping metadata and returning the longest prose block.
  */
-function fallbackExtractContent(raw: string, countingMode: LengthCountingMode): string {
+function fallbackExtractContent(raw: string, language: WritingLanguage): string {
   // Try markdown heading: # 第N章 ... followed by content
   const headingMatch = raw.match(/^#\s*第\d+章[^\n]*\n+([\s\S]+)/m);
   if (headingMatch) {
     return headingMatch[1]!.trim();
   }
 
-  if (countingMode === "en_words") {
+  if (language === "en") {
     const englishHeadingMatch = raw.match(/^#\s*Chapter\s+\d+(?::|\s+)([^\n]*)\n+([\s\S]+)/im);
     if (englishHeadingMatch) {
       return englishHeadingMatch[2]!.trim();
@@ -69,7 +86,7 @@ function fallbackExtractContent(raw: string, countingMode: LengthCountingMode): 
     return labelMatch[1]!.trim();
   }
 
-  if (countingMode === "en_words") {
+  if (language === "en") {
     const englishLabelMatch = raw.match(/(?:content|chapter content)[：:]\s*\n+([\s\S]+)/i);
     if (englishLabelMatch) {
       return englishLabelMatch[1]!.trim();
@@ -96,14 +113,14 @@ function fallbackExtractContent(raw: string, countingMode: LengthCountingMode): 
 function fallbackExtractTitle(
   raw: string,
   chapterNumber: number,
-  countingMode: LengthCountingMode,
+  language: WritingLanguage,
 ): string {
   // Try: # 第N章 Title
   const headingMatch = raw.match(/^#\s*第\d+章\s*(.+)/m);
   if (headingMatch) {
     return headingMatch[1]!.trim();
   }
-  if (countingMode === "en_words") {
+  if (language === "en") {
     const englishHeadingMatch = raw.match(/^#\s*Chapter\s+\d+(?::|\s+)\s*(.+)/im);
     if (englishHeadingMatch) {
       return englishHeadingMatch[1]!.trim();
@@ -114,7 +131,7 @@ function fallbackExtractTitle(
   if (labelMatch) {
     return labelMatch[1]!.trim();
   }
-  return defaultChapterTitle(chapterNumber, countingMode);
+  return defaultChapterTitle(chapterNumber, language);
 }
 
 export type ParsedWriterOutput = Omit<WriteChapterOutput, "postWriteErrors" | "postWriteWarnings">;
@@ -127,8 +144,27 @@ export function parseWriterOutput(
   chapterNumber: number,
   content: string,
   genreProfile: GenreProfile,
-  countingMode: LengthCountingMode = "zh_chars",
+  language: WritingLanguage,
+  countingMode: LengthCountingMode,
+): ParsedWriterOutput;
+export function parseWriterOutput(
+  chapterNumber: number,
+  content: string,
+  genreProfile: GenreProfile,
+  countingMode?: LengthCountingMode,
+): ParsedWriterOutput;
+export function parseWriterOutput(
+  chapterNumber: number,
+  content: string,
+  genreProfile: GenreProfile,
+  languageOrCountingMode: WritingLanguage | LengthCountingMode = genreProfile.language,
+  explicitCountingMode?: LengthCountingMode,
 ): ParsedWriterOutput {
+  const legacyCountingMode = isLengthCountingMode(languageOrCountingMode);
+  const language = legacyCountingMode ? genreProfile.language : languageOrCountingMode;
+  const countingMode = legacyCountingMode
+    ? languageOrCountingMode
+    : (explicitCountingMode ?? "zh_chars");
   const extract = (tag: string): string => {
     const regex = new RegExp(
       `=== ${tag} ===\\s*([\\s\\S]*?)(?==== [A-Z_]+ ===|$)`,
@@ -138,19 +174,20 @@ export function parseWriterOutput(
   };
 
   const chapterContent = extract("CHAPTER_CONTENT");
+  assertVietnameseChapterContent(content, chapterContent, language);
 
   return {
     chapterNumber,
-    title: extract("CHAPTER_TITLE") || defaultChapterTitle(chapterNumber, countingMode),
+    title: extract("CHAPTER_TITLE") || defaultChapterTitle(chapterNumber, language),
     content: chapterContent,
     wordCount: countChapterLength(chapterContent, countingMode),
     preWriteCheck: extract("PRE_WRITE_CHECK"),
     postSettlement: extract("POST_SETTLEMENT"),
-    updatedState: extract("UPDATED_STATE") || defaultStatePlaceholder(countingMode),
+    updatedState: extract("UPDATED_STATE") || statePlaceholder(language),
     updatedLedger: genreProfile.numericalSystem
-      ? (extract("UPDATED_LEDGER") || defaultLedgerPlaceholder(countingMode))
+      ? (extract("UPDATED_LEDGER") || ledgerPlaceholder(language))
       : "",
-    updatedHooks: extract("UPDATED_HOOKS") || defaultHooksPlaceholder(countingMode),
+    updatedHooks: extract("UPDATED_HOOKS") || hooksPlaceholder(language),
     chapterSummary: extract("CHAPTER_SUMMARY"),
     updatedSubplots: extract("UPDATED_SUBPLOTS"),
     updatedEmotionalArcs: extract("UPDATED_EMOTIONAL_ARCS"),
@@ -158,21 +195,25 @@ export function parseWriterOutput(
   };
 }
 
-function defaultChapterTitle(
-  chapterNumber: number,
-  countingMode: LengthCountingMode,
-): string {
-  return countingMode === "en_words" ? `Chapter ${chapterNumber}` : `第${chapterNumber}章`;
+function isLengthCountingMode(
+  value: WritingLanguage | LengthCountingMode,
+): value is LengthCountingMode {
+  return value === "zh_chars"
+    || value === "en_words"
+    || value === "vi_wordlike_tokens_v1";
 }
 
-function defaultStatePlaceholder(countingMode: LengthCountingMode): string {
-  return countingMode === "en_words" ? "(state card not updated)" : "(状态卡未更新)";
-}
+function assertVietnameseChapterContent(
+  raw: string,
+  chapterContent: string,
+  language: WritingLanguage,
+): void {
+  if (language !== "vi") return;
 
-function defaultLedgerPlaceholder(countingMode: LengthCountingMode): string {
-  return countingMode === "en_words" ? "(ledger not updated)" : "(账本未更新)";
-}
-
-function defaultHooksPlaceholder(countingMode: LengthCountingMode): string {
-  return countingMode === "en_words" ? "(hooks pool not updated)" : "(伏笔池未更新)";
+  const hasMarker = /^===\s*CHAPTER_CONTENT\s*===\s*$/m.test(raw);
+  if (!hasMarker || chapterContent.length === 0) {
+    throw new WriterOutputContractError(
+      "Vietnamese writer output must include a non-empty === CHAPTER_CONTENT === section.",
+    );
+  }
 }

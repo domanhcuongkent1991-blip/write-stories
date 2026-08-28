@@ -1,6 +1,8 @@
 import { describe, it, expect } from "vitest";
 import { parseWriterOutput, parseCreativeOutput, type ParsedWriterOutput } from "../agents/writer-parser.js";
 import type { GenreProfile } from "../models/genre-profile.js";
+import type { LengthCountingMode } from "../models/length-governance.js";
+import type { WritingLanguage } from "../models/writing-language.js";
 import { countChapterLength } from "../utils/length-metrics.js";
 
 const defaultGenreProfile: GenreProfile = {
@@ -21,9 +23,10 @@ function callParseOutput(
   chapterNumber: number,
   content: string,
   genreProfile: GenreProfile = defaultGenreProfile,
-  countingMode: "zh_chars" | "en_words" = "zh_chars",
+  language: WritingLanguage = genreProfile.language,
+  countingMode: LengthCountingMode = "zh_chars",
 ): ParsedWriterOutput {
-  return parseWriterOutput(chapterNumber, content, genreProfile, countingMode);
+  return parseWriterOutput(chapterNumber, content, genreProfile, language, countingMode);
 }
 
 // ---------------------------------------------------------------------------
@@ -109,7 +112,7 @@ describe("WriterAgent parseOutput", () => {
       "Some content here.",
     ].join("\n");
 
-    const result = callParseOutput(42, output, defaultGenreProfile, "en_words");
+    const result = callParseOutput(42, output, defaultGenreProfile, "en", "en_words");
     expect(result.title).toBe("Chapter 42");
   });
 
@@ -148,7 +151,7 @@ describe("WriterAgent parseOutput", () => {
       "Content.",
     ].join("\n");
 
-    const result = callParseOutput(1, output, defaultGenreProfile, "en_words");
+    const result = callParseOutput(1, output, defaultGenreProfile, "en", "en_words");
     expect(result.updatedState).toBe("(state card not updated)");
     expect(result.updatedLedger).toBe("(ledger not updated)");
     expect(result.updatedHooks).toBe("(hooks pool not updated)");
@@ -254,8 +257,53 @@ describe("WriterAgent parseOutput", () => {
       englishContent,
     ].join("\n");
 
-    const result = callParseOutput(1, output, defaultGenreProfile, "en_words");
+    const result = callParseOutput(1, output, defaultGenreProfile, "en", "en_words");
     expect(result.wordCount).toBe(countChapterLength(englishContent, "en_words"));
+  });
+
+  it("uses Vietnamese semantics independently from the length counter", () => {
+    const output = [
+      "=== CHAPTER_CONTENT ===",
+      "Mưa rơi trên mái ngói cũ.",
+    ].join("\n");
+
+    const result = callParseOutput(
+      7,
+      output,
+      defaultGenreProfile,
+      "vi",
+      "vi_wordlike_tokens_v1",
+    );
+
+    expect(result.title).toBe("Chương 7");
+    expect(result.updatedState).toBe("(trạng thái chưa được cập nhật)");
+    expect(result.updatedLedger).toBe("(sổ theo dõi chưa được cập nhật)");
+    expect(result.updatedHooks).toBe("(các tình tiết cài cắm chưa được cập nhật)");
+    expect(result.wordCount).toBe(
+      countChapterLength("Mưa rơi trên mái ngói cũ.", "vi_wordlike_tokens_v1"),
+    );
+  });
+
+  it("does not infer Vietnamese surface labels from the counting mode", () => {
+    const output = [
+      "=== CHAPTER_CONTENT ===",
+      "Mưa đêm",
+    ].join("\n");
+
+    const result = callParseOutput(8, output, defaultGenreProfile, "vi", "en_words");
+
+    expect(result.title).toBe("Chương 8");
+    expect(result.wordCount).toBe(countChapterLength("Mưa đêm", "en_words"));
+  });
+
+  it("rejects Vietnamese writer output without the mandatory CHAPTER_CONTENT marker", () => {
+    expect(() => callParseOutput(
+      1,
+      "CHAPTER_TITLE: Mưa",
+      defaultGenreProfile,
+      "vi",
+      "vi_wordlike_tokens_v1",
+    )).toThrow(/CHAPTER_CONTENT/);
   });
 });
 
@@ -269,7 +317,7 @@ describe("parseCreativeOutput fallback", () => {
 
 林风缓缓睁开了眼睛，映入眼帘的是一片陌生的天花板。他的脑海中充斥着混乱的记忆碎片，${"一段很长的正文内容".repeat(30)}完。`;
 
-    const result = parseCreativeOutput(1, raw);
+    const result = parseCreativeOutput(1, raw, "zh", "zh_chars");
     expect(result.title).toBe("觉醒之日");
     expect(result.content.length).toBeGreaterThan(100);
     expect(result.content).toContain("林风");
@@ -280,7 +328,7 @@ describe("parseCreativeOutput fallback", () => {
 
 He woke to the sound of distant bells and the taste of salt in the air. ${"Long English prose follows. ".repeat(15)}`;
 
-    const result = parseCreativeOutput(1, raw, "en_words");
+    const result = parseCreativeOutput(1, raw, "en", "en_words");
     expect(result.title).toBe("Awakening Day");
     expect(result.content.length).toBeGreaterThan(100);
     expect(result.content).toContain("distant bells");
@@ -292,7 +340,7 @@ He woke to the sound of distant bells and the taste of salt in the air. ${"Long 
 正文：
 ${"黑暗中一道身影掠过屋顶，无声无息。".repeat(20)}`;
 
-    const result = parseCreativeOutput(5, raw);
+    const result = parseCreativeOutput(5, raw, "zh", "zh_chars");
     expect(result.title).toBe("暗夜追踪");
     expect(result.content.length).toBeGreaterThan(100);
   });
@@ -304,18 +352,18 @@ CHAPTER_TITLE: 探索
 
 ${prose}`;
 
-    const result = parseCreativeOutput(3, raw);
+    const result = parseCreativeOutput(3, raw, "zh", "zh_chars");
     expect(result.content.length).toBeGreaterThan(100);
   });
 
   it("returns empty content when raw output is too short", () => {
-    const result = parseCreativeOutput(1, "太短了");
+    const result = parseCreativeOutput(1, "太短了", "zh", "zh_chars");
     expect(result.content).toBe("");
     expect(result.title).toBe("第1章");
   });
 
   it("returns an English fallback title when short English output has no structure", () => {
-    const result = parseCreativeOutput(1, "too short", "en_words");
+    const result = parseCreativeOutput(1, "too short", "en", "en_words");
     expect(result.content).toBe("");
     expect(result.title).toBe("Chapter 1");
   });
@@ -330,7 +378,7 @@ ${prose}`;
 === CHAPTER_CONTENT ===
 正常的章节内容，这里是完整的正文。`;
 
-    const result = parseCreativeOutput(1, raw);
+    const result = parseCreativeOutput(1, raw, "zh", "zh_chars");
     expect(result.title).toBe("正常标题");
     expect(result.content).toBe("正常的章节内容，这里是完整的正文。");
   });
@@ -342,7 +390,16 @@ English Chapter
 === CHAPTER_CONTENT ===
 He looked at the sky.`;
 
-    const result = parseCreativeOutput(1, raw, "en_words");
+    const result = parseCreativeOutput(1, raw, "en", "en_words");
     expect(result.wordCount).toBe(countChapterLength("He looked at the sky.", "en_words"));
+  });
+
+  it("rejects Vietnamese creative output without the mandatory CHAPTER_CONTENT marker", () => {
+    const raw = `# Chương 1: Mưa đêm
+
+${"Mưa rơi trên mái ngói cũ, nhân vật đứng lặng bên cửa sổ. ".repeat(12)}`;
+
+    expect(() => parseCreativeOutput(1, raw, "vi", "vi_wordlike_tokens_v1"))
+      .toThrow(/CHAPTER_CONTENT/);
   });
 });

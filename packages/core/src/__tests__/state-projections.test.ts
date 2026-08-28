@@ -6,6 +6,54 @@ import {
 } from "../state/state-projections.js";
 
 describe("state projections", () => {
+  it("renders canonical Vietnamese state projections", () => {
+    const hooks = renderHooksProjection({
+      hooks: [{
+        hookId: "mon-no",
+        startChapter: 2,
+        type: "quan-he",
+        status: "open",
+        lastAdvancedChapter: 3,
+        expectedPayoff: "Làm rõ món nợ.",
+        notes: "Lời hứa vẫn còn hiệu lực.",
+      }],
+    }, "vi");
+    const summaries = renderChapterSummariesProjection({
+      rows: [{
+        chapter: 3,
+        title: "Mưa đêm",
+        characters: "Lan",
+        events: "Lan tìm thấy sổ cũ.",
+        stateChanges: "Manh mối được xác nhận.",
+        hookActivity: "mon-no tiến triển",
+        mood: "Căng thẳng",
+        chapterType: "Điều tra",
+      }],
+    }, "vi");
+    const currentState = renderCurrentStateProjection({
+      chapter: 3,
+      facts: [{
+        subject: "protagonist",
+        predicate: "Mục tiêu hiện tại",
+        object: "Tìm chủ nhân cuốn sổ.",
+        validFromChapter: 3,
+        validUntilChapter: null,
+        sourceChapter: 3,
+      }],
+    }, "vi");
+
+    expect(hooks).toContain("# Tình tiết cài cắm đang chờ");
+    expect(hooks).toContain("| mã_tình_tiết | chương_bắt_đầu | loại | trạng_thái |");
+    expect(summaries).toContain("# Tóm tắt chương");
+    expect(summaries).toContain("| Chương | Tiêu đề | Nhân vật | Sự kiện chính |");
+    expect(currentState).toContain("# Trạng thái hiện tại");
+    expect(currentState).toContain("| Chương hiện tại | 3 |");
+    expect(currentState).toContain("| Mục tiêu hiện tại | Tìm chủ nhân cuốn sổ. |");
+    expect(currentState).toContain("| Vị trí hiện tại | (chưa thiết lập) |");
+    expect(currentState).not.toContain("# Current State");
+    expect(currentState).not.toContain("# 当前状态");
+  });
+
   it("renders pending hooks projection with deterministic English ordering", () => {
     const markdown = renderHooksProjection({
       hooks: [
@@ -126,5 +174,22 @@ describe("state projections", () => {
       "- Lin Yue still hides the broken oath token.",
       "",
     ].join("\n"));
+  });
+
+  it("keeps Vietnamese predicates as additional facts in legacy English projections", () => {
+    const markdown = renderCurrentStateProjection({
+      chapter: 3,
+      facts: [{
+        subject: "protagonist",
+        predicate: "Mục tiêu hiện tại",
+        object: "Tìm cuốn sổ.",
+        validFromChapter: 3,
+        validUntilChapter: null,
+        sourceChapter: 3,
+      }],
+    }, "en");
+
+    expect(markdown).toContain("| Current Goal | (not set) |");
+    expect(markdown).toContain("- Mục tiêu hiện tại: Tìm cuốn sổ.");
   });
 });

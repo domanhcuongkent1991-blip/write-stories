@@ -11,9 +11,10 @@ import {
   type RuntimeStateDelta,
   type StateManifest,
 } from "../models/runtime-state.js";
+import type { WritingLanguage } from "../models/writing-language.js";
 import { evaluateHookAdmission } from "../utils/hook-governance.js";
 import { resolveHookPayoffTiming } from "../utils/hook-lifecycle.js";
-import { resolveWritingLanguageProfile } from "../utils/language.js";
+import { selectWritingText } from "../utils/writing-surface.js";
 import { validateRuntimeState } from "./state-validator.js";
 
 export interface RuntimeStateSnapshot {
@@ -54,12 +55,9 @@ export function applyRuntimeStateDelta(params: {
   }
 
   const hooks = applyHookOps(snapshot.hooks, delta);
-  const scaffoldLanguage = resolveWritingLanguageProfile(
-    snapshot.manifest.language,
-  ).scaffoldLanguage;
   const currentState = applyCurrentStatePatch(
     snapshot.currentState,
-    scaffoldLanguage,
+    snapshot.manifest.language,
     delta,
   );
   const chapterSummaries = applySummaryDelta(snapshot.chapterSummaries, delta, allowReapply);
@@ -185,7 +183,7 @@ function preferRicherText(primary: string, fallback: string): string {
 
 function applyCurrentStatePatch(
   currentState: CurrentStateState,
-  language: "zh" | "en",
+  language: WritingLanguage,
   delta: RuntimeStateDelta,
 ): CurrentStateState {
   if (!delta.currentStatePatch) {
@@ -196,23 +194,32 @@ function applyCurrentStatePatch(
   }
 
   const nextFacts = [...currentState.facts];
-  const labels = language === "en"
-    ? {
+  const labels = selectWritingText(language, {
+    en: {
       currentLocation: ["Current Location", "当前位置"],
       protagonistState: ["Protagonist State", "主角状态"],
       currentGoal: ["Current Goal", "当前目标"],
       currentConstraint: ["Current Constraint", "当前限制"],
       currentAlliances: ["Current Alliances", "Current Relationships", "当前敌我"],
       currentConflict: ["Current Conflict", "当前冲突"],
-    }
-    : {
+    },
+    zh: {
       currentLocation: ["当前位置", "Current Location"],
       protagonistState: ["主角状态", "Protagonist State"],
       currentGoal: ["当前目标", "Current Goal"],
       currentConstraint: ["当前限制", "Current Constraint"],
       currentAlliances: ["当前敌我", "Current Alliances", "Current Relationships"],
       currentConflict: ["当前冲突", "Current Conflict"],
-    };
+    },
+    vi: {
+      currentLocation: ["Vị trí hiện tại", "Current Location", "当前位置"],
+      protagonistState: ["Trạng thái nhân vật chính", "Protagonist State", "主角状态"],
+      currentGoal: ["Mục tiêu hiện tại", "Current Goal", "当前目标"],
+      currentConstraint: ["Ràng buộc hiện tại", "Current Constraint", "当前限制"],
+      currentAlliances: ["Quan hệ hiện tại", "Current Alliances", "Current Relationships", "当前敌我"],
+      currentConflict: ["Xung đột hiện tại", "Current Conflict", "当前冲突"],
+    },
+  });
 
   for (const [patchKey, aliases] of Object.entries(labels) as Array<[
     keyof typeof labels,
