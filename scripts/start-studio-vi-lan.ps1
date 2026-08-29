@@ -117,11 +117,37 @@ try {
   $env:INKOS_STUDIO_WEB_HOST = $WebHost
   $env:INKOS_STUDIO_WEB_PORT = [string]$WebPort
 
+  $studioRoot = Join-Path $resolvedAppRoot 'packages\studio'
+  $coreRoot = Join-Path $resolvedAppRoot 'packages\core'
+  $nodeExecutable = (Get-Command node.exe -ErrorAction Stop).Source
+  $coreTsc = Join-Path $coreRoot 'node_modules\.bin\tsc.cmd'
+  $tsxLoader = './node_modules/tsx/dist/loader.mjs'
+  $viteEntrypoint = './node_modules/vite/bin/vite.js'
+  if (-not (Test-Path -LiteralPath $studioRoot -PathType Container) -or
+      -not (Test-Path -LiteralPath $coreTsc -PathType Leaf) -or
+      -not (Test-Path -LiteralPath (Join-Path $studioRoot 'node_modules\tsx\dist\loader.mjs') -PathType Leaf) -or
+      -not (Test-Path -LiteralPath (Join-Path $studioRoot 'node_modules\vite\bin\vite.js') -PathType Leaf)) {
+    throw "Studio local entrypoints are missing under: $studioRoot"
+  }
+
+  # Build only this worktree's Core package. Avoid pnpm workspace traversal,
+  # which can accidentally include a neighboring stable checkout.
+  Push-Location $coreRoot
+  try {
+    & $coreTsc
+    $coreBuildExitCode = $LASTEXITCODE
+  } finally {
+    Pop-Location
+  }
+  if ($coreBuildExitCode -ne 0) {
+    throw "Core build failed with exit code $coreBuildExitCode."
+  }
+
   $apiProcess = $null
   $webProcess = $null
   try {
-    $apiProcess = Start-Process -FilePath 'pnpm.cmd' -WorkingDirectory $resolvedAppRoot -ArgumentList @('exec', 'tsx', 'src/api/index.ts') -PassThru
-    $webProcess = Start-Process -FilePath 'pnpm.cmd' -WorkingDirectory $resolvedAppRoot -ArgumentList @('exec', 'vite', '--host', $WebHost, '--port', [string]$WebPort) -PassThru
+    $apiProcess = Start-Process -FilePath $nodeExecutable -WorkingDirectory $studioRoot -ArgumentList @('--import', $tsxLoader, 'src/api/index.ts') -PassThru
+    $webProcess = Start-Process -FilePath $nodeExecutable -WorkingDirectory $studioRoot -ArgumentList @($viteEntrypoint, '--host', $WebHost, '--port', [string]$WebPort) -PassThru
 
     $deadline = (Get-Date).AddSeconds(60)
     $ready = $false

@@ -53,6 +53,10 @@ interface BookData {
 
 type ReviseMode = "spot-fix" | "polish" | "rewrite" | "rework" | "anti-detect";
 type ExportFormat = "txt" | "md" | "epub";
+
+export function getBookDetailExportControlsClassName(): string {
+  return "flex min-w-0 flex-wrap items-center gap-2";
+}
 type BookStatus = "active" | "paused" | "outlining" | "completed" | "dropped";
 
 interface Nav {
@@ -583,7 +587,7 @@ export function BookDetail({
             <Wand2 size={14} />
             {bookActionPending === "compose" ? t("common.loading") : t("book.composeNext")}
           </button>
-          <div className="flex items-center gap-2">
+          <div className={getBookDetailExportControlsClassName()}>
             <select
               value={exportFormat}
               onChange={(e) => setExportFormat(e.target.value as ExportFormat)}

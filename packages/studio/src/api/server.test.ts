@@ -339,6 +339,7 @@ vi.mock("@actalk/inkos-core", async (importOriginal) => {
     WritingLanguagePreflightError: actual.WritingLanguagePreflightError,
     preflightWritingLanguage: actual.preflightWritingLanguage,
     resolveViWritingCapability: actual.resolveViWritingCapability,
+    resolveWritingLanguageProfile: actual.resolveWritingLanguageProfile,
     inferLanguage: actual.inferLanguage,
     ingestMaterial: actual.ingestMaterial,
     chatCompletion: chatCompletionMock,
@@ -3488,6 +3489,42 @@ describe("createStudioServer daemon lifecycle", () => {
         projectRoot: root,
       }),
       "检查当前状态",
+    );
+  });
+
+  it("passes a persisted Vietnamese book language through the agent session boundary", async () => {
+    loadBookConfigMock.mockResolvedValueOnce({
+      id: "demo-book",
+      title: "Sổ tay bến cảng",
+      platform: "qidian",
+      genre: "urban",
+      status: "active",
+      language: "vi",
+      targetChapters: 100,
+      chapterWordCount: 2000,
+      createdAt: "2026-04-12T00:00:00.000Z",
+      updatedAt: "2026-04-12T00:00:00.000Z",
+    });
+    const { createStudioServer } = await import("./server.js");
+    const app = createStudioServer(
+      cloneProjectConfig() as unknown as Parameters<typeof createStudioServer>[0],
+      root,
+    );
+
+    const response = await app.request("http://localhost/api/v1/agent", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        instruction: "Viết tiếp chương sau",
+        activeBookId: "demo-book",
+        sessionId: "agent-session-1",
+      }),
+    });
+
+    expect(response.status).toBe(200);
+    expect(runAgentSessionMock).toHaveBeenCalledWith(
+      expect.objectContaining({ language: "vi" }),
+      "Viết tiếp chương sau",
     );
   });
 

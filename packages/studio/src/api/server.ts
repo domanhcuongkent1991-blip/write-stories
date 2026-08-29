@@ -69,6 +69,7 @@ import {
   BookConfigSchema,
   BookStatusSchema,
   WritingLanguageSchema,
+  resolveWritingLanguageProfile,
   deriveBookIdFromTitle,
   preflightWritingLanguage,
   resolveViWritingCapability,
@@ -88,6 +89,7 @@ import {
   toPosixPath,
   type ActionPayload,
   type ActionSource,
+  type WritingLanguage,
   type AgentSkill,
   type BuiltinPrompt,
   createGenerateCoverTool,
@@ -160,10 +162,14 @@ import {
 // -- Studio server language (read per request from the project config's `language`) --
 
 type StudioLanguage = "zh" | "en";
-type WritingLanguage = "zh" | "en" | "vi";
 
 function normalizeStudioLanguage(value: unknown): StudioLanguage {
-  return value === "en" ? "en" : "zh";
+  return value === "en" || value === "vi" ? "en" : "zh";
+}
+
+function normalizeWritingLanguage(value: unknown): WritingLanguage | undefined {
+  const parsed = WritingLanguageSchema.safeParse(value);
+  return parsed.success ? parsed.data : undefined;
 }
 
 function pick(lang: StudioLanguage, zh: string, en: string): string {
@@ -1226,13 +1232,14 @@ async function executeConfirmedProductionAction(args: {
   readonly requestedSkills?: ReadonlyArray<string>;
   readonly disabledSkills?: ReadonlyArray<string>;
   readonly playMode?: PlayMode;
-  readonly language?: StudioLanguage;
+  readonly language?: WritingLanguage;
   readonly taskId: string;
   readonly sourceRequestId?: string;
   readonly signal: AbortSignal;
   readonly onTaskChange: (exec: CollectedToolExec) => Promise<void>;
 }): Promise<CollectedToolExec> {
-  const lang = args.language ?? "zh";
+  const writingLanguage = args.language ?? "zh";
+  const lang = resolveWritingLanguageProfile(writingLanguage).scaffoldLanguage;
   const id = args.taskId;
   const actionPayload = args.actionPayload;
   const configuredSkills = await loadAvailableAgentSkills({ projectRoot: args.root });
@@ -1270,6 +1277,7 @@ async function executeConfirmedProductionAction(args: {
     const title = requirePayloadText(payload?.title, pick(lang, "确认建书缺少书名，请重新生成确认卡。", "The book creation confirmation is missing a title. Regenerate the confirmation card."));
     tool = createSubAgentTool(args.pipeline, null, args.root, {
       actionPayload,
+      language: writingLanguage,
       workerSkills: (worker) => worker === "architect" ? productionSkills("longWriting") : [],
     });
     agent = "architect";
@@ -1306,7 +1314,7 @@ async function executeConfirmedProductionAction(args: {
     }
     const chapterCount = actionPayload?.writeNext?.chapterCount ?? 1;
     tool = createSubAgentTool(args.pipeline, args.bookId, args.root, {
-      language: lang,
+      language: writingLanguage,
       workerSkills: (worker) => worker === "writer" ? productionSkills("longWriting") : [],
     });
     agent = "writer";
@@ -4863,17 +4871,15 @@ export function createStudioServer(
           throw new ApiError(404, "BOOK_NOT_FOUND", `Book not found: ${agentBookId}`);
         }
       }
-      const configLanguage = config.language === "en" ? "en" : "zh";
-      const bookLanguage = activeBookConfig?.language === "en" ? "en" : activeBookConfig?.language === "zh" ? "zh" : undefined;
-      const requestedLanguage =
-        actionPayload?.shortRun?.language === "en" || actionPayload?.createBook?.language === "en"
-          ? "en"
-          : actionPayload?.shortRun?.language === "zh" || actionPayload?.createBook?.language === "zh"
-            ? "zh"
-            : undefined;
-      const surfaceLanguage = agentBookId
+      const configLanguage = normalizeStudioLanguage(config.language);
+      const bookLanguage = normalizeWritingLanguage(activeBookConfig?.language);
+      const requestedLanguage = normalizeWritingLanguage(
+        actionPayload?.createBook?.language ?? actionPayload?.shortRun?.language,
+      );
+      const writingLanguage: WritingLanguage = agentBookId
         ? (bookLanguage ?? configLanguage)
         : (requestedLanguage ?? inferLanguage(instruction));
+      const surfaceLanguage = resolveWritingLanguageProfile(writingLanguage).scaffoldLanguage;
       const streamSessionId = loadedBookSession.sessionId;
       const titleBeforeRun = bookSession.title;
       let sessionTitleBroadcasted = false;
@@ -5086,7 +5092,7 @@ export function createStudioServer(
             actionPayload,
             requestedSkills,
             disabledSkills,
-            language: surfaceLanguage,
+            language: writingLanguage,
             taskId,
             sourceRequestId,
             signal: taskController.signal,
@@ -5222,7 +5228,7 @@ export function createStudioServer(
           disabledSkills,
           attachments,
           sessionId: bookSession.sessionId,
-          language: surfaceLanguage,
+          language: writingLanguage,
           onContextCompression: (event) => {
             broadcast("context:compression", {
               sessionId: streamSessionId,

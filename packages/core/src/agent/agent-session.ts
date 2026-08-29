@@ -69,6 +69,7 @@ import type { TranscriptEvent, TranscriptRole } from "../interaction/session-tra
 import type { PlayMode, SessionKind } from "../interaction/session.js";
 import type { ActionPayload, ActionSource, RequestedIntent } from "../interaction/action-envelope.js";
 import type { ContextCompressionCallback } from "../models/context-compression.js";
+import type { ScaffoldLanguage, WritingLanguage } from "../models/writing-language.js";
 import {
   createSkillRegistry,
   loadAvailableAgentSkills,
@@ -87,6 +88,7 @@ import {
 } from "./skill-tool.js";
 import { opaqueConversationId, runWithAgentTrajectory } from "../llm/agent-trajectory.js";
 import { guardedPiStream } from "./pi-stream.js";
+import { resolveWritingLanguageProfile } from "../utils/language.js";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -111,8 +113,8 @@ export interface AgentSessionConfig {
   requestedSkills?: ReadonlyArray<string>;
   /** Agent Skills explicitly disabled for this turn. */
   disabledSkills?: ReadonlyArray<string>;
-  /** Language for the system prompt. */
-  language: string;
+  /** Canonical writing language for this session. */
+  language: WritingLanguage;
   /** PipelineRunner for sub-agent tool delegation. */
   pipeline: PipelineRunner;
   /** Project root directory (books/ lives under this). */
@@ -185,7 +187,7 @@ interface CachedAgent {
   skillResolutionKey: string;
   turnSkills: Map<string, ActivatedSkillGuidance>;
   playWorldExists: boolean;
-  language: string;
+  language: WritingLanguage;
   modelIdentity: string;
   apiKey: string | undefined;
   allowSystemFileRead: boolean;
@@ -318,7 +320,7 @@ function agentCacheKey(projectRoot: string, sessionId: string): string {
   return sessionQueueKey(projectRoot, sessionId);
 }
 
-function buildAttachmentUserBlock(attachments: ReadonlyArray<AgentSessionAttachment> | undefined, language: string): string {
+function buildAttachmentUserBlock(attachments: ReadonlyArray<AgentSessionAttachment> | undefined, language: ScaffoldLanguage): string {
   if (!attachments?.length) return "";
   const isEn = language === "en";
   const lines = [
@@ -778,7 +780,7 @@ type CreateAgentToolsForModeParams = {
   readonly actionPayload: AgentSessionConfig["actionPayload"];
   readonly projectRoot: string;
   readonly allowSystemFileRead: boolean;
-  readonly language: string;
+  readonly language: WritingLanguage;
   readonly playMode?: "open" | "guided";
   readonly playWorldExists: boolean;
   readonly intentSkillTool?: ReturnType<typeof createUseSkillTool>;
@@ -795,10 +797,11 @@ function createAgentToolsForMode(params: CreateAgentToolsForModeParams) {
 }
 
 function createModeTools(params: CreateAgentToolsForModeParams) {
-  const lang = params.language === "en" ? "en" : "zh";
+  const writingLanguage = params.language;
+  const lang = resolveWritingLanguageProfile(writingLanguage).scaffoldLanguage;
   const subAgentTool = createSubAgentTool(params.pipeline, params.bookId, params.projectRoot, {
     actionPayload: params.actionPayload,
-    language: lang,
+    language: writingLanguage,
     activeSkills: params.activeSkills,
     workerSkills: params.workerSkills,
   });
@@ -957,7 +960,7 @@ function createModeTools(params: CreateAgentToolsForModeParams) {
       return [createSubAgentTool(params.pipeline, params.bookId, params.projectRoot, {
         actionPayload: params.actionPayload,
         architectCreateOnly: true,
-        language: lang,
+        language: writingLanguage,
         activeSkills: params.activeSkills,
         workerSkills: params.workerSkills,
       })];
@@ -1035,6 +1038,7 @@ async function runAgentSessionUnlocked(
   initialMessages?: Array<{ role: string; content: string }>,
 ): Promise<AgentSessionResult> {
   const { sessionId, language, pipeline, projectRoot, onEvent, onContextCompression } = config;
+  const scaffoldLanguage = resolveWritingLanguageProfile(language).scaffoldLanguage;
   // Normalize at the entry point so downstream comparisons, closures, and
   // fs paths never see `undefined`. The type is already `string | null`, but
   // some callers may bypass the type system (e.g. `activeBookId ?? null` gets
@@ -1130,7 +1134,7 @@ async function runAgentSessionUnlocked(
         restoredHistory,
         model,
       ),
-      language,
+      scaffoldLanguage,
     );
     const initialAgentMessages = restoredMessages.length > 0
       ? restoredMessages
@@ -1146,7 +1150,7 @@ async function runAgentSessionUnlocked(
     );
     const allowIntentSkillSelection = actionSource === "free-text"
       && skillResolution.forcedSkillIds.length === 0;
-    const baseSystemPrompt = buildAgentSystemPrompt(bookId, language, sessionKind, {
+    const baseSystemPrompt = buildAgentSystemPrompt(bookId, scaffoldLanguage, sessionKind, {
       actionSource,
       requestedIntent,
       playWorldExists,
@@ -1253,7 +1257,7 @@ async function runAgentSessionUnlocked(
     cached.turnSkills.set(skill.id, { skill, resources: [] });
   }
   const { agent } = cached;
-  const attachmentBlock = buildAttachmentUserBlock(config.attachments, language);
+  const attachmentBlock = buildAttachmentUserBlock(config.attachments, scaffoldLanguage);
   const promptMessage = attachmentBlock ? `${userMessage}${attachmentBlock}` : userMessage;
   const promptImages = attachmentImages(config.attachments);
 

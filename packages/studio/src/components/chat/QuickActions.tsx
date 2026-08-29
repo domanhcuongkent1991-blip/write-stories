@@ -52,9 +52,13 @@ const CHIPS: ReadonlyArray<ChipDef> = [
   },
 ];
 
+export function getQuickActionsClassName(): string {
+  return "flex min-w-0 flex-wrap gap-2 overflow-x-hidden px-1 py-1";
+}
+
 export function QuickActions({ onAction, disabled, isZh }: QuickActionsProps) {
   return (
-    <div className="flex gap-2 overflow-x-auto px-1 py-1">
+    <div className={getQuickActionsClassName()}>
       {CHIPS.map((chip) => {
         const label = isZh ? chip.labelZh : chip.labelEn;
         const command = isZh ? chip.commandZh : chip.commandEn;

@@ -4,7 +4,9 @@ import type { PipelineRunner } from "../pipeline/runner.js";
 import { ArchitectIncompleteFoundationError } from "../agents/architect.js";
 import { type ReviseMode } from "../agents/reviser.js";
 import { defaultChapterLength } from "../utils/length-metrics.js";
-import { inferLanguage } from "../utils/language.js";
+import { inferLanguage, resolveWritingLanguageProfile } from "../utils/language.js";
+import type { WritingLanguage } from "../models/writing-language.js";
+import { selectWritingText } from "../utils/writing-surface.js";
 import { mkdir, readFile, writeFile, readdir, stat } from "node:fs/promises";
 import { basename, isAbsolute, join, resolve } from "node:path";
 import { StateManager } from "../state/manager.js";
@@ -818,7 +820,8 @@ const SubAgentParams = Type.Object({
   language: Type.Optional(Type.Union([
     Type.Literal("zh"),
     Type.Literal("en"),
-  ], { description: "architect only: writing language. Default: zh" })),
+    Type.Literal("vi"),
+  ], { description: "architect only: canonical writing language. Default: zh" })),
   targetChapters: Type.Optional(Type.Number({ description: "architect only: total chapter count. Default: 200" })),
   chapterWordCount: Type.Optional(Type.Number({ description: "architect/writer: per-chapter length in the book's native unit (zh characters / en words). Default: 3000 zh, 2000 en" })),
   revise: Type.Optional(Type.Boolean({
@@ -863,7 +866,8 @@ const ArchitectCreateSubAgentParams = Type.Object({
   language: Type.Optional(Type.Union([
     Type.Literal("zh"),
     Type.Literal("en"),
-  ], { description: "Confirmed writing language. Default: zh" })),
+    Type.Literal("vi"),
+  ], { description: "Confirmed canonical writing language. Default: zh" })),
   targetChapters: Type.Optional(Type.Number({ description: "Confirmed total chapter count. Default: 200" })),
   chapterWordCount: Type.Optional(Type.Number({ description: "Confirmed per-chapter length in the book's native unit. Default: 3000 zh, 2000 en" })),
 });
@@ -923,12 +927,18 @@ export function createSubAgentTool(
   options: {
     readonly actionPayload?: ActionPayload;
     readonly architectCreateOnly?: boolean;
-    readonly language?: "zh" | "en";
+    readonly language?: WritingLanguage;
     readonly activeSkills?: () => ReadonlyArray<ActivatedSkillGuidance>;
     readonly workerSkills?: (agent: string) => ReadonlyArray<ActivatedSkillGuidance>;
   } = {},
 ): AgentTool<any> {
-  const sessionIsZh = (options.language ?? "zh") !== "en";
+  const sessionLanguage = options.language ?? "zh";
+  const sessionProfile = resolveWritingLanguageProfile(sessionLanguage);
+  const sessionIsZh = sessionProfile.scaffoldLanguage === "zh";
+  const sessionIsVi = sessionLanguage === "vi";
+  const sessionText = <T>(copy: { readonly zh: T; readonly en: T; readonly vi: T }): T => (
+    selectWritingText(sessionLanguage, copy)
+  );
   return {
     name: "sub_agent",
     description: options.architectCreateOnly
@@ -958,18 +968,31 @@ export function createSubAgentTool(
         };
 
         try {
+          if (sessionIsVi && (
+            (agent !== "architect" && agent !== "writer" && agent !== "auditor" && agent !== "reviser")
+            || (agent === "architect" && revise)
+          )) {
+            throw new WritingLanguagePreflightError(
+              "WRITING_LANGUAGE_MODE_UNSUPPORTED",
+              "Chế độ này chưa hỗ trợ sách tiếng Việt.",
+            );
+          }
           if (options.architectCreateOnly && agent !== "architect") {
             throw new Error("This confirmed book-creation turn can only run the architect. Open the created book or use the book session to write chapters.");
           }
           if (!activeBookId && agent !== "architect") {
-            return textResult("No active book. Only the architect agent can create a book from this session.");
+            return textResult(sessionText({
+              zh: "No active book. Only the architect agent can create a book from this session.",
+              en: "No active book. Only the architect agent can create a book from this session.",
+              vi: "Chưa có sách đang hoạt động. Phiên này chỉ có thể dùng kiến trúc sư để tạo sách.",
+            }));
           }
           if (activeBookId && agent === "architect" && !revise) {
-            return textResult(
-              sessionIsZh
-                ? "当前已有书籍，不需要建书。如果你想创建新书，请先回到首页。"
-                : "This session already has a book, so no new book is needed. To create a new book, go back to the home page first.",
-            );
+            return textResult(sessionText({
+              zh: "当前已有书籍，不需要建书。如果你想创建新书，请先回到首页。",
+              en: "This session already has a book, so no new book is needed. To create a new book, go back to the home page first.",
+              vi: "Phiên này đã có sách nên không cần tạo thêm. Muốn tạo sách mới, hãy quay lại trang chủ trước.",
+            }));
           }
 
           switch (agent) {
@@ -997,7 +1020,11 @@ export function createSubAgentTool(
             const confirmedTitle = createBookPayload?.title?.trim();
             const resolvedTitle = confirmedTitle || title?.trim();
             if (!resolvedTitle) {
-              return textResult('Error: title is required for the architect agent.');
+              return textResult(sessionText({
+                zh: "Error: title is required for the architect agent.",
+                en: "Error: title is required for the architect agent.",
+                vi: "Lỗi: kiến trúc sư cần tiêu đề để tạo sách.",
+              }));
             }
             const id = confirmedTitle
               ? deriveBookIdFromTitle(confirmedTitle) || `book-${Date.now().toString(36)}`
@@ -1006,7 +1033,11 @@ export function createSubAgentTool(
                 : deriveBookIdFromTitle(resolvedTitle) || `book-${Date.now().toString(36)}`;
             const now = new Date().toISOString();
             const resolvedLanguage = createBookPayload?.language ?? language ?? inferLanguage(instruction);
-            progress(`Starting architect for book "${id}"...`);
+            progress(sessionText({
+              zh: `Starting architect for book "${id}"...`,
+              en: `Starting architect for book "${id}"...`,
+              vi: `Đang khởi tạo kiến trúc cho sách “${id}”…`,
+            }));
             await runPipelineWithAgentContext(
               pipeline,
               _signal,
@@ -1017,8 +1048,8 @@ export function createSubAgentTool(
                   title: resolvedTitle,
                   genre: createBookPayload?.genre ?? genre ?? "general",
                   platform: normalizePlatformOrOther(createBookPayload?.platform ?? platform),
-                  language: resolvedLanguage as any,
-                  status: "outlining" as any,
+                  language: resolvedLanguage,
+                  status: "outlining",
                   targetChapters: createBookPayload?.targetChapters ?? targetChapters ?? 200,
                   chapterWordCount: createBookPayload?.chapterWordCount ?? chapterWordCount ?? defaultChapterLength(resolvedLanguage),
                   createdAt: now,
@@ -1027,9 +1058,17 @@ export function createSubAgentTool(
                 { externalContext: instruction },
               ),
             );
-            progress(`Architect finished — book "${id}" foundation created.`);
+            progress(sessionText({
+              zh: `Architect finished — book "${id}" foundation created.`,
+              en: `Architect finished — book "${id}" foundation created.`,
+              vi: `Kiến trúc sư đã hoàn tất — nền tảng của sách “${id}” đã được tạo.`,
+            }));
             return textResult(
-              `Book "${resolvedTitle}" (${id}) initialised successfully. Foundation files are ready.`,
+              sessionText({
+                zh: `Book "${resolvedTitle}" (${id}) initialised successfully. Foundation files are ready.`,
+                en: `Book "${resolvedTitle}" (${id}) initialised successfully. Foundation files are ready.`,
+                vi: `Đã khởi tạo sách “${resolvedTitle}” (${id}). Các tệp nền tảng đã sẵn sàng.`,
+              }),
               { kind: "book_created", bookId: id, title: resolvedTitle, skillIds },
             );
           }
@@ -1038,7 +1077,11 @@ export function createSubAgentTool(
             const targetBookId = resolveToolBookId("writer", bookId, activeBookId);
             const requestedCount = chapterCount ?? 1;
             if (requestedCount > 1) {
-              progress(`Writing ${requestedCount} consecutive chapters for "${targetBookId}"...`);
+              progress(sessionText({
+                zh: `Writing ${requestedCount} consecutive chapters for "${targetBookId}"...`,
+                en: `Writing ${requestedCount} consecutive chapters for "${targetBookId}"...`,
+                vi: `Đang viết liên tiếp ${requestedCount} chương cho “${targetBookId}”…`,
+              }));
               const results = await runPipelineWithAgentContext(
                 pipeline,
                 _signal,
@@ -1047,7 +1090,11 @@ export function createSubAgentTool(
                   wordCount: chapterWordCount,
                   externalContext: instruction,
                   onChapterComplete(result, completedCount, totalCount) {
-                    progress(`Writer finished chapter ${result.chapterNumber} (${completedCount}/${totalCount}) for "${targetBookId}".`);
+                    progress(sessionText({
+                      zh: `Writer finished chapter ${result.chapterNumber} (${completedCount}/${totalCount}) for "${targetBookId}".`,
+                      en: `Writer finished chapter ${result.chapterNumber} (${completedCount}/${totalCount}) for "${targetBookId}".`,
+                      vi: `Đã viết xong chương ${result.chapterNumber} (${completedCount}/${totalCount}) cho “${targetBookId}”.`,
+                    }));
                   },
                 }),
               );
@@ -1057,9 +1104,13 @@ export function createSubAgentTool(
                 stoppedStatus
                   ? sessionIsZh
                     ? `已完成 ${results.length}/${requestedCount} 章；第 ${last?.chapterNumber} 章状态为 ${stoppedStatus}，批量写作已停止，请复核后再继续。`
+                    : sessionIsVi
+                      ? `Đã hoàn thành ${results.length}/${requestedCount} chương; chương ${last?.chapterNumber} kết thúc với trạng thái ${stoppedStatus} nên lượt viết hàng loạt đã dừng. Vui lòng kiểm tra trước khi tiếp tục.`
                     : `Writer completed ${results.length} of ${requestedCount} requested chapters for "${targetBookId}" and stopped because chapter ${last?.chapterNumber} ended with status "${stoppedStatus}".`
                   : sessionIsZh
                     ? `已连续完成 ${results.length} 章（第 ${results[0]?.chapterNumber} 章至第 ${last?.chapterNumber} 章）。`
+                    : sessionIsVi
+                      ? `Đã hoàn thành liên tiếp ${results.length} chương cho "${targetBookId}".`
                     : `Writer completed ${results.length} consecutive chapters for "${targetBookId}".`,
                 {
                   kind: "chapters_written",
@@ -1079,14 +1130,22 @@ export function createSubAgentTool(
               );
               return stoppedStatus ? { ...output, isError: true } : output;
             }
-            progress(`Writing next chapter for "${targetBookId}"...`);
+            progress(sessionText({
+              zh: `Writing next chapter for "${targetBookId}"...`,
+              en: `Writing next chapter for "${targetBookId}"...`,
+              vi: `Đang viết chương tiếp theo cho “${targetBookId}”…`,
+            }));
             const result = await runPipelineWithAgentContext(
               pipeline,
               _signal,
               activatedSkills,
               () => pipeline.writeNextChapter(targetBookId, chapterWordCount, undefined, instruction),
             );
-            progress(`Writer finished chapter for "${targetBookId}".`);
+            progress(sessionText({
+              zh: `Writer finished chapter for "${targetBookId}".`,
+              en: `Writer finished chapter for "${targetBookId}".`,
+              vi: `Đã viết xong chương cho “${targetBookId}”.`,
+            }));
             const resultStatus = (result as any).status;
             const wordCount = (result as any).wordCount ?? "unknown";
             const chapterNumberResult = (result as any).chapterNumber;
@@ -1095,14 +1154,20 @@ export function createSubAgentTool(
             const chapterRef = chapterNumberResult
               ? sessionIsZh
                 ? `第 ${chapterNumberResult} 章${titleResult ? `《${titleResult}》` : ""}`
+                : sessionIsVi
+                  ? `chương ${chapterNumberResult}${titleResult ? ` “${titleResult}”` : ""}`
                 : `chapter ${chapterNumberResult}${titleResult ? ` "${titleResult}"` : ""}`
-              : sessionIsZh ? "下一章" : "the next chapter";
+              : sessionIsZh ? "下一章" : sessionIsVi ? "chương tiếp theo" : "the next chapter";
             const message = needsReview
               ? sessionIsZh
                 ? `已为 ${targetBookId} 写出${chapterRef}，字数 ${wordCount}，但审稿未通过，状态 ${resultStatus}，需要复核后再继续。`
+                : sessionIsVi
+                  ? `Đã viết ${chapterRef} cho ${targetBookId}, ${wordCount} từ, nhưng kiểm duyệt chưa đạt (trạng thái: ${resultStatus}). Cần kiểm tra thủ công trước khi tiếp tục.`
                 : `Wrote ${chapterRef} for ${targetBookId}: ${wordCount} words, but review did not pass (status: ${resultStatus}). Manual review is required before continuing.`
               : sessionIsZh
                 ? `已为 ${targetBookId} 完成${chapterRef}，字数 ${wordCount}，状态 ${resultStatus ?? "ready-for-review"}。`
+                : sessionIsVi
+                  ? `Đã hoàn thành ${chapterRef} cho ${targetBookId}, ${wordCount} từ, trạng thái ${resultStatus ?? "ready-for-review"}.`
                 : `Completed ${chapterRef} for ${targetBookId}: ${wordCount} words, status ${resultStatus ?? "ready-for-review"}.`;
             const output = textResult(
               message,
@@ -1122,20 +1187,31 @@ export function createSubAgentTool(
 
           case "auditor": {
             const targetBookId = resolveToolBookId("auditor", bookId, activeBookId);
-            progress(`Auditing chapter ${chapterNumber ?? "latest"} for "${targetBookId}"...`);
+            progress(sessionText({
+              zh: `Auditing chapter ${chapterNumber ?? "latest"} for "${targetBookId}"...`,
+              en: `Auditing chapter ${chapterNumber ?? "latest"} for "${targetBookId}"...`,
+              vi: `Đang kiểm tra chương ${chapterNumber ?? "mới nhất"} của “${targetBookId}”…`,
+            }));
             const audit = await runPipelineWithAgentContext(
               pipeline,
               _signal,
               activatedSkills,
               () => pipeline.auditDraft(targetBookId, chapterNumber),
             );
-            progress(`Audit complete for "${targetBookId}".`);
+            progress(sessionText({
+              zh: `Audit complete for "${targetBookId}".`,
+              en: `Audit complete for "${targetBookId}".`,
+              vi: `Đã kiểm tra xong “${targetBookId}”.`,
+            }));
             const issueLines = (audit.issues ?? [])
               .map((i: any) => `[${i.severity}] ${i.description}`)
               .join("\n");
             return textResult(
-              `Audit chapter ${audit.chapterNumber}: ${audit.passed ? "PASSED" : "FAILED"}, ${(audit.issues ?? []).length} issue(s).` +
-              (issueLines ? `\n${issueLines}` : ""),
+              sessionText({
+                zh: `Audit chapter ${audit.chapterNumber}: ${audit.passed ? "PASSED" : "FAILED"}, ${(audit.issues ?? []).length} issue(s).`,
+                en: `Audit chapter ${audit.chapterNumber}: ${audit.passed ? "PASSED" : "FAILED"}, ${(audit.issues ?? []).length} issue(s).`,
+                vi: `Đã kiểm tra chương ${audit.chapterNumber}: ${audit.passed ? "ĐẠT" : "CHƯA ĐẠT"}, ${(audit.issues ?? []).length} vấn đề.`,
+              }) + (issueLines ? `\n${issueLines}` : ""),
               {
                 kind: "chapter_audit",
                 bookId: targetBookId,
@@ -1150,7 +1226,11 @@ export function createSubAgentTool(
           case "reviser": {
             const targetBookId = resolveToolBookId("reviser", bookId, activeBookId);
             const resolvedMode: ReviseMode = (mode as ReviseMode) ?? "spot-fix";
-            progress(`Revising "${targetBookId}" chapter ${chapterNumber ?? "latest"} in ${resolvedMode} mode...`);
+            progress(sessionText({
+              zh: `Revising "${targetBookId}" chapter ${chapterNumber ?? "latest"} in ${resolvedMode} mode...`,
+              en: `Revising "${targetBookId}" chapter ${chapterNumber ?? "latest"} in ${resolvedMode} mode...`,
+              vi: `Đang chỉnh sửa chương ${chapterNumber ?? "mới nhất"} của “${targetBookId}” ở chế độ ${resolvedMode}…`,
+            }));
             const result = await runPipelineWithAgentContext(
               pipeline,
               _signal,
@@ -1175,9 +1255,27 @@ export function createSubAgentTool(
               skillIds,
             };
             if (!applied) {
-              progress(`Revision not applied for "${targetBookId}".`);
+              progress(sessionText({
+                zh: `Revision not applied for "${targetBookId}".`,
+                en: `Revision not applied for "${targetBookId}".`,
+                vi: `Chưa áp dụng bản chỉnh sửa cho “${targetBookId}”.`,
+              }));
               const diagnostics = result.revisionDiagnostics;
-              const diagnosticText = diagnostics
+              const diagnosticText = diagnostics && sessionIsVi
+                ? [
+                    "",
+                    "Điều kiện áp dụng bản chỉnh sửa:",
+                    `- Tiêu chuẩn: ${diagnostics.standard}`,
+                    `- Trước: blocking=${diagnostics.before.blockingCount}, critical=${diagnostics.before.criticalCount}, aiTell=${diagnostics.before.aiTellCount}`,
+                    `- Sau: blocking=${diagnostics.after.blockingCount}, critical=${diagnostics.after.criticalCount}, aiTell=${diagnostics.after.aiTellCount}`,
+                    ...(diagnostics.remainingIssues.length > 0
+                      ? [
+                          "- Các vấn đề còn lại:",
+                          ...diagnostics.remainingIssues.map((issue) => `  - [${issue.severity}] ${issue.category}: ${issue.description}${issue.suggestion ? ` (${issue.suggestion})` : ""}`),
+                        ]
+                      : []),
+                  ].join("\n")
+                : diagnostics
                 ? [
                     "",
                     "Revision gate:",
@@ -1193,18 +1291,36 @@ export function createSubAgentTool(
                   ].join("\n")
                 : "";
               return textResult(
-                `Revision not applied for "${targetBookId}" chapter ${resultChapter ?? "latest"}: ${result.skippedReason ?? result.status ?? "pipeline kept the original chapter"}.${diagnosticText}`,
+                sessionText({
+                  zh: `Revision not applied for "${targetBookId}" chapter ${resultChapter ?? "latest"}: ${result.skippedReason ?? result.status ?? "pipeline kept the original chapter"}.`,
+                  en: `Revision not applied for "${targetBookId}" chapter ${resultChapter ?? "latest"}: ${result.skippedReason ?? result.status ?? "pipeline kept the original chapter"}.`,
+                  vi: `Chưa áp dụng bản chỉnh sửa cho “${targetBookId}”, chương ${resultChapter ?? "mới nhất"}: ${result.skippedReason ?? result.status ?? "giữ nguyên chương hiện tại"}.`,
+                }) + diagnosticText,
                 details,
               );
             }
-            progress(`Revision complete for "${targetBookId}".`);
-            const auditText = result.auditPassed === undefined
-              ? ""
-              : result.auditPassed
-                ? " Audit passed."
-                : ` Audit still has ${(result.auditIssues ?? []).length} blocking issue(s).`;
+            progress(sessionText({
+              zh: `Revision complete for "${targetBookId}".`,
+              en: `Revision complete for "${targetBookId}".`,
+              vi: `Đã hoàn tất chỉnh sửa cho “${targetBookId}”.`,
+            }));
+            const auditText = sessionIsVi
+              ? result.auditPassed === undefined
+                ? ""
+                : result.auditPassed
+                  ? " Kiểm duyệt đã đạt."
+                  : ` Kiểm duyệt vẫn còn ${(result.auditIssues ?? []).length} vấn đề chặn.`
+              : result.auditPassed === undefined
+                ? ""
+                : result.auditPassed
+                  ? " Audit passed."
+                  : ` Audit still has ${(result.auditIssues ?? []).length} blocking issue(s).`;
             return textResult(
-              `Revision (${resolvedMode}) complete for "${targetBookId}" chapter ${resultChapter ?? "latest"}.${auditText}`,
+              sessionText({
+                zh: `Revision (${resolvedMode}) complete for "${targetBookId}" chapter ${resultChapter ?? "latest"}.`,
+                en: `Revision (${resolvedMode}) complete for "${targetBookId}" chapter ${resultChapter ?? "latest"}.`,
+                vi: `Đã hoàn tất chỉnh sửa (${resolvedMode}) cho “${targetBookId}”, chương ${resultChapter ?? "mới nhất"}.`,
+              }) + auditText,
               details,
             );
           }
@@ -1229,12 +1345,11 @@ export function createSubAgentTool(
           if (agent === "architect" && err instanceof ArchitectIncompleteFoundationError) {
             const missing = err.missing.join(", ");
             return textResult(
-              [
-                err.message,
-                "",
-                `缺失 section: ${missing}`,
-                "我会把已生成的部分保留下来，并继续补齐缺失 section；不要重新发明一本书。",
-              ].join("\n"),
+              sessionText({
+                zh: [err.message, "", `缺失 section: ${missing}`, "我会把已生成的部分保留下来，并继续补齐缺失 section；不要重新发明一本书。"].join("\n"),
+                en: [err.message, "", `缺失 section: ${missing}`, "我会把已生成的部分保留下来，并继续补齐缺失 section；不要重新发明一本书。"].join("\n"),
+                vi: ["Kiến trúc nền tảng chưa hoàn chỉnh.", "", `Các mục còn thiếu: ${missing}`, "Các phần đã tạo sẽ được giữ nguyên trong khi bổ sung mục còn thiếu; không tạo lại thành một cuốn sách khác."].join("\n"),
+              }),
               {
                 kind: "architect_incomplete",
                 missing: [...err.missing],

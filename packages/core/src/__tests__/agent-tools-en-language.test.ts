@@ -169,6 +169,239 @@ describe("agent tools language wiring (en parity)", () => {
     expect(runShortFictionProductionMock.mock.calls[0]![0]).toMatchObject({ language: "en" });
   });
 
+  it("renders a Vietnamese writer failure summary without Chinese fallback labels", async () => {
+    const pipeline = {
+      runWithAgentContext: vi.fn(async (_context: unknown, task: () => Promise<unknown>) => task()),
+      writeNextChapter: vi.fn(async () => ({
+        chapterNumber: 2,
+        title: "Mở đầu",
+        wordCount: 200,
+        status: "audit-failed",
+      })),
+    };
+    const tool = createSubAgentTool(
+      pipeline as unknown as Parameters<typeof createSubAgentTool>[0],
+      "harbor",
+      undefined,
+      { language: "vi" },
+    );
+
+    const result = await tool.execute("writer-vi-summary", {
+      agent: "writer",
+      bookId: "harbor",
+      instruction: "Viết chương tiếp theo",
+    } as unknown as Parameters<typeof tool.execute>[1]);
+
+    const summary = toolText(result);
+    expect(summary).toContain("Đã viết chương 2");
+    expect(summary).toContain("kiểm duyệt chưa đạt");
+    expect(summary).not.toMatch(/[\u3400-\u9fff]/);
+    expect(result).toMatchObject({ isError: true });
+  });
+
+  it("keeps Vietnamese canonical through AgentSession into writer result and progress", async () => {
+    const model = { provider: "x", id: "y", api: "anthropic-messages" } as unknown as Parameters<typeof runAgentSession>[0]["model"];
+    const progress: string[] = [];
+    const pipeline = contextPipeline({
+      writeNextChapter: vi.fn(async () => ({
+        chapterNumber: 3,
+        title: "Dấu vết mới",
+        wordCount: 240,
+        status: "ready-for-review",
+      })),
+    });
+
+    try {
+      await runAgentSession(
+        {
+          sessionId: "book-vi-session",
+          bookId: "harbor",
+          sessionKind: "book",
+          language: "vi",
+          pipeline: pipeline as unknown as Parameters<typeof runAgentSession>[0]["pipeline"],
+          projectRoot: root,
+          model,
+        },
+        "Viết chương tiếp theo",
+      );
+
+      const tool = agentInstances[0]?.state.tools.find((entry: { name?: string }) => entry.name === "sub_agent") as ReturnType<typeof createSubAgentTool> | undefined;
+      expect(tool).toBeTruthy();
+      const result = await tool!.execute(
+        "writer-vi-session",
+        { agent: "writer", bookId: "harbor", instruction: "Viết chương tiếp theo" },
+        undefined,
+        (update) => progress.push(toolText(update)),
+      );
+
+      expect(toolText(result)).toContain("Đã hoàn thành chương 3");
+      expect(toolText(result)).not.toMatch(/[\u3400-\u9fff]/);
+      expect(progress.join("\n")).toContain("Đang viết chương tiếp theo");
+      expect(progress.join("\n")).not.toMatch(/[\u3400-\u9fff]/);
+    } finally {
+      evictAgentCache("book-vi-session");
+    }
+  });
+
+  it("uses Vietnamese copy for phase-one architect and writer surfaces", async () => {
+    const updates: string[] = [];
+    const pipeline = contextPipeline({
+      initBook: vi.fn(async () => undefined),
+      writeChapters: vi.fn(async (_bookId: string, _count: number, options: { onChapterComplete?: (result: { chapterNumber: number }, completed: number, total: number) => void }) => {
+        options.onChapterComplete?.({ chapterNumber: 1 }, 1, 2);
+        return [
+          { chapterNumber: 1, title: "Khởi hành", wordCount: 210, status: "ready-for-review" },
+          { chapterNumber: 2, title: "Ngã rẽ", wordCount: 220, status: "audit-failed" },
+        ];
+      }),
+    });
+    const createTool = createSubAgentTool(
+      pipeline as unknown as Parameters<typeof createSubAgentTool>[0],
+      null,
+      undefined,
+      {
+        language: "vi",
+        actionPayload: { createBook: { title: "Bến cảng", language: "vi" } },
+      },
+    );
+    const created = await createTool.execute(
+      "architect-vi",
+      { agent: "architect", instruction: "Tạo sách Bến cảng", title: "Bến cảng" },
+      undefined,
+      (update) => updates.push(toolText(update)),
+    );
+    expect(toolText(created)).toContain("Đã khởi tạo");
+
+    const activeTool = createSubAgentTool(
+      pipeline as unknown as Parameters<typeof createSubAgentTool>[0],
+      "harbor",
+      undefined,
+      { language: "vi" },
+    );
+    const blocked = await activeTool.execute("architect-active-vi", {
+      agent: "architect",
+      instruction: "Tạo sách",
+    });
+    expect(toolText(blocked)).toContain("Phiên này đã có sách");
+
+    const batch = await activeTool.execute(
+      "writer-batch-vi",
+      { agent: "writer", instruction: "Viết hai chương", chapterCount: 2 },
+      undefined,
+      (update) => updates.push(toolText(update)),
+    );
+    expect(toolText(batch)).toContain("Đã hoàn thành 2/2 chương");
+    expect(updates.join("\n")).toContain("Đang khởi tạo kiến trúc");
+    expect(updates.join("\n")).toContain("Đang viết liên tiếp 2 chương");
+    expect(updates.join("\n")).not.toMatch(/[\u3400-\u9fff]/);
+  });
+
+  it("runs Vietnamese audit with localized progress and result wrappers", async () => {
+    const updates: string[] = [];
+    const pipeline = contextPipeline({
+      auditDraft: vi.fn(async () => ({ chapterNumber: 2, passed: false, issues: [] })),
+    });
+    const tool = createSubAgentTool(
+      pipeline as unknown as Parameters<typeof createSubAgentTool>[0],
+      "harbor",
+      undefined,
+      { language: "vi" },
+    );
+
+    const result = await tool.execute(
+      "audit-vi",
+      { agent: "auditor", instruction: "Kiểm tra chương mới", chapterNumber: 2 },
+      undefined,
+      (update) => updates.push(toolText(update)),
+    );
+
+    expect(pipeline.auditDraft).toHaveBeenCalledWith("harbor", 2);
+    expect(toolText(result)).toContain("Đã kiểm tra chương 2");
+    expect(updates.join("\n")).toContain("Đang kiểm tra chương 2");
+    expect(`${toolText(result)}\n${updates.join("\n")}`).not.toMatch(/[\u3400-\u9fff]/);
+    expect(`${toolText(result)}\n${updates.join("\n")}`).not.toMatch(/Audit|Auditing|issue\(s\)/);
+  });
+
+  it("renders Vietnamese revision wrappers for applied and held results", async () => {
+    const updates: string[] = [];
+    const pipeline = contextPipeline({
+      reviseDraft: vi.fn()
+        .mockResolvedValueOnce({
+          chapterNumber: 2,
+          wordCount: 220,
+          fixedIssues: ["tone"],
+          applied: true,
+          status: "ready-for-review",
+          auditPassed: true,
+        })
+        .mockResolvedValueOnce({
+          chapterNumber: 2,
+          wordCount: 220,
+          fixedIssues: [],
+          applied: false,
+          status: "unchanged",
+          skippedReason: "unchanged",
+          revisionDiagnostics: {
+            standard: "machine-standard",
+            before: { blockingCount: 2, criticalCount: 1, aiTellCount: 3 },
+            after: { blockingCount: 2, criticalCount: 1, aiTellCount: 3 },
+            remainingIssues: [],
+          },
+        }),
+    });
+    const tool = createSubAgentTool(
+      pipeline as unknown as Parameters<typeof createSubAgentTool>[0],
+      "harbor",
+      undefined,
+      { language: "vi" },
+    );
+
+    const applied = await tool.execute(
+      "revise-vi-applied",
+      { agent: "reviser", instruction: "Chỉnh sửa chương 2", chapterNumber: 2, mode: "spot-fix" },
+      undefined,
+      (update) => updates.push(toolText(update)),
+    );
+    const held = await tool.execute(
+      "revise-vi-held",
+      { agent: "reviser", instruction: "Chỉnh sửa chương 2", chapterNumber: 2, mode: "spot-fix" },
+      undefined,
+      (update) => updates.push(toolText(update)),
+    );
+
+    expect(pipeline.reviseDraft).toHaveBeenCalledTimes(2);
+    expect(toolText(applied)).toContain("Đã hoàn tất chỉnh sửa");
+    expect(toolText(held)).toContain("Chưa áp dụng bản chỉnh sửa");
+    const rendered = `${toolText(applied)}\n${toolText(held)}\n${updates.join("\n")}`;
+    expect(rendered).not.toMatch(/[\u3400-\u9fff]/);
+    expect(rendered).not.toMatch(/Revision|Revising|Audit passed|Standard:|Before:|After:/);
+  });
+
+  it("rejects Vietnamese foundation revision and export before side effects", async () => {
+    const pipeline = contextPipeline({
+      reviseFoundation: vi.fn(async () => undefined),
+    });
+    const tool = createSubAgentTool(
+      pipeline as unknown as Parameters<typeof createSubAgentTool>[0],
+      "harbor",
+      undefined,
+      { language: "vi" },
+    );
+
+    await expect(tool.execute("foundation-revise-vi", {
+      agent: "architect",
+      revise: true,
+      instruction: "Sửa kiến trúc",
+    })).rejects.toMatchObject({ code: "WRITING_LANGUAGE_MODE_UNSUPPORTED" });
+    expect(pipeline.reviseFoundation).not.toHaveBeenCalled();
+
+    await expect(tool.execute("export-vi", {
+      agent: "exporter",
+      instruction: "Xuất bản thảo",
+    })).rejects.toMatchObject({ code: "WRITING_LANGUAGE_MODE_UNSUPPORTED" });
+    expect(pipeline.runWithAgentContext).not.toHaveBeenCalled();
+  });
+
   it("persists English short language and word length in the confirmation payload", async () => {
     const result = await createProposeActionTool("en").execute("propose-short-en", {
       action: "short_run",
