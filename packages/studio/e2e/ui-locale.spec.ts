@@ -84,13 +84,13 @@ test("first run separates UI locale from writing language", async ({ page }) => 
 
   await page.goto("/");
   await expect(page.getByRole("button", { name: "VI", exact: true })).toBeVisible();
-  await expect(page.getByRole("button", { name: /^English Writing/ })).toBeVisible();
+  await expect(page.getByRole("button", { name: /^英文创作/ })).toBeVisible();
 
   await page.getByRole("button", { name: "VI", exact: true }).click();
-  await expect(page.getByRole("button", { name: /^English Writing/ })).toBeVisible();
+  await expect(page.getByRole("button", { name: /^Sáng tác bằng tiếng Anh/ })).toBeVisible();
   expect(mutations).toEqual([]);
 
-  await page.getByRole("button", { name: /^English Writing/ }).click();
+  await page.getByRole("button", { name: /^Sáng tác bằng tiếng Anh/ }).click();
   await expect.poll(() => [...mutations]).toEqual(["POST /api/v1/project/language"]);
 
   const projectResponse = await page.request.get("/api/v1/project");
