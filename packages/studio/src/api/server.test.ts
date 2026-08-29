@@ -4018,7 +4018,11 @@ describe("createStudioServer daemon lifecycle", () => {
         },
       },
     });
-    await expect(loadStudioTaskSnapshot(root, "stale-task-session")).resolves.toMatchObject({
+    expect(runAgentSessionMock).not.toHaveBeenCalled();
+    expect(pipelineConfigs).toHaveLength(0);
+    const reconciled = await loadStudioTaskSnapshot(root, "stale-task-session");
+    expect(reconciled?.execution.error).toMatch(/interrupted|restarted|中断|重启/i);
+    await expect(Promise.resolve(reconciled)).resolves.toMatchObject({
       execution: { id: "stale-task-1", status: "error" },
     });
   });

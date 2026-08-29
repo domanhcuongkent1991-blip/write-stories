@@ -123,6 +123,14 @@ export function getChatComposerModelRowClassName(): string {
   return CHAT_COMPOSER_MODEL_ROW_CLASS_NAME;
 }
 
+export function shouldReloadSessionAfterSseReconnect(
+  wasConnected: boolean,
+  connected: boolean,
+  activeSessionId: string | null | undefined,
+): boolean {
+  return !wasConnected && connected && Boolean(activeSessionId);
+}
+
 const CHAT_ATTACHMENT_ACCEPT = [
   "image/*",
   "text/plain",
@@ -313,7 +321,7 @@ function SkillPickerPanel({
 
 // -- Component --
 
-export function ChatPage({ activeBookId, mode = activeBookId ? "book" : "book-create", nav, theme, t, sse: _sse }: ChatPageProps) {
+export function ChatPage({ activeBookId, mode = activeBookId ? "book" : "book-create", nav, theme, t, sse }: ChatPageProps) {
   // -- Store selectors --
   const messages = useChatStore(chatSelectors.activeMessages);
   const activeSession = useChatStore(chatSelectors.activeSession);
@@ -342,6 +350,7 @@ export function ChatPage({ activeBookId, mode = activeBookId ? "book" : "book-cr
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const autoScrollPinnedRef = useRef(true);
+  const wasSseConnected = useRef(sse.connected);
 
   const isZh = t("nav.connected") === "\u5DF2\u8FDE\u63A5";
   const hasBook = Boolean(activeBookId);
@@ -531,6 +540,28 @@ export function ChatPage({ activeBookId, mode = activeBookId ? "book" : "book-cr
   useEffect(() => {
     autoScrollPinnedRef.current = true;
   }, [activeSessionId]);
+
+  useEffect(() => {
+    const reconnected = shouldReloadSessionAfterSseReconnect(
+      wasSseConnected.current,
+      sse.connected,
+      activeSessionId,
+    );
+    wasSseConnected.current = sse.connected;
+    if (reconnected && activeSessionId) {
+      void loadSessionDetail(activeSessionId);
+    }
+  }, [activeSessionId, loadSessionDetail, sse.connected]);
+
+  useEffect(() => {
+    const onVisibilityChange = () => {
+      if (document.visibilityState === "visible" && activeSessionId) {
+        void loadSessionDetail(activeSessionId);
+      }
+    };
+    document.addEventListener("visibilitychange", onVisibilityChange);
+    return () => document.removeEventListener("visibilitychange", onVisibilityChange);
+  }, [activeSessionId, loadSessionDetail]);
 
   // Entering a book loads its latest session; book-create mode persists its orphan session in localStorage.
   useEffect(() => {

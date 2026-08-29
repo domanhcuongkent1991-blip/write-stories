@@ -1,28 +1,27 @@
-import { execSync } from "child_process";
+import { mkdirSync, unlinkSync, writeFileSync } from "fs";
 import { fileURLToPath } from "url";
 import path from "path";
 
-/**
- * Rebuild @actalk/inkos-core before E2E tests start.
- *
- * The E2E API server (tsx watch src/api/index.ts) imports core via the pnpm
- * workspace symlink, which resolves to packages/core/dist/index.js — the
- * compiled output, not the TypeScript source.  If dist/ is stale the server
- * runs old code regardless of what the TypeScript sources say, causing
- * otherwise-correct agent logic (e.g. the terminalToolResultTail guard) to be
- * silently absent at runtime.
- *
- * Rebuilding here ensures the dist is always fresh before tests run.
- */
+/** Creates the root-bound Vietnamese capability marker for the E2E project. */
 export default function globalSetup(): void {
   const thisFile = fileURLToPath(import.meta.url);
   // From packages/studio/e2e: ../ = studio, ../../ = packages, ../../../ = the
-  // worktree/workspace root (where pnpm-workspace.yaml lives). A fourth ../ would
-  // point at the .worktrees parent, where the --filter matches nothing and the
-  // build silently no-ops, leaving core dist stale (agent stub absent at runtime).
+  // worktree/workspace root (where the test project lives).
   const workspaceRoot = path.resolve(path.dirname(thisFile), "../../../");
-  execSync("pnpm --filter @actalk/inkos-core build", {
-    cwd: workspaceRoot,
-    stdio: "inherit",
-  });
+
+  const projectRoot = path.resolve(workspaceRoot, "test-project");
+  const markerDirectory = path.resolve(projectRoot, ".inkos");
+  mkdirSync(markerDirectory, { recursive: true });
+  try {
+    unlinkSync(path.resolve(markerDirectory, "e2e-shutdown.sentinel"));
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
+      throw error;
+    }
+  }
+  writeFileSync(
+    path.resolve(markerDirectory, "vi-writing-v1.json"),
+    `${JSON.stringify({ schemaVersion: 1, contractVersion: "vi-writing-v1", projectRoot }, null, 2)}\n`,
+    "utf-8",
+  );
 }

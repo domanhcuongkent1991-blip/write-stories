@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { STUDIO_SSE_EVENTS, collectNewSSEMessages } from "./use-sse";
 import type { SSEMessage } from "./use-sse";
+import { shouldReloadSessionAfterSseReconnect } from "../pages/ChatPage";
 
 describe("STUDIO_SSE_EVENTS", () => {
   it("covers the server lifecycle events that drive the UI", () => {
@@ -82,5 +83,14 @@ describe("collectNewSSEMessages", () => {
     const { fresh, nextCursor } = collectNewSSEMessages(messages, 49);
     expect(fresh.map((message) => message.seq)).toEqual([50, 51, 52]);
     expect(nextCursor).toBe(52);
+  });
+});
+
+describe("ChatPage SSE recovery policy", () => {
+  it("reloads only on a false-to-true connection transition with an active session", () => {
+    expect(shouldReloadSessionAfterSseReconnect(false, true, "session-1")).toBe(true);
+    expect(shouldReloadSessionAfterSseReconnect(true, true, "session-1")).toBe(false);
+    expect(shouldReloadSessionAfterSseReconnect(false, false, "session-1")).toBe(false);
+    expect(shouldReloadSessionAfterSseReconnect(false, true, null)).toBe(false);
   });
 });
