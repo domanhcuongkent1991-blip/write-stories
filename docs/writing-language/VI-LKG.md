@@ -3,7 +3,7 @@
 This record identifies the qualified experiment snapshot. It is not a stable promotion, tag, deployment, or approval to use a real model.
 
 ```text
-sourceCommit: 532bcc54b854b45fafb44e12e774407a3e6e8d99
+sourceCommit: 9f3f57108992cddd219387f2f14d496e93c50370
 upstreamBaseCommit: 5da9fad03d65882adc030dc0043da8e8bc197dbd
 stableCustomizationTip: be780dfda3d8f2091857fc1822e19f424653e087
 viPatchBase: be780dfda3d8f2091857fc1822e19f424653e087
@@ -21,7 +21,7 @@ zhSmoke: PASS — stub create foundation, chapter 1, audit, revise, index/manife
 enSmoke: PASS — stub create foundation, chapter 1, audit, revise, index/manifest reload; legacy en counter/headings preserved
 viManualSamples: PASS — sandbox book ban-ghi-thu-nghiem-vi-01133111; two canonical chapters without duplicates; audit/revise and interrupted-task recovery exercised; manifest/telemetry language vi; counter vi_wordlike_tokens_v1; chapter/truth/runtime/index aligned; real RMX3081 Android 13 phone could operate the LAN UI at 1080x2400 without horizontal overflow after the qualified fixes
 knownLimitations: Qualification used the deterministic stub only. Its sample chapter was 107/2000 tokens and remained audit-failed, so prose quality and a paid real-model run are not qualified. Trusted LAN intentionally has no authentication and must be enabled only while supervised. The retained pre-fix session transcript contains historical Chinese tool-summary messages; sourceCommit fixes new messages but does not rewrite history. Only one real phone/browser combination was checked. Stable was not promoted and E:\viet-truyen was not modified.
-rollbackCommit: 532bcc54b854b45fafb44e12e774407a3e6e8d99
+rollbackCommit: 9f3f57108992cddd219387f2f14d496e93c50370
 ```
 
 The customization stack is `5da9fad03d65882adc030dc0043da8e8bc197dbd..be780dfda3d8f2091857fc1822e19f424653e087` (27 commits). The Vietnamese writing stack is `be780dfda3d8f2091857fc1822e19f424653e087..532bcc54b854b45fafb44e12e774407a3e6e8d99`. Future candidates must replay and qualify these stacks separately in that order.
