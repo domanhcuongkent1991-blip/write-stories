@@ -265,12 +265,8 @@ export function buildImportFoundationSource(
   ].join("\n");
 }
 
-/** Human-readable description of each manual-revision gate, surfaced in revisionDiagnostics. */
-const REVISION_GATE_STANDARDS: Record<RevisionGate, string> = {
-  strict: "A revision is applied only when blocking, critical, and AI-tell counts do not worsen, and at least blocking or AI-tell issues improve.",
-  lenient: "A revision is applied whenever blocking, critical, and AI-tell counts do not worsen; no improvement is required (lenient gate).",
-  always: "Legacy always gate is normalized to strict acceptance; audit counts must still pass the shared candidate gate.",
-};
+/** Legacy revisionGate values are parse-compatible diagnostics only. */
+const SHARED_REVISION_GATE_STANDARD = "Legacy revisionGate is compatibility/diagnostic only. Every mode uses the shared candidate gate: score >= 85, no verified blockers, valid settled state, and an in-range hard length.";
 
 export interface PipelineConfig {
   readonly client: LLMClient;
@@ -286,11 +282,8 @@ export interface PipelineConfig {
    */
   readonly chapterReviewMode?: "auto" | "manual";
   /**
-   * Gate for applying manual revisions (default "strict"):
-   * - "strict": apply only when blocking/critical/AI-tell counts do not worsen
-   *   AND at least one of blocking or AI-tell improves.
-   * - "lenient": apply whenever the counts do not worsen (no improvement required).
-   * - "always": legacy value normalized to the strict shared acceptance gate.
+   * Legacy parse-compatible diagnostic value for manual revisions. Every value
+   * uses the same shared candidate acceptance gate.
    */
   readonly revisionGate?: RevisionGate;
   readonly notifyChannels?: ReadonlyArray<NotifyChannel>;
@@ -1836,9 +1829,15 @@ export class PipelineRunner {
       const explicitRevisionRequested = Boolean(effectiveExternalContext?.trim())
         || mode === "rewrite"
         || mode === "rework";
+      const hasVerifiedRepairableBlocker = preRevision.auditResult.issues.some(
+        (issue) => issue.severity === "critical"
+          && issue.verification === "verified"
+          && issue.repairTarget !== undefined,
+      );
       if (
         preRevision.blockingCount === 0
         && preRevision.aiTellCount === 0
+        && !hasVerifiedRepairableBlocker
         && !explicitRevisionRequested
       ) {
         const completedAt = new Date().toISOString();
@@ -1864,7 +1863,7 @@ export class PipelineRunner {
         await commitAtomicFileSet({ rootDir: bookDir, writes: [createAuditRunWrite(initialRun)] });
         return {
           chapterNumber: targetChapter,
-          wordCount: countChapterLength(content, countingMode),
+          wordCount: countChapterLength(content, lengthSpec.countingMode),
           fixedIssues: [],
           applied: false,
           status: "unchanged",
@@ -1908,112 +1907,153 @@ export class PipelineRunner {
           : { lengthSpec, baselineChapter },
       );
 
-      if (reviseOutput.revisedContent.length === 0) {
-        throw new Error("Reviser returned empty content");
-      }
       const { normalizePostWriteSurface: normalizeRevisionSurface } = await import("../agents/post-write-validator.js");
-      const revisedContent = normalizeRevisionSurface(reviseOutput.revisedContent, language);
+      const revisedContent = reviseOutput.revisedContent.length === 0
+        ? ""
+        : normalizeRevisionSurface(reviseOutput.revisedContent, language);
       const revisedCount = countChapterLength(revisedContent, lengthSpec.countingMode);
+      const persistManualRevisionRejection = async (
+        rejectionReason: string,
+        candidateProduced: boolean,
+      ): Promise<void> => {
+        const now = new Date().toISOString();
+        const initialEvaluation = toChapterAuditEvaluation(preRevision.auditResult, content);
+        const rejectionRun = createAuditRun({
+          bookId,
+          chapterNumber: targetChapter,
+          operation: "revise",
+          phase: "initial",
+          contentHash: initialEvaluation.contentHash,
+          evaluation: initialEvaluation,
+          length: {
+            count: countChapterLength(content, lengthSpec.countingMode),
+            ...lengthSpec,
+          },
+          startedAt: now,
+          completedAt: now,
+          durationMs: 0,
+          operationId: auditOperationId,
+          attemptId: auditAttemptId,
+          canonicalCommitOutcome: "unchanged",
+          revision: {
+            attempted: true,
+            candidateProduced,
+            candidateContentHash: computeChapterContentHash(revisedContent),
+            candidateWordCount: revisedCount,
+            accepted: false,
+            rejectionReason,
+          },
+        });
+        await commitAtomicFileSet({ rootDir: bookDir, writes: [createAuditRunWrite(rejectionRun)] });
+      };
+      const manualRevisionUnchanged = (
+        rejectionReason: string,
+        auditIssues: ReadonlyArray<AuditIssue> = [],
+      ) => ({
+        chapterNumber: targetChapter,
+        wordCount: countChapterLength(content, lengthSpec.countingMode),
+        fixedIssues: [],
+        applied: false,
+        status: "unchanged" as const,
+        auditPassed: false,
+        auditIssues,
+        skippedReason: `Manual revision kept the original chapter because ${rejectionReason}.`,
+        revisionDiagnostics: {
+          standard: SHARED_REVISION_GATE_STANDARD,
+          before: {
+            blockingCount: preRevision.blockingCount,
+            criticalCount: preRevision.criticalCount,
+            aiTellCount: preRevision.aiTellCount,
+          },
+          after: {
+            blockingCount: preRevision.blockingCount,
+            criticalCount: preRevision.criticalCount,
+            aiTellCount: preRevision.aiTellCount,
+          },
+          remainingIssues: auditIssues,
+        },
+      });
+      if (revisedContent.length === 0 || revisedContent === content) {
+        const rejectionReason = revisedContent.length === 0
+          ? "revision candidate was empty"
+          : "revision candidate was unchanged";
+        await persistManualRevisionRejection(rejectionReason, false);
+        return manualRevisionUnchanged(rejectionReason);
+      }
       const writer = new WriterAgent(this.agentCtxFor("writer", bookId));
       const stateValidator = new StateValidatorAgent(this.agentCtxFor("stateValidator", bookId));
-      let settledRevision = await writer.settleChapterState({
-        book,
-        bookDir,
-        chapterNumber: targetChapter,
-        baselineChapter,
-        title: chapterMeta.title,
-        content: revisedContent,
-        chapterIntent: reviseControlInput?.plan.intentMarkdown,
-        contextPackage: reviseControlInput?.composed.contextPackage,
-        ruleStack: reviseControlInput?.composed.ruleStack,
-      });
-      let stateValidation = await stateValidator.validate(
-        revisedContent,
-        targetChapter,
-        baselineState,
-        settledRevision.updatedState,
-        baselineHooks,
-        settledRevision.updatedHooks,
-        language,
-      );
-      if (!stateValidation.passed || stateValidation.repairRequired) {
-        const recovery = await retrySettlementAfterValidationFailure({
-          writer,
-          validator: stateValidator,
+      let settledRevision: WriteChapterOutput;
+      let stateValidation: ValidationResult;
+      try {
+        settledRevision = await writer.settleChapterState({
           book,
           bookDir,
           chapterNumber: targetChapter,
           baselineChapter,
           title: chapterMeta.title,
           content: revisedContent,
-          reducedControlInput: reviseControlInput
-            ? {
-                chapterIntent: reviseControlInput.plan.intentMarkdown,
-                contextPackage: reviseControlInput.composed.contextPackage,
-                ruleStack: reviseControlInput.composed.ruleStack,
-              }
-            : undefined,
-          oldState: baselineState,
-          oldHooks: baselineHooks,
-          originalValidation: stateValidation,
-          language,
-          logger: this.config.logger,
+          chapterIntent: reviseControlInput?.plan.intentMarkdown,
+          contextPackage: reviseControlInput?.composed.contextPackage,
+          ruleStack: reviseControlInput?.composed.ruleStack,
         });
-        if (recovery.kind === "degraded") {
-          const rejectedAt = new Date().toISOString();
-          const rejectedReason = "state settlement did not validate after retry";
-          const initialEvaluation = toChapterAuditEvaluation(preRevision.auditResult, content);
-          const rejectionRun = createAuditRun({
-            bookId,
+        stateValidation = await stateValidator.validate(
+          revisedContent,
+          targetChapter,
+          baselineState,
+          settledRevision.updatedState,
+          baselineHooks,
+          settledRevision.updatedHooks,
+          language,
+        );
+      } catch (error) {
+        const rejectionReason = `state validation unavailable: ${String(error)}`;
+        await persistManualRevisionRejection(rejectionReason, true);
+        return manualRevisionUnchanged(rejectionReason, [{
+          severity: "warning",
+          category: "state-validation",
+          description: rejectionReason,
+          suggestion: "Retry state settlement and validation before applying the revision.",
+        }]);
+      }
+      if (!stateValidation.passed || stateValidation.repairRequired) {
+        let recovery: Awaited<ReturnType<typeof retrySettlementAfterValidationFailure>>;
+        try {
+          recovery = await retrySettlementAfterValidationFailure({
+            writer,
+            validator: stateValidator,
+            book,
+            bookDir,
             chapterNumber: targetChapter,
-            operation: "revise",
-            phase: "initial",
-            contentHash: initialEvaluation.contentHash,
-            evaluation: initialEvaluation,
-            length: {
-              count: countChapterLength(content, lengthSpec.countingMode),
-              ...lengthSpec,
-            },
-            startedAt: rejectedAt,
-            completedAt: rejectedAt,
-            durationMs: 0,
-            operationId: auditOperationId,
-            attemptId: auditAttemptId,
-            canonicalCommitOutcome: "unchanged",
-            revision: {
-              attempted: true,
-              candidateProduced: true,
-              candidateContentHash: computeChapterContentHash(revisedContent),
-              candidateWordCount: revisedCount,
-              accepted: false,
-              rejectionReason: rejectedReason,
-            },
+            baselineChapter,
+            title: chapterMeta.title,
+            content: revisedContent,
+            reducedControlInput: reviseControlInput
+              ? {
+                  chapterIntent: reviseControlInput.plan.intentMarkdown,
+                  contextPackage: reviseControlInput.composed.contextPackage,
+                  ruleStack: reviseControlInput.composed.ruleStack,
+                }
+              : undefined,
+            oldState: baselineState,
+            oldHooks: baselineHooks,
+            originalValidation: stateValidation,
+            language,
+            logger: this.config.logger,
           });
-          await commitAtomicFileSet({ rootDir: bookDir, writes: [createAuditRunWrite(rejectionRun)] });
-          return {
-            chapterNumber: targetChapter,
-            wordCount: countChapterLength(content, countingMode),
-            fixedIssues: [],
-            applied: false,
-            status: "unchanged",
-            auditPassed: false,
-            auditIssues: recovery.issues,
-            skippedReason: `Revision kept the original chapter because ${rejectedReason}.`,
-            revisionDiagnostics: {
-              standard: "Revision text and derived story state must both validate before any file is replaced.",
-              before: {
-                blockingCount: preRevision.blockingCount,
-                criticalCount: preRevision.criticalCount,
-                aiTellCount: preRevision.aiTellCount,
-              },
-              after: {
-                blockingCount: preRevision.blockingCount,
-                criticalCount: preRevision.criticalCount,
-                aiTellCount: preRevision.aiTellCount,
-              },
-              remainingIssues: recovery.issues,
-            },
-          };
+        } catch (error) {
+          const rejectionReason = `state validation unavailable: ${String(error)}`;
+          await persistManualRevisionRejection(rejectionReason, true);
+          return manualRevisionUnchanged(rejectionReason, [{
+            severity: "warning",
+            category: "state-validation",
+            description: rejectionReason,
+            suggestion: "Retry state settlement and validation before applying the revision.",
+          }]);
+        }
+        if (recovery.kind === "degraded") {
+          const rejectedReason = "state settlement did not validate after retry";
+          await persistManualRevisionRejection(rejectedReason, true);
+          return manualRevisionUnchanged(rejectedReason, recovery.issues);
         }
         settledRevision = recovery.output;
         stateValidation = recovery.validation;
@@ -2077,14 +2117,6 @@ export class PipelineRunner {
         lengthWarning: lengthWarnings.length > 0,
       });
 
-      const improvedBlocking = effectivePostRevision.blockingCount < preRevision.blockingCount;
-      const improvedAITells = effectivePostRevision.aiTellCount < preRevision.aiTellCount;
-      const blockingDidNotWorsen = effectivePostRevision.blockingCount <= preRevision.blockingCount;
-      const criticalDidNotWorsen = effectivePostRevision.criticalCount <= preRevision.criticalCount;
-      const aiDidNotWorsen = effectivePostRevision.aiTellCount <= preRevision.aiTellCount;
-      const didNotWorsen = blockingDidNotWorsen && criticalDidNotWorsen && aiDidNotWorsen;
-      const revisionGate = this.config.revisionGate ?? "strict";
-      const normalizedGate = normalizeLegacyRevisionGate(revisionGate);
       const beforeEvaluation = toChapterAuditEvaluation(preRevision.auditResult, content);
       const afterEvaluation = toChapterAuditEvaluation(effectivePostRevision.auditResult, revisedContent);
       const candidateAcceptance = evaluateRevisionCandidate({
@@ -2170,8 +2202,7 @@ export class PipelineRunner {
           ...(issue.suggestion ? { suggestion: issue.suggestion } : {}),
         }));
       const revisionDiagnostics = {
-        standard: REVISION_GATE_STANDARDS[revisionGate]
-          + (normalizedGate !== revisionGate ? " (normalized by shared audit policy)" : ""),
+        standard: SHARED_REVISION_GATE_STANDARD,
         before: {
           blockingCount: preRevision.blockingCount,
           criticalCount: preRevision.criticalCount,
@@ -2229,7 +2260,10 @@ export class PipelineRunner {
               lengthTelemetry,
               auditDecision: effectivePostRevision.auditResult.decision,
               auditAttemptId,
-              auditRunPaths: revisionAuditRuns.map(auditRunRelativePath),
+              auditRunPaths: [...new Set([
+                ...(ch.auditRunPaths ?? []),
+                ...revisionAuditRuns.map(auditRunRelativePath),
+              ])],
               verifiedBlockerCount: effectivePostRevision.auditResult.issues.filter(
                 (issue) => issue.severity === "critical" && issue.verification === "verified",
               ).length,
@@ -2772,9 +2806,15 @@ export class PipelineRunner {
               lengthSpec.countingMode,
               reducedControlInput,
             );
-            const surfaceValid = settled.content === normalizedContent
-              && settled.updatedState.trim().length > 0
-              && settled.updatedHooks.trim().length > 0;
+            const promoted = await this.promotePersistenceHooks(
+              bookDir,
+              chapterNumber,
+              settled,
+              pipelineLang,
+            );
+            const surfaceValid = promoted.content === normalizedContent
+              && promoted.updatedState.trim().length > 0
+              && promoted.updatedHooks.trim().length > 0;
             if (!surfaceValid) {
               settledRevisionCandidate = undefined;
               settledRevisionCandidateValidated = false;
@@ -2787,9 +2827,9 @@ export class PipelineRunner {
               book,
               bookDir,
               chapterNumber,
-              title: settled.title,
+              title: promoted.title,
               content: normalizedContent,
-              persistenceOutput: settled,
+              persistenceOutput: promoted,
               auditResult: {
                 passed: false,
                 decision: "inconclusive",
@@ -2882,27 +2922,15 @@ export class PipelineRunner {
         title: finalTitleResolution.title,
       };
     }
-    if (!settledRevisionCandidateValidated) {
-      const { rerunPromotionPass } = await import("../utils/hook-promotion.js");
-      const { parsePendingHooksMarkdown, renderHookSnapshot } = await import("../utils/story-markdown.js");
-      const hooks = parsePendingHooksMarkdown(persistenceOutput.updatedHooks);
-      const summaries = persistenceOutput.updatedChapterSummaries
-        ?? await readFile(join(bookDir, "story", "chapter_summaries.md"), "utf-8").catch(() => "");
-      const promotion = rerunPromotionPass(hooks, summaries);
-      if (promotion.updated) {
-        const renderedHooks = renderHookSnapshot([...promotion.hooks], pipelineLang);
-        persistenceOutput = {
-          ...persistenceOutput,
-          updatedHooks: renderedHooks,
-          ...(persistenceOutput.runtimeStateSnapshot ? {
-            runtimeStateSnapshot: {
-              ...persistenceOutput.runtimeStateSnapshot,
-              hooks: HooksStateSchema.parse({ hooks: [...promotion.hooks] }),
-            },
-          } : {}),
-        };
-        this.config.logger?.info(`[promotion] ${promotion.flippedCount} hook(s) promoted after chapter ${chapterNumber}`);
-      }
+    const acceptedValidatedSettlement = settledRevisionCandidateValidated
+      && settledRevisionCandidate?.content === finalContent;
+    if (!acceptedValidatedSettlement) {
+      persistenceOutput = await this.promotePersistenceHooks(
+        bookDir,
+        chapterNumber,
+        persistenceOutput,
+        pipelineLang,
+      );
     }
     if (persistenceOutput.title !== output.title) {
       const description = pipelineLang === "en"
@@ -2958,7 +2986,7 @@ export class PipelineRunner {
     this.logStage(stageLanguage, { zh: "校验真相文件变更", en: "validating truth file updates" });
     let chapterStatus: ChapterPipelineResult["status"] | null = null;
     let degradedIssues: ReadonlyArray<AuditIssue> = [];
-    if (!(settledRevisionCandidateValidated && settledRevisionCandidate?.content === finalContent)) {
+    if (!acceptedValidatedSettlement) {
       const validator = new StateValidatorAgent(this.agentCtxFor("state-validator", bookId));
       const truthValidation = await validateChapterTruthPersistence({
         writer,
@@ -4019,6 +4047,41 @@ ${matrix}`,
       postWriteWarnings: [],
       hookHealthIssues: output.hookHealthIssues,
       tokenUsage: output.tokenUsage,
+    };
+  }
+
+  /**
+   * Promotion is part of the settled truth that validation and auditing observe.
+   * Keeping it here prevents an accepted revision from being validated against
+   * pre-promotion hooks and then persisted with different truth.
+   */
+  private async promotePersistenceHooks(
+    bookDir: string,
+    chapterNumber: number,
+    persistenceOutput: WriteChapterOutput,
+    language: ScaffoldLanguage,
+  ): Promise<WriteChapterOutput> {
+    const { rerunPromotionPass } = await import("../utils/hook-promotion.js");
+    const { parsePendingHooksMarkdown, renderHookSnapshot } = await import("../utils/story-markdown.js");
+    const hooks = parsePendingHooksMarkdown(persistenceOutput.updatedHooks);
+    const summaries = persistenceOutput.updatedChapterSummaries
+      ?? await readFile(join(bookDir, "story", "chapter_summaries.md"), "utf-8").catch(() => "");
+    const promotion = rerunPromotionPass(hooks, summaries);
+    if (!promotion.updated) {
+      return persistenceOutput;
+    }
+
+    const renderedHooks = renderHookSnapshot([...promotion.hooks], language);
+    this.config.logger?.info(`[promotion] ${promotion.flippedCount} hook(s) promoted after chapter ${chapterNumber}`);
+    return {
+      ...persistenceOutput,
+      updatedHooks: renderedHooks,
+      ...(persistenceOutput.runtimeStateSnapshot ? {
+        runtimeStateSnapshot: {
+          ...persistenceOutput.runtimeStateSnapshot,
+          hooks: HooksStateSchema.parse({ hooks: [...promotion.hooks] }),
+        },
+      } : {}),
     };
   }
 

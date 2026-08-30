@@ -152,6 +152,10 @@ export async function runChapterReviewCycle(params: {
   const auditAssessments: Array<{ content: string; auditResult: AuditResult }> = [];
   let revisionAttempts = 0;
   let revisionCandidateProduced = false;
+  let revisionCandidateIdentity: {
+    readonly candidateContentHash: string;
+    readonly candidateWordCount: number;
+  } | undefined;
   let revisionRejectionReason: string | undefined;
 
   // Convert initial postWriteErrors into AuditIssues as fallback when runPostWriteChecks isn't provided.
@@ -299,7 +303,12 @@ export async function runChapterReviewCycle(params: {
       revision: {
         attempted: revisionAttempts > 0,
         candidateProduced: revisionCandidateProduced,
-        ...(candidate ? { candidateContentHash: asEvaluation(candidate.auditResult, candidate.content).contentHash } : {}),
+        ...(candidate
+          ? {
+              candidateContentHash: asEvaluation(candidate.auditResult, candidate.content).contentHash,
+              candidateWordCount: countChapterLength(candidate.content, params.lengthSpec.countingMode),
+            }
+          : revisionCandidateIdentity),
         accepted: Boolean(candidate && finalContent === candidate.content),
         ...(revisionRejectionReason ? { rejectionReason: revisionRejectionReason } : {}),
       },
@@ -395,6 +404,11 @@ export async function runChapterReviewCycle(params: {
         });
         break;
       }
+
+      revisionCandidateIdentity = {
+        candidateContentHash: computeChapterContentHash(revisedContent),
+        candidateWordCount: countChapterLength(revisedContent, params.lengthSpec.countingMode),
+      };
 
       params.assertChapterContentNotEmpty(revisedContent, `repair iteration ${iteration + 1}`);
       let candidateSettlement: RevisionCandidateSettlement = { valid: true };

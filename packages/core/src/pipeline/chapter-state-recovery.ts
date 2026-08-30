@@ -1,5 +1,6 @@
 import type { AuditIssue } from "../agents/continuity.js";
 import type {
+  StateValidationAuthorityContext,
   ValidationResult,
   ValidationWarning,
 } from "../agents/state-validator.js";
@@ -37,6 +38,8 @@ export interface SettlementRetryParams {
   readonly oldHooks: string;
   readonly originalValidation: ValidationResult;
   readonly language: ScaffoldLanguage;
+  /** Reuse the same authority supplied to the validation that requested retry. */
+  readonly authorityContext?: StateValidationAuthorityContext;
   readonly logWarn?: (message: { zh: string; en: string }) => void;
   readonly logger?: Pick<Logger, "warn">;
 }
@@ -100,6 +103,7 @@ export async function retrySettlementAfterValidationFailure(
       params.oldHooks,
       retryOutput.updatedHooks,
       scaffoldLanguage,
+      params.authorityContext,
     );
   } catch (error) {
     throw new Error(`State validation retry failed for chapter ${params.chapterNumber}: ${String(error)}`);

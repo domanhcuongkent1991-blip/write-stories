@@ -24,6 +24,7 @@ import type { ChapterMeta } from "../models/chapter.js";
 import { MemoryDB } from "../state/memory-db.js";
 import * as memoryDbModule from "../state/memory-db.js";
 import { countChapterLength } from "../utils/length-metrics.js";
+import { computeChapterContentHash } from "../audit/chapter-audit-evaluator.js";
 import {
   listChapterVersions,
   readChapterVersion,
@@ -34,6 +35,7 @@ import {
   type WritingLanguageProfile,
 } from "../utils/language.js";
 import * as atomicFileSetModule from "../utils/atomic-file-set.js";
+import * as hookPromotionModule from "../utils/hook-promotion.js";
 
 const require = createRequire(import.meta.url);
 const hasNodeSqlite = (() => {
@@ -994,7 +996,7 @@ describe("PipelineRunner", () => {
       title: "Second",
     };
     await state.ensureControlDocuments(bookId);
-    await writeFile(join(chaptersDir, "0001_First.md"), "# 第一章\n\n林越推开旧门。", "utf-8");
+    await writeFile(join(chaptersDir, "0001_First.md"), `# 第一章\n\n${"林越推开旧门。".padEnd(2200, "续")}`, "utf-8");
     await state.saveChapterIndex(bookId, [chapterOne]);
     const acquireBookLock = vi.spyOn(StateManager.prototype, "acquireBookLock")
       .mockImplementation(async () => {
@@ -3549,8 +3551,84 @@ describe("PipelineRunner", () => {
       expect(auditRun.revision).toMatchObject({
         attempted: true,
         candidateProduced: true,
+        candidateContentHash: computeChapterContentHash(revisedDraft),
+        candidateWordCount: countChapterLength(revisedDraft, "zh_chars"),
         accepted: false,
         rejectionReason: expect.stringContaining("state validation failed"),
+      });
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("runs normal final truth validation after a state-valid candidate fails the post-audit gate", async () => {
+    const { root, runner, state, bookId } = await createRunnerFixture();
+    const originalDraft = "原".repeat(80);
+    const rejectedCandidate = "修".repeat(220);
+    vi.spyOn(WriterAgent.prototype, "writeChapter").mockResolvedValue(
+      createWriterOutput({ content: originalDraft, wordCount: originalDraft.length }),
+    );
+    vi.spyOn(ContinuityAuditor.prototype, "auditChapter")
+      .mockResolvedValueOnce(createAuditResult({ passed: true, issues: [], summary: "initial", overallScore: 95 }))
+      .mockResolvedValueOnce(createAuditResult({ passed: false, issues: [], summary: "candidate rejected", overallScore: 80 }));
+    vi.spyOn(ReviserAgent.prototype, "reviseChapter").mockResolvedValue(
+      createReviseOutput({ revisedContent: rejectedCandidate, wordCount: rejectedCandidate.length }),
+    );
+    vi.spyOn(ChapterAnalyzerAgent.prototype, "analyzeChapter").mockResolvedValue(
+      createAnalyzedOutput({ content: rejectedCandidate, wordCount: rejectedCandidate.length }),
+    );
+    const validate = vi.spyOn(StateValidatorAgent.prototype, "validate").mockResolvedValue({ passed: true, warnings: [] });
+    const rerunPromotionPass = vi.spyOn(hookPromotionModule, "rerunPromotionPass");
+
+    try {
+      await runner.writeNextChapter(bookId, 220);
+
+      expect(validate).toHaveBeenCalledTimes(2);
+      expect(validate.mock.calls[0]?.[0]).toBe(rejectedCandidate);
+      expect(validate.mock.calls[1]?.[0]).toBe(originalDraft);
+      expect(rerunPromotionPass).toHaveBeenCalledTimes(2);
+      await expect(readFile(join(state.bookDir(bookId), "chapters", "0001_Test_Chapter.md"), "utf-8"))
+        .resolves.toContain(originalDraft);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("promotes candidate hooks before validation and re-audits the accepted promoted truth", async () => {
+    const { root, runner, bookId } = await createRunnerFixture();
+    const originalDraft = "原".repeat(80);
+    const acceptedCandidate = "修".repeat(220);
+    let promotionCompleted = false;
+    const actualPromotion = hookPromotionModule.rerunPromotionPass;
+    vi.spyOn(hookPromotionModule, "rerunPromotionPass").mockImplementation((...args) => {
+      promotionCompleted = true;
+      return actualPromotion(...args);
+    });
+    vi.spyOn(WriterAgent.prototype, "writeChapter").mockResolvedValue(
+      createWriterOutput({ content: originalDraft, wordCount: originalDraft.length }),
+    );
+    const auditChapter = vi.spyOn(ContinuityAuditor.prototype, "auditChapter")
+      .mockResolvedValueOnce(createAuditResult({ passed: true, issues: [], summary: "initial", overallScore: 95 }))
+      .mockResolvedValueOnce(createAuditResult({ passed: true, issues: [], summary: "accepted", overallScore: 95 }));
+    vi.spyOn(ReviserAgent.prototype, "reviseChapter").mockResolvedValue(
+      createReviseOutput({ revisedContent: acceptedCandidate, wordCount: acceptedCandidate.length }),
+    );
+    vi.spyOn(ChapterAnalyzerAgent.prototype, "analyzeChapter").mockResolvedValue(
+      createAnalyzedOutput({ content: acceptedCandidate, wordCount: acceptedCandidate.length }),
+    );
+    const validate = vi.spyOn(StateValidatorAgent.prototype, "validate").mockImplementation(async () => {
+      expect(promotionCompleted).toBe(true);
+      return { passed: true, warnings: [] };
+    });
+
+    try {
+      const result = await runner.writeNextChapter(bookId, 220);
+
+      expect(result.status).toBe("ready-for-review");
+      expect(validate).toHaveBeenCalledTimes(1);
+      expect(auditChapter.mock.calls[1]?.[4]?.truthFileOverrides).toMatchObject({
+        currentState: expect.any(String),
+        hooks: expect.any(String),
       });
     } finally {
       await rm(root, { recursive: true, force: true });
@@ -6201,6 +6279,7 @@ describe("PipelineRunner", () => {
       updatedAt: "2026-03-19T00:00:00.000Z",
       auditIssues: [],
       lengthWarnings: [],
+      auditRunPaths: ["story/audit/legacy.manual.json"],
     }]);
 
     vi.spyOn(ContinuityAuditor.prototype, "auditChapter")
@@ -6243,6 +6322,10 @@ describe("PipelineRunner", () => {
       expect(savedChapter).toContain(revisedBody);
       expect(savedIndex[0]?.status).toBe("ready-for-review");
       expect(savedIndex[0]?.auditIssues).toEqual([]);
+      expect(savedIndex[0]?.auditRunPaths).toEqual(expect.arrayContaining([
+        "story/audit/legacy.manual.json",
+      ]));
+      expect(savedIndex[0]?.auditRunPaths).toHaveLength(3);
     } finally {
       await rm(root, { recursive: true, force: true });
     }
@@ -6557,13 +6640,80 @@ describe("PipelineRunner", () => {
 
       expect(result.applied).toBe(false);
       expect(result.skippedReason).toContain("acceptance gate");
+      expect(result.revisionDiagnostics?.standard).toContain("compatibility");
+      expect(result.revisionDiagnostics?.standard).not.toMatch(/no improvement|lenient gate/u);
       expect(savedChapter).not.toContain(revisedBody);
     } finally {
       await rm(root, { recursive: true, force: true });
     }
   }, SLOW_PIPELINE_TEST_TIMEOUT_MS);
 
-  it("rejects a worsening manual revision under the lenient gate and reports the lenient standard", async () => {
+  it("records an immutable rejection run when manual reviser returns no candidate", async () => {
+    const { root, runner, state, bookId, chaptersDir } = await createRevisionGateFixture("strict");
+    const originalChapter = await readFile(join(chaptersDir, "0001_Test_Chapter.md"), "utf-8");
+    vi.spyOn(ContinuityAuditor.prototype, "auditChapter").mockResolvedValue(
+      createAuditResult({ passed: false, issues: [CRITICAL_ISSUE], summary: "needs revision" }),
+    );
+    vi.spyOn(ReviserAgent.prototype, "reviseChapter").mockResolvedValue(
+      createReviseOutput({ revisedContent: "", wordCount: 0 }),
+    );
+
+    try {
+      const result = await runner.reviseDraft(bookId, 1, "rework");
+      const auditRunDir = join(state.bookDir(bookId), "story", "audit", "runs", "chapter-0001");
+      const [auditRunFile] = await readdir(auditRunDir);
+      const auditRun = JSON.parse(await readFile(join(auditRunDir, auditRunFile!), "utf-8"));
+
+      expect(result).toMatchObject({ applied: false, status: "unchanged" });
+      expect(result.skippedReason).toContain("empty");
+      await expect(readFile(join(chaptersDir, "0001_Test_Chapter.md"), "utf-8")).resolves.toBe(originalChapter);
+      expect(auditRun).toMatchObject({
+        phase: "initial",
+        canonicalCommitOutcome: "unchanged",
+        revision: {
+          attempted: true,
+          candidateProduced: false,
+          candidateWordCount: 0,
+          accepted: false,
+          rejectionReason: expect.stringContaining("empty"),
+        },
+      });
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  }, SLOW_PIPELINE_TEST_TIMEOUT_MS);
+
+  it("records a rejection run before returning from unavailable manual state validation", async () => {
+    const { root, runner, state, bookId, chaptersDir } = await createRevisionGateFixture("strict");
+    const originalChapter = await readFile(join(chaptersDir, "0001_Test_Chapter.md"), "utf-8");
+    vi.spyOn(ContinuityAuditor.prototype, "auditChapter").mockResolvedValueOnce(
+      createAuditResult({ passed: false, issues: [CRITICAL_ISSUE], summary: "needs revision" }),
+    );
+    vi.spyOn(StateValidatorAgent.prototype, "validate").mockRejectedValue(new Error("validator unavailable"));
+
+    try {
+      const result = await runner.reviseDraft(bookId, 1, "rework");
+      const auditRunDir = join(state.bookDir(bookId), "story", "audit", "runs", "chapter-0001");
+      const [auditRunFile] = await readdir(auditRunDir);
+      const auditRun = JSON.parse(await readFile(join(auditRunDir, auditRunFile!), "utf-8"));
+
+      expect(result).toMatchObject({ applied: false, status: "unchanged" });
+      expect(result.skippedReason).toContain("state validation unavailable");
+      await expect(readFile(join(chaptersDir, "0001_Test_Chapter.md"), "utf-8")).resolves.toBe(originalChapter);
+      expect(auditRun.revision).toMatchObject({
+        attempted: true,
+        candidateProduced: true,
+        candidateContentHash: expect.any(String),
+        candidateWordCount: expect.any(Number),
+        accepted: false,
+        rejectionReason: expect.stringContaining("state validation unavailable"),
+      });
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  }, SLOW_PIPELINE_TEST_TIMEOUT_MS);
+
+  it("rejects a worsening manual revision under the lenient compatibility value", async () => {
     const { root, runner, bookId, chaptersDir, revisedBody } = await createRevisionGateFixture("lenient");
 
     vi.spyOn(ContinuityAuditor.prototype, "auditChapter")
@@ -6581,7 +6731,8 @@ describe("PipelineRunner", () => {
 
       expect(result.applied).toBe(false);
       expect(result.skippedReason).toContain("Manual revision kept original chapter");
-      expect(result.revisionDiagnostics?.standard).toContain("lenient gate");
+      expect(result.revisionDiagnostics?.standard).toContain("compatibility");
+      expect(result.revisionDiagnostics?.standard).not.toMatch(/no improvement|lenient gate/u);
       expect(result.revisionDiagnostics?.after.criticalCount).toBe(1);
       expect(savedChapter).not.toContain(revisedBody);
     } finally {
@@ -6929,7 +7080,56 @@ describe("PipelineRunner", () => {
     await rm(root, { recursive: true, force: true });
   });
 
-  it("uses exact persisted telemetry for manual revise and rejects an out-of-range candidate", async () => {
+  it("uses persisted telemetry counting mode for a no-issues manual return", async () => {
+    const { root, runner, state, bookId } = await createRunnerFixture();
+    const chaptersDir = join(state.bookDir(bookId), "chapters");
+    const originalBody = "Tarin waited by the berth marker until the second bell rang.";
+    await state.saveBookConfig(bookId, {
+      ...(await state.loadBookConfig(bookId)),
+      language: "zh",
+      chapterWordCount: 1800,
+    });
+    await writeFile(join(chaptersDir, "0001_Test_Chapter.md"), `# Chapter 1\n\n${originalBody}`, "utf-8");
+    await state.saveChapterIndex(bookId, [{
+      number: 1,
+      title: "Test Chapter",
+      status: "audit-failed",
+      wordCount: countChapterLength(originalBody, "en_words"),
+      createdAt: "2026-03-19T00:00:00.000Z",
+      updatedAt: "2026-03-19T00:00:00.000Z",
+      auditIssues: [],
+      lengthWarnings: [],
+      lengthTelemetry: {
+        target: 10,
+        softMin: 8,
+        softMax: 12,
+        hardMin: 6,
+        hardMax: 15,
+        countingMode: "en_words",
+        writerCount: countChapterLength(originalBody, "en_words"),
+        postReviseCount: 0,
+        finalCount: countChapterLength(originalBody, "en_words"),
+        repairApplied: false,
+        lengthWarning: false,
+      },
+    }]);
+    const reviseChapter = vi.spyOn(ReviserAgent.prototype, "reviseChapter");
+    vi.spyOn(ContinuityAuditor.prototype, "auditChapter").mockResolvedValue(
+      createAuditResult({ passed: true, issues: [], summary: "clean", overallScore: 95 }),
+    );
+
+    try {
+      const result = await runner.reviseDraft(bookId, 1);
+
+      expect(result).toMatchObject({ applied: false, status: "unchanged" });
+      expect(result.wordCount).toBe(countChapterLength(originalBody, "en_words"));
+      expect(reviseChapter).not.toHaveBeenCalled();
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("uses persisted hard length to revise despite an LLM pass and counts unchanged output by telemetry", async () => {
     const { root, runner, state, bookId } = await createRunnerFixture();
     const storyDir = join(state.bookDir(bookId), "story");
     const chaptersDir = join(state.bookDir(bookId), "chapters");
@@ -6982,9 +7182,9 @@ describe("PipelineRunner", () => {
     vi.spyOn(ContinuityAuditor.prototype, "auditChapter")
       .mockResolvedValueOnce(
         createAuditResult({
-          passed: false,
-          issues: [CRITICAL_ISSUE],
-          summary: "needs revision",
+          passed: true,
+          issues: [],
+          summary: "LLM clean",
         }),
       )
       .mockResolvedValueOnce(
@@ -7005,7 +7205,7 @@ describe("PipelineRunner", () => {
 
     try {
       await snapshotRevisionBaseline(state, bookId, 0);
-      const result = await runner.reviseDraft(bookId, 1, "polish");
+      const result = await runner.reviseDraft(bookId, 1);
 
       expect(reviseChapter).toHaveBeenCalledTimes(1);
       expect(reviseChapter.mock.calls[0]?.[6]?.lengthSpec).toMatchObject({
@@ -7014,6 +7214,7 @@ describe("PipelineRunner", () => {
       });
       expect(result.applied).toBe(false);
       expect(result.skippedReason).toContain("acceptance gate");
+      expect(result.wordCount).toBe(countChapterLength(originalBody, "en_words"));
     } finally {
       await rm(root, { recursive: true, force: true });
     }

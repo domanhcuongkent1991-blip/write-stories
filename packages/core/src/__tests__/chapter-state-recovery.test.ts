@@ -222,6 +222,39 @@ describe("chapter-state-recovery", () => {
     expect(warn).not.toHaveBeenCalled();
   });
 
+  it("reuses the authority context when validating a recovered settlement", async () => {
+    const authorityContext = {
+      storyFrame: "A bronze badge cannot become silver.",
+      bookRules: "Ranks are immutable within a chapter.",
+      chapterSummaries: "Chapter 2: the badge is bronze.",
+    };
+    const validator = {
+      validate: vi.fn(async (...args: unknown[]) => {
+        expect(args[7]).toEqual(authorityContext);
+        return createValidationResult({ passed: true, warnings: [] });
+      }),
+    };
+
+    const result = await retrySettlementAfterValidationFailure({
+      writer: { settleChapterState: vi.fn(async () => createWriteChapterOutput()) } as never,
+      validator: validator as never,
+      book: createBook(),
+      bookDir: "/tmp/test-book",
+      chapterNumber: 3,
+      title: "第三章",
+      content: "铜牌贴在胸口。",
+      oldState: "old state",
+      oldHooks: "old hooks",
+      originalValidation: createValidationResult(),
+      language: "zh",
+      authorityContext,
+      logWarn: vi.fn(),
+    });
+
+    expect(result.kind).toBe("recovered");
+    expect(validator.validate).toHaveBeenCalledTimes(1);
+  });
+
   it("returns localized degraded issues when settlement retry still fails", async () => {
     const validatorWarning = createValidationWarning({
       description: "挂坠状态仍与正文冲突",
