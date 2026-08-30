@@ -550,6 +550,7 @@ export { detectAIContent, type DetectionResult } from "./agents/detector.js";
 export { analyzeStyle } from "./agents/style-analyzer.js";
 export { analyzeDetectionInsights } from "./agents/detection-insights.js";
 export { validatePostWrite, detectParagraphLengthDrift, detectParagraphShapeWarnings, detectDuplicateTitle, type PostWriteViolation } from "./agents/post-write-validator.js";
+export { validateVietnameseSurface } from "./agents/vietnamese-surface-validator.js";
 export { ChapterAnalyzerAgent, type AnalyzeChapterInput, type AnalyzeChapterOutput } from "./agents/chapter-analyzer.js";
 export { parseWriterOutput, parseCreativeOutput, type ParsedWriterOutput, type CreativeOutput } from "./agents/writer-parser.js";
 export { buildSettlerSystemPrompt, buildSettlerUserPrompt } from "./agents/settler-prompts.js";
