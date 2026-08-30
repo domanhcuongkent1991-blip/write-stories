@@ -79,6 +79,47 @@ describe("ContinuityAuditor", () => {
     });
   });
 
+  it("preserves optional finding contract fields while accepting legacy findings", () => {
+    const auditor = new ContinuityAuditor({
+      client: {
+        provider: "openai",
+        apiFormat: "chat",
+        stream: false,
+        defaults: { temperature: 0.7, maxTokens: 4096, thinkingBudget: 0, extra: {} },
+      },
+      model: "test-model",
+      projectRoot: "/tmp/inkos-auditor-contract-test",
+    });
+    const result = (auditor as any).parseAuditResult(JSON.stringify({
+      passed: false,
+      issues: [{
+        severity: "critical",
+        category: "state",
+        description: "fact drift",
+        suggestion: "repair state",
+        ruleId: "state.fact",
+        findingId: "finding-1",
+        fingerprint: "a".repeat(64),
+        source: "state",
+        verification: "verified",
+        evidence: { contentHash: "b".repeat(64), stateRef: "story/current_state.md#gold" },
+        acceptanceCriteria: ["state settlement valid"],
+        repairTarget: "runtime-state",
+        lifecycle: "open",
+        confidence: 0.9,
+      }, {
+        severity: "warning",
+        category: "legacy",
+        description: "old",
+        suggestion: "keep",
+      }],
+      summary: "needs repair",
+    }), "zh");
+
+    expect(result.issues[0]).toMatchObject({ ruleId: "state.fact", findingId: "finding-1", repairTarget: "runtime-state", confidence: 0.9 });
+    expect(result.issues[1]).toMatchObject({ category: "legacy" });
+  });
+
   it("prefers book language override when building audit prompts", async () => {
     const root = await mkdtemp(join(tmpdir(), "inkos-auditor-lang-test-"));
     const bookDir = join(root, "book");

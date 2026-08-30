@@ -30,6 +30,22 @@ export interface AuditResult {
     readonly completionTokens: number;
     readonly totalTokens: number;
   };
+  readonly decision?: "pass" | "repair-required" | "fail" | "inconclusive";
+  readonly contentHash?: string;
+  readonly provenance?: AuditProvenance;
+}
+
+export interface AuditProvenance {
+  readonly source?: string;
+  readonly operationId?: string;
+  readonly attemptId?: string;
+  readonly phase?: "initial" | "post-revision" | "manual";
+}
+
+export interface AuditEvidence {
+  readonly contentHash: string;
+  readonly excerpt?: string;
+  readonly stateRef?: string;
 }
 
 export interface AuditIssue {
@@ -38,6 +54,16 @@ export interface AuditIssue {
   readonly description: string;
   readonly suggestion: string;
   readonly repairScope?: "local" | "structural" | "unknown";
+  readonly ruleId?: string;
+  readonly findingId?: string;
+  readonly fingerprint?: string;
+  readonly source?: "deterministic" | "state" | "llm";
+  readonly verification?: "verified" | "unverified" | "stale";
+  readonly evidence?: AuditEvidence;
+  readonly acceptanceCriteria?: ReadonlyArray<string>;
+  readonly repairTarget?: "prose" | "runtime-state" | "next-plan";
+  readonly lifecycle?: "open" | "resolved" | "superseded";
+  readonly confidence?: number;
 }
 
 type PromptLanguage = ScaffoldLanguage;
@@ -45,6 +71,31 @@ type PromptLanguage = ScaffoldLanguage;
 function normalizeRepairScope(value: unknown): AuditIssue["repairScope"] {
   if (value === "local" || value === "structural" || value === "unknown") return value;
   return undefined;
+}
+
+function normalizeParsedIssue(issue: Record<string, unknown>, language: PromptLanguage): AuditIssue {
+  const evidence = issue.evidence && typeof issue.evidence === "object"
+    ? issue.evidence as Record<string, unknown>
+    : undefined;
+  return {
+    severity: (issue.severity as AuditIssue["severity"]) ?? "warning",
+    category: (issue.category as string) ?? (language === "en" ? "Uncategorized" : "未分类"),
+    description: (issue.description as string) ?? "",
+    suggestion: (issue.suggestion as string) ?? "",
+    repairScope: normalizeRepairScope(issue.repair_scope ?? issue.repairScope),
+    ruleId: typeof issue.ruleId === "string" ? issue.ruleId : undefined,
+    findingId: typeof issue.findingId === "string" ? issue.findingId : undefined,
+    fingerprint: typeof issue.fingerprint === "string" ? issue.fingerprint : undefined,
+    source: issue.source === "deterministic" || issue.source === "state" || issue.source === "llm" ? issue.source : undefined,
+    verification: issue.verification === "verified" || issue.verification === "unverified" || issue.verification === "stale" ? issue.verification : undefined,
+    evidence: typeof evidence?.contentHash === "string"
+      ? { contentHash: evidence.contentHash, excerpt: typeof evidence.excerpt === "string" ? evidence.excerpt : undefined, stateRef: typeof evidence.stateRef === "string" ? evidence.stateRef : undefined }
+      : undefined,
+    acceptanceCriteria: Array.isArray(issue.acceptanceCriteria) ? issue.acceptanceCriteria.filter((v): v is string => typeof v === "string") : undefined,
+    repairTarget: issue.repairTarget === "prose" || issue.repairTarget === "runtime-state" || issue.repairTarget === "next-plan" ? issue.repairTarget : undefined,
+    lifecycle: issue.lifecycle === "open" || issue.lifecycle === "resolved" || issue.lifecycle === "superseded" ? issue.lifecycle : undefined,
+    confidence: typeof issue.confidence === "number" && Number.isFinite(issue.confidence) ? Math.max(0, Math.min(1, issue.confidence)) : undefined,
+  };
 }
 
 const DIMENSION_LABELS: Record<number, { readonly zh: string; readonly en: string }> = {
@@ -703,13 +754,7 @@ ${chapterContent}`;
         while ((match = issuePattern.exec(issuesMatch[1]!)) !== null) {
           try {
             const issue = JSON.parse(match[0]);
-	            issues.push({
-	              severity: issue.severity ?? "warning",
-	              category: issue.category ?? (language === "en" ? "Uncategorized" : "未分类"),
-	              description: issue.description ?? "",
-	              suggestion: issue.suggestion ?? "",
-	              repairScope: normalizeRepairScope(issue.repair_scope ?? issue.repairScope),
-	            });
+            issues.push(normalizeParsedIssue(issue, language));
           } catch {
             // skip malformed individual issue
           }
@@ -806,13 +851,7 @@ ${overrides}\n`;
       return {
         passed: Boolean(parsed.passed ?? false),
         issues: Array.isArray(parsed.issues)
-	          ? parsed.issues.map((i: Record<string, unknown>) => ({
-	              severity: (i.severity as string) ?? "warning",
-	              category: (i.category as string) ?? (language === "en" ? "Uncategorized" : "未分类"),
-	              description: (i.description as string) ?? "",
-	              suggestion: (i.suggestion as string) ?? "",
-	              repairScope: normalizeRepairScope(i.repair_scope ?? i.repairScope),
-	            }))
+          ? parsed.issues.map((i: Record<string, unknown>) => normalizeParsedIssue(i, language))
           : [],
         summary: String(parsed.summary ?? ""),
         overallScore,

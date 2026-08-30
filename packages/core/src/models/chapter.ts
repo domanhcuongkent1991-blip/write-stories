@@ -1,6 +1,17 @@
 import { z } from "zod";
 import { LengthTelemetrySchema } from "./length-governance.js";
 
+export const AuditDecisionSchema = z.enum(["pass", "repair-required", "fail", "inconclusive"]);
+export type AuditDecision = z.infer<typeof AuditDecisionSchema>;
+
+export const AuditProvenanceSchema = z.object({
+  source: z.string().optional(),
+  operationId: z.string().min(1).optional(),
+  attemptId: z.string().min(1).optional(),
+  phase: z.enum(["initial", "post-revision", "manual"]).optional(),
+}).strict();
+export type AuditProvenance = z.infer<typeof AuditProvenanceSchema>;
+
 export const ChapterStatusSchema = z.enum([
   "card-generated",
   "drafting",
@@ -32,6 +43,14 @@ export const ChapterMetaSchema = z.object({
   detectionProvider: z.string().optional(),
   detectedAt: z.string().datetime().optional(),
   lengthTelemetry: LengthTelemetrySchema.optional(),
+  auditDecision: AuditDecisionSchema.optional(),
+  auditAttemptId: z.string().uuid().optional(),
+  auditRunPaths: z.array(z.string().min(1)).optional(),
+  verifiedBlockerCount: z.number().int().min(0).optional(),
+  revisionAttempts: z.number().int().min(0).optional(),
+  revisionOutcome: z.enum(["not-needed", "accepted", "rejected", "inconclusive"]).optional(),
+  revisionRejectionReason: z.string().optional(),
+  auditProvenance: AuditProvenanceSchema.optional(),
   tokenUsage: z.object({
     promptTokens: z.number().int().default(0),
     completionTokens: z.number().int().default(0),

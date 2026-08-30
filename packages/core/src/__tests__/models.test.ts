@@ -215,6 +215,25 @@ describe("ChapterMetaSchema", () => {
     expect(result.status).toBe("drafted");
   });
 
+  it("accepts optional unified audit metadata without introducing a new chapter status", () => {
+    const result = ChapterMetaSchema.parse({
+      ...validChapter,
+      auditDecision: "inconclusive",
+      auditAttemptId: "550e8400-e29b-41d4-a716-446655440000",
+      auditRunPaths: ["story/audit/runs/chapter-0001/run.initial.audit-run-v1.json"],
+      verifiedBlockerCount: 1,
+      revisionAttempts: 1,
+      revisionOutcome: "rejected",
+      revisionRejectionReason: "candidate score regressed",
+      auditProvenance: { source: "deterministic", operationId: "op-1", attemptId: "attempt-1", phase: "initial" },
+    });
+
+    expect(result.auditDecision).toBe("inconclusive");
+    expect(result.revisionAttempts).toBe(1);
+    expect(result.auditProvenance?.phase).toBe("initial");
+    expect(() => ChapterMetaSchema.parse({ ...validChapter, status: "audit-inconclusive" })).toThrow();
+  });
+
   it("applies default wordCount of 0", () => {
     const minimal = {
       number: 5,
