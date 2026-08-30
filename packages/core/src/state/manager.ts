@@ -3,6 +3,12 @@ import { randomUUID } from "node:crypto";
 import { join, resolve } from "node:path";
 import type { BookConfig } from "../models/book.js";
 import type { ChapterMeta } from "../models/chapter.js";
+import { computeChapterContentHash } from "../audit/chapter-audit-evaluator.js";
+import {
+  AuditRunV1Schema,
+  auditRunRelativePath,
+  type AuditRunV1,
+} from "../audit/audit-run.js";
 import { bootstrapStructuredStateFromMarkdown, resolveDurableStoryProgress } from "./state-bootstrap.js";
 import {
   WritingLanguageSchema,
@@ -14,6 +20,14 @@ import { resolveWritingLanguageProfile } from "../utils/language.js";
 const BOOK_LOCK_HEARTBEAT_MS = 30_000;
 const BOOK_LOCK_LEASE_MS = 3 * 60_000;
 const BOOK_LOCK_RELEASE_RETRIES = 4;
+const AUDIT_RECOVERY_NOTE = "Canonical audit evidence is unavailable or does not match this chapter. Re-audit is required before review.";
+
+export interface CanonicalChapterProjection {
+  readonly chapterRelativePath: string;
+  readonly contentHash: string;
+  readonly meta: ChapterMeta;
+  readonly auditRun?: AuditRunV1;
+}
 
 interface BookLockMetadata {
   readonly version: 1;
@@ -505,10 +519,30 @@ export class StateManager {
   }
 
   private async rebuildChapterIndexFromFiles(bookId: string): Promise<ReadonlyArray<ChapterMeta>> {
-    return this.rebuildChapterIndexFromFilesAt(this.bookDir(bookId));
+    return this.rebuildChapterIndexFromFilesAt(this.bookDir(bookId), bookId);
   }
 
-  private async rebuildChapterIndexFromFilesAt(bookDir: string): Promise<ReadonlyArray<ChapterMeta>> {
+  async loadCanonicalChapterProjection(
+    bookId: string,
+    chapterNumber: number,
+  ): Promise<CanonicalChapterProjection | null> {
+    if (!Number.isInteger(chapterNumber) || chapterNumber < 1) return null;
+    const projections = await this.loadCanonicalChapterProjectionsAt(this.bookDir(bookId), bookId);
+    return projections.find((projection) => projection.meta.number === chapterNumber) ?? null;
+  }
+
+  private async rebuildChapterIndexFromFilesAt(
+    bookDir: string,
+    expectedBookId?: string,
+  ): Promise<ReadonlyArray<ChapterMeta>> {
+    const projections = await this.loadCanonicalChapterProjectionsAt(bookDir, expectedBookId);
+    return projections.map((projection) => projection.meta);
+  }
+
+  private async loadCanonicalChapterProjectionsAt(
+    bookDir: string,
+    expectedBookId?: string,
+  ): Promise<ReadonlyArray<CanonicalChapterProjection>> {
     const chaptersDir = join(bookDir, "chapters");
     let files: string[];
     try {
@@ -517,7 +551,7 @@ export class StateManager {
       return [];
     }
 
-    const rows = await Promise.all(files.flatMap(async (file) => {
+    const rows = await Promise.all(files.sort().flatMap(async (file) => {
       const match = file.match(/^(\d+)[_-]?(.*?)\.md$/);
       if (!match) return [];
       const number = parseInt(match[1]!, 10);
@@ -529,21 +563,149 @@ export class StateManager {
       ]);
       const timestamp = (metadata?.mtime ?? new Date()).toISOString();
       const rawTitle = match[2]?.replace(/^_+/, "").replace(/_/g, " ").trim();
+      const contentHash = computeChapterContentHash(content);
+      const canonicalRun = expectedBookId
+        ? await this.loadLatestCanonicalAuditRun({
+            bookDir,
+            bookId: expectedBookId,
+            chapterNumber: number,
+            contentHash,
+          })
+        : undefined;
+      const meta = canonicalRun
+        ? this.rebuildChapterMetaFromAuditRun({
+            number,
+            title: rawTitle || `第${number}章`,
+            timestamp,
+            run: canonicalRun.run,
+            runPath: canonicalRun.relativePath,
+          })
+        : ({
+            number,
+            title: rawTitle || `第${number}章`,
+            status: "audit-failed" as const,
+            wordCount: content.replace(/\s+/g, "").length,
+            createdAt: timestamp,
+            updatedAt: timestamp,
+            auditIssues: [`[warning] ${AUDIT_RECOVERY_NOTE}`],
+            lengthWarnings: [],
+            reviewNote: AUDIT_RECOVERY_NOTE,
+            auditDecision: "inconclusive" as const,
+            verifiedBlockerCount: 0,
+            revisionAttempts: 0,
+            revisionOutcome: "inconclusive" as const,
+          });
       return [{
-        number,
-        title: rawTitle || `第${number}章`,
-        status: "ready-for-review" as const,
-        wordCount: content.replace(/\s+/g, "").length,
-        createdAt: timestamp,
-        updatedAt: timestamp,
-        auditIssues: [],
-        lengthWarnings: [],
+        chapterRelativePath: join("chapters", file),
+        contentHash,
+        meta,
+        ...(canonicalRun ? { auditRun: canonicalRun.run } : {}),
       }];
     }));
 
     return rows
       .flat()
-      .sort((a, b) => a.number - b.number);
+      .sort((a, b) => a.meta.number - b.meta.number);
+  }
+
+  private rebuildChapterMetaFromAuditRun(input: {
+    readonly number: number;
+    readonly title: string;
+    readonly timestamp: string;
+    readonly run: AuditRunV1;
+    readonly runPath: string;
+  }): ChapterMeta {
+    const { run } = input;
+    const verifiedBlockerCount = run.findings.filter(
+      (finding) => finding.severity === "critical" && finding.verification === "verified",
+    ).length;
+    const lengthWarning = run.length.count < run.length.softMin || run.length.count > run.length.softMax;
+    const revisionOutcome = run.revision.attempted
+      ? run.revision.accepted
+        ? "accepted" as const
+        : run.decision === "inconclusive" ? "inconclusive" as const : "rejected" as const
+      : run.decision === "inconclusive" ? "inconclusive" as const : "not-needed" as const;
+
+    return {
+      number: input.number,
+      title: input.title,
+      status: run.decision === "pass" ? "ready-for-review" : "audit-failed",
+      wordCount: run.length.count,
+      createdAt: input.timestamp,
+      updatedAt: run.completedAt,
+      auditIssues: run.findings.map((finding) => `[${finding.severity}] ${finding.description}`),
+      lengthWarnings: lengthWarning
+        ? [`Recovered audit length ${run.length.count} is outside the soft range ${run.length.softMin}-${run.length.softMax}.`]
+        : [],
+      lengthTelemetry: {
+        target: run.length.target,
+        softMin: run.length.softMin,
+        softMax: run.length.softMax,
+        hardMin: run.length.hardMin,
+        hardMax: run.length.hardMax,
+        countingMode: run.length.countingMode,
+        writerCount: run.length.count,
+        postReviseCount: run.length.count,
+        finalCount: run.length.count,
+        repairApplied: run.revision.accepted,
+        lengthWarning,
+      },
+      auditDecision: run.decision,
+      auditAttemptId: run.attemptId,
+      auditRunPaths: [input.runPath],
+      verifiedBlockerCount,
+      revisionAttempts: run.revision.attempted ? 1 : 0,
+      revisionOutcome,
+      revisionRejectionReason: run.revision.rejectionReason,
+      auditProvenance: {
+        ...run.provenance,
+        operationId: run.operationId,
+        attemptId: run.attemptId,
+        phase: run.phase,
+      },
+      tokenUsage: run.tokenUsage,
+    };
+  }
+
+  private async loadLatestCanonicalAuditRun(input: {
+    readonly bookDir: string;
+    readonly bookId: string;
+    readonly chapterNumber: number;
+    readonly contentHash: string;
+  }): Promise<{ readonly run: AuditRunV1; readonly relativePath: string } | undefined> {
+    const chapter = String(input.chapterNumber).padStart(4, "0");
+    const runsDir = join(input.bookDir, "story", "audit", "runs", `chapter-${chapter}`);
+    const files = await readdir(runsDir).catch(() => [] as string[]);
+    const candidates = (await Promise.all(files.sort().map(async (file) => {
+      if (!/^[0-9a-f-]+\.(initial|post-revision|manual)\.audit-run-v1\.json$/u.test(file)) return undefined;
+      const raw = await readFile(join(runsDir, file), "utf-8").catch(() => undefined);
+      if (raw === undefined) return undefined;
+      let parsedJson: unknown;
+      try {
+        parsedJson = JSON.parse(raw);
+      } catch {
+        return undefined;
+      }
+      const parsed = AuditRunV1Schema.safeParse(parsedJson);
+      if (!parsed.success) return undefined;
+      const run = parsed.data;
+      if (
+        run.bookId !== input.bookId
+        || run.chapterNumber !== input.chapterNumber
+        || run.contentHash !== input.contentHash
+        || (run.canonicalCommitOutcome !== "terminal-commit" && run.canonicalCommitOutcome !== "unchanged")
+      ) {
+        return undefined;
+      }
+      const relativePath = auditRunRelativePath(run);
+      if (relativePath !== `story/audit/runs/chapter-${chapter}/${file}`) return undefined;
+      return { run, relativePath };
+    }))).filter((candidate): candidate is { readonly run: AuditRunV1; readonly relativePath: string } => candidate !== undefined);
+
+    candidates.sort((left, right) =>
+      left.run.completedAt.localeCompare(right.run.completedAt)
+      || left.relativePath.localeCompare(right.relativePath));
+    return candidates.at(-1);
   }
 
   async saveChapterIndex(

@@ -1,10 +1,66 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
+import { randomUUID } from "node:crypto";
 import { mkdtemp, rm, writeFile, readFile, mkdir, stat } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { StateManager } from "../state/manager.js";
 import type { BookConfig } from "../models/book.js";
 import type { ChapterMeta } from "../models/chapter.js";
+import { computeChapterContentHash } from "../audit/chapter-audit-evaluator.js";
+import {
+  auditRunRelativePath,
+  serializeAuditRun,
+  type AuditRunV1,
+} from "../audit/audit-run.js";
+
+function canonicalAuditRun(overrides: Partial<AuditRunV1> = {}): AuditRunV1 {
+  const contentHash = overrides.contentHash ?? "a".repeat(64);
+  const decision = overrides.decision ?? "pass";
+  return {
+    schemaVersion: 1,
+    kind: "audit-run-v1",
+    operationId: randomUUID(),
+    attemptId: randomUUID(),
+    operation: "write",
+    phase: "initial",
+    bookId: "rebuild-book",
+    chapterNumber: 1,
+    startedAt: "2026-08-29T00:00:00.000Z",
+    completedAt: "2026-08-29T00:00:01.000Z",
+    durationMs: 1000,
+    contentHash,
+    length: {
+      count: 12,
+      countingMode: "vi_wordlike_tokens_v1",
+      target: 12,
+      softMin: 10,
+      softMax: 14,
+      hardMin: 8,
+      hardMax: 16,
+    },
+    decision,
+    passed: decision === "pass",
+    findings: [],
+    revision: { attempted: false, candidateProduced: false, accepted: false },
+    canonicalCommitOutcome: "terminal-commit",
+    provenance: {
+      source: "pipeline-runner",
+      operationId: overrides.operationId,
+      attemptId: overrides.attemptId,
+      phase: overrides.phase ?? "initial",
+    },
+    retryCounts: { transport: 0, output: 0, quality: 0 },
+    ...overrides,
+  };
+}
+
+async function writeAuditRun(bookDir: string, run: AuditRunV1): Promise<string> {
+  const relativePath = auditRunRelativePath(run);
+  const target = join(bookDir, relativePath);
+  await mkdir(dirname(target), { recursive: true });
+  await writeFile(target, serializeAuditRun(run), "utf-8");
+  return relativePath;
+}
 
 describe("StateManager", () => {
   let tempDir: string;
@@ -107,7 +163,144 @@ describe("StateManager", () => {
       expect(loaded.map((chapter) => chapter.number)).toEqual([1, 2]);
       expect(loaded[0]).toMatchObject({
         title: "雨棚",
+        status: "audit-failed",
+        auditDecision: "inconclusive",
+      });
+      expect(loaded[0]?.auditIssues.join("\n")).toMatch(/audit evidence/i);
+      expect(loaded[0]?.reviewNote).toMatch(/re-audit/i);
+    });
+
+    it("rebuilds canonical audit decision and metadata from the latest matching valid run", async () => {
+      const bookDir = manager.bookDir("rebuild-book");
+      const chapterContent = "# Chương 1: Mưa đêm\n\nMưa rơi trên mái hiên.";
+      const contentHash = computeChapterContentHash(chapterContent);
+      await mkdir(join(bookDir, "chapters"), { recursive: true });
+      await writeFile(join(bookDir, "chapters", "0001_Mưa đêm.md"), chapterContent, "utf-8");
+
+      const older = canonicalAuditRun({
+        contentHash,
+        decision: "fail",
+        passed: false,
+        completedAt: "2026-08-29T00:00:01.000Z",
+        findings: [{
+          severity: "critical",
+          category: "continuity",
+          description: "Older contradiction",
+          suggestion: "repair",
+          source: "state",
+          verification: "verified",
+          evidence: { contentHash },
+        }],
+      });
+      const latest = canonicalAuditRun({
+        contentHash,
+        phase: "manual",
+        operation: "audit",
+        decision: "pass",
+        passed: true,
+        startedAt: "2026-08-29T00:00:02.000Z",
+        completedAt: "2026-08-29T00:00:03.000Z",
+        canonicalCommitOutcome: "unchanged",
+        length: {
+          count: 6,
+          countingMode: "vi_wordlike_tokens_v1",
+          target: 6,
+          softMin: 5,
+          softMax: 7,
+          hardMin: 4,
+          hardMax: 8,
+        },
+      });
+      const olderPath = await writeAuditRun(bookDir, older);
+      const latestPath = await writeAuditRun(bookDir, latest);
+
+      const loaded = await manager.loadChapterIndex("rebuild-book");
+
+      expect(loaded).toHaveLength(1);
+      expect(loaded[0]).toMatchObject({
+        number: 1,
         status: "ready-for-review",
+        auditDecision: "pass",
+        auditAttemptId: latest.attemptId,
+        auditRunPaths: [latestPath],
+        wordCount: latest.length.count,
+        verifiedBlockerCount: 0,
+        revisionAttempts: 0,
+        revisionOutcome: "not-needed",
+        auditProvenance: {
+          source: "pipeline-runner",
+          operationId: latest.operationId,
+          attemptId: latest.attemptId,
+          phase: "manual",
+        },
+      });
+      expect(loaded[0]?.auditRunPaths).not.toContain(olderPath);
+      expect(loaded[0]?.lengthTelemetry).toMatchObject({
+        countingMode: "vi_wordlike_tokens_v1",
+        finalCount: latest.length.count,
+      });
+    });
+
+    it("ignores stale, malformed, wrong-book, wrong-chapter, and non-canonical audit runs", async () => {
+      const bookDir = manager.bookDir("rebuild-book");
+      const chapterContent = "# Chương 1: Mưa đêm\n\nBằng chứng canonical.";
+      const contentHash = computeChapterContentHash(chapterContent);
+      await mkdir(join(bookDir, "chapters"), { recursive: true });
+      await writeFile(join(bookDir, "chapters", "0001_Mưa đêm.md"), chapterContent, "utf-8");
+
+      const valid = canonicalAuditRun({
+        contentHash,
+        completedAt: "2026-08-29T00:00:01.000Z",
+      });
+      await writeAuditRun(bookDir, valid);
+      await writeAuditRun(bookDir, canonicalAuditRun({
+        contentHash: "b".repeat(64),
+        completedAt: "2026-08-29T00:00:09.000Z",
+      }));
+      await writeAuditRun(bookDir, canonicalAuditRun({
+        contentHash,
+        bookId: "wrong-book",
+        completedAt: "2026-08-29T00:00:10.000Z",
+      }));
+      const wrongChapter = canonicalAuditRun({
+        contentHash,
+        chapterNumber: 2,
+        completedAt: "2026-08-29T00:00:11.000Z",
+      });
+      await writeAuditRun(bookDir, canonicalAuditRun({
+        contentHash,
+        canonicalCommitOutcome: "rejected",
+        completedAt: "2026-08-29T00:00:12.000Z",
+      }));
+      const malformedDir = join(bookDir, "story", "audit", "runs", "chapter-0001");
+      await writeFile(
+        join(malformedDir, `${wrongChapter.attemptId}.initial.audit-run-v1.json`),
+        serializeAuditRun(wrongChapter),
+        "utf-8",
+      );
+      await writeFile(
+        join(malformedDir, `${randomUUID()}.initial.audit-run-v1.json`),
+        "{not-json",
+        "utf-8",
+      );
+      await writeFile(
+        join(malformedDir, `${randomUUID()}.manual.audit-run-v1.json`),
+        JSON.stringify({ schemaVersion: 2, kind: "audit-run-v1", contentHash }),
+        "utf-8",
+      );
+      await writeFile(
+        join(malformedDir, "non-canonical-name.json"),
+        serializeAuditRun(canonicalAuditRun({ contentHash })),
+        "utf-8",
+      );
+
+      const loaded = await manager.loadChapterIndex("rebuild-book");
+
+      expect(loaded[0]).toMatchObject({
+        status: "ready-for-review",
+        auditDecision: "pass",
+        auditAttemptId: valid.attemptId,
+        auditRunPaths: [auditRunRelativePath(valid)],
       });
     });
 

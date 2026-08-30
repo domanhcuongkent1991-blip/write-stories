@@ -30,7 +30,7 @@ import type { RadarSource } from "../agents/radar-source.js";
 import { readGenreProfile } from "../agents/rules-reader.js";
 import { analyzeAITells } from "../agents/ai-tells.js";
 import { analyzeSensitiveWords } from "../agents/sensitive-words.js";
-import { StateManager } from "../state/manager.js";
+import { StateManager, type CanonicalChapterProjection } from "../state/manager.js";
 import { archiveChapterVersion, readChapterUserBrief } from "../state/chapter-workspace.js";
 import { MemoryDB, type Fact } from "../state/memory-db.js";
 import { dispatchNotification, dispatchWebhookEvent } from "../notify/dispatcher.js";
@@ -47,6 +47,8 @@ import {
   normalizeLegacyRevisionGate,
 } from "../audit/audit-policy.js";
 import {
+  AuditRunV1Schema,
+  assertAuditRunWriteOnce,
   auditRunRelativePath,
   createAuditRun,
   createAuditRunWrite,
@@ -112,6 +114,18 @@ const SEQUENCE_LEVEL_CATEGORIES = new Set([
   "Opening Pattern Repetition", "开头同构",
   "Ending Pattern Repetition", "结尾同构",
 ]);
+
+interface ResumableProductionRun {
+  readonly chapterNumber: number;
+  readonly runPath: string;
+  readonly operationId: string;
+  readonly attemptId: string;
+  readonly phase: AuditRunV1["phase"];
+  readonly contentHash?: string;
+}
+
+const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu;
+const SHA256_PATTERN = /^[a-f0-9]{64}$/u;
 
 function isSequenceLevelCategory(category: string): boolean {
   return SEQUENCE_LEVEL_CATEGORIES.has(category);
@@ -742,15 +756,150 @@ export class PipelineRunner {
     this.config.logger?.warn(this.localize(language, message));
   }
 
+  private statePreflightError(message: string): Error & { readonly code: "STATE_PREFLIGHT_FAILED" } {
+    return Object.assign(new Error(message), { code: "STATE_PREFLIGHT_FAILED" as const });
+  }
+
+  private async loadResumableProductionRun(bookDir: string): Promise<ResumableProductionRun | undefined> {
+    const runtimeDir = join(bookDir, "story", "runtime");
+    const files = await readdir(runtimeDir).catch(() => [] as string[]);
+    const candidates = (await Promise.all(files.sort().map(async (file) => {
+      const fileMatch = /^chapter-(\d{4})\.run\.json$/u.exec(file);
+      if (!fileMatch) return undefined;
+      const raw = await readFile(join(runtimeDir, file), "utf-8").catch(() => undefined);
+      if (raw === undefined) return undefined;
+      let parsed: unknown;
+      try {
+        parsed = JSON.parse(raw);
+      } catch {
+        return undefined;
+      }
+      if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) return undefined;
+      const value = parsed as Record<string, unknown>;
+      if (
+        value.version !== 1
+        || value.kind !== "long-fiction"
+        || (value.status !== "running" && value.status !== "failed")
+        || typeof value.operationId !== "string"
+        || !UUID_PATTERN.test(value.operationId)
+        || typeof value.attemptId !== "string"
+        || !UUID_PATTERN.test(value.attemptId)
+        || (value.phase !== "initial" && value.phase !== "post-revision" && value.phase !== "manual")
+        || (value.contentHash !== undefined && (typeof value.contentHash !== "string" || !SHA256_PATTERN.test(value.contentHash)))
+      ) {
+        return undefined;
+      }
+      const chapterNumber = Number(fileMatch[1]);
+      if (value.resumeCursor !== String(chapterNumber) || value.stage !== `chapter-${chapterNumber}`) return undefined;
+      return {
+        chapterNumber,
+        runPath: join("story", "runtime", file),
+        operationId: value.operationId,
+        attemptId: value.attemptId,
+        phase: value.phase,
+        ...(typeof value.contentHash === "string" ? { contentHash: value.contentHash } : {}),
+      } satisfies ResumableProductionRun;
+    }))).filter((candidate): candidate is ResumableProductionRun => candidate !== undefined);
+    return candidates.sort((left, right) => left.chapterNumber - right.chapterNumber).at(-1);
+  }
+
+  private async assertResumableAuditIdentity(
+    bookDir: string,
+    resume: ResumableProductionRun,
+  ): Promise<void> {
+    const relativePath = auditRunRelativePath({
+      chapterNumber: resume.chapterNumber,
+      attemptId: resume.attemptId,
+      phase: resume.phase,
+    });
+    const raw = await readFile(join(bookDir, relativePath), "utf-8").catch((error: NodeJS.ErrnoException) => {
+      if (error.code === "ENOENT") return undefined;
+      throw error;
+    });
+    if (raw === undefined) return;
+    let parsedJson: unknown;
+    try {
+      parsedJson = JSON.parse(raw);
+    } catch {
+      throw this.statePreflightError(`Existing audit run ${relativePath} is malformed.`);
+    }
+    const parsed = AuditRunV1Schema.safeParse(parsedJson);
+    if (!parsed.success) {
+      throw this.statePreflightError(`Existing audit run ${relativePath} has an invalid schema.`);
+    }
+    if (parsed.data.operationId !== resume.operationId) {
+      throw this.statePreflightError("Production resume operationId conflicts with immutable audit evidence.");
+    }
+    if (resume.contentHash !== undefined && parsed.data.contentHash !== resume.contentHash) {
+      assertAuditRunWriteOnce(parsed.data, { ...parsed.data, contentHash: resume.contentHash });
+    }
+  }
+
+  private async preflightAuditRunWrites(
+    bookDir: string,
+    writes: ReadonlyArray<AtomicFileWrite>,
+  ): Promise<ReadonlyArray<AtomicFileWrite>> {
+    const accepted: AtomicFileWrite[] = [];
+    for (const write of writes) {
+      if (!write.relativePath.endsWith(".audit-run-v1.json")) {
+        accepted.push(write);
+        continue;
+      }
+      const serialized = typeof write.content === "string"
+        ? write.content
+        : new TextDecoder().decode(write.content);
+      let incomingJson: unknown;
+      try {
+        incomingJson = JSON.parse(serialized);
+      } catch {
+        throw this.statePreflightError(`Incoming audit run ${write.relativePath} is malformed.`);
+      }
+      const incoming = AuditRunV1Schema.parse(incomingJson);
+      if (toPosixPath(write.relativePath) !== auditRunRelativePath(incoming)) {
+        throw this.statePreflightError(`Incoming audit run path ${write.relativePath} does not match its identity.`);
+      }
+      const existingRaw = await readFile(join(bookDir, write.relativePath), "utf-8").catch((error: NodeJS.ErrnoException) => {
+        if (error.code === "ENOENT") return undefined;
+        throw error;
+      });
+      if (existingRaw === undefined) {
+        accepted.push(write);
+        continue;
+      }
+      let existingJson: unknown;
+      try {
+        existingJson = JSON.parse(existingRaw);
+      } catch {
+        throw this.statePreflightError(`Existing audit run ${write.relativePath} is malformed.`);
+      }
+      const existing = AuditRunV1Schema.safeParse(existingJson);
+      if (!existing.success) {
+        throw this.statePreflightError(`Existing audit run ${write.relativePath} has an invalid schema.`);
+      }
+      if (auditRunRelativePath(existing.data) !== auditRunRelativePath(incoming)) {
+        throw this.statePreflightError(`Existing audit run ${write.relativePath} is stored under a conflicting identity.`);
+      }
+      if (existing.data.operationId !== incoming.operationId) {
+        throw this.statePreflightError("Audit attempt identity conflicts with an existing operationId.");
+      }
+      if (assertAuditRunWriteOnce(existing.data, incoming) === "new") {
+        accepted.push(write);
+      }
+      // Same attempt/phase/hash is immutable and already persisted; do not rewrite it.
+    }
+    return accepted;
+  }
+
   private async commitCanonicalChapterFileSet(
     bookDir: string,
     fileSet: PreparedChapterFileSet,
     updatedIndex: ReadonlyArray<ChapterMeta>,
   ): Promise<void> {
+    const writes = await this.preflightAuditRunWrites(bookDir, fileSet.writes);
     await commitAtomicFileSet({
       rootDir: bookDir,
       writes: [
-        ...fileSet.writes,
+        ...writes,
         {
           relativePath: join("chapters", "index.json"),
           content: JSON.stringify(updatedIndex, null, 2),
@@ -774,6 +923,120 @@ export class PipelineRunner {
         en: `Derived step ${label} failed; canonical files were preserved: ${detail}`,
       });
     }
+  }
+
+  private async persistMissingRecoveredIndexProjection(
+    bookId: string,
+    projection: CanonicalChapterProjection,
+  ): Promise<void> {
+    const bookDir = this.state.bookDir(bookId);
+    const indexPath = join(bookDir, "chapters", "index.json");
+    let existingIndex: ReadonlyArray<ChapterMeta>;
+    let indexExists = true;
+    try {
+      const parsed = JSON.parse(await readFile(indexPath, "utf-8")) as unknown;
+      const validated = ChapterMetaSchema.array().safeParse(parsed);
+      if (!validated.success) {
+        throw this.statePreflightError("Existing chapter index has an invalid schema.");
+      }
+      existingIndex = validated.data;
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException | undefined)?.code !== "ENOENT") throw error;
+      indexExists = false;
+      existingIndex = await this.state.loadChapterIndex(bookId);
+    }
+    if (indexExists && existingIndex.some((chapter) => chapter.number === projection.meta.number)) return;
+    const rebuilt = existingIndex.length === 0
+      ? await this.state.loadChapterIndex(bookId)
+      : [...existingIndex, projection.meta].sort((left, right) => left.number - right.number);
+    await commitAtomicFileSet({
+      rootDir: bookDir,
+      writes: [{
+        relativePath: join("chapters", "index.json"),
+        content: JSON.stringify(rebuilt, null, 2),
+      }],
+    });
+  }
+
+  private async completeRecoveredProductionRun(input: {
+    readonly book: BookConfig;
+    readonly profile: WritingLanguageProfile;
+    readonly resume: ResumableProductionRun;
+    readonly projection: CanonicalChapterProjection & { readonly auditRun: AuditRunV1 };
+  }): Promise<ChapterPipelineResult> {
+    const { book, profile, resume, projection } = input;
+    const bookDir = this.state.bookDir(book.id);
+    const run = projection.auditRun;
+    await this.runDerivedStep(profile.scaffoldLanguage, "rebuild chapter index projection", () =>
+      this.persistMissingRecoveredIndexProjection(book.id, projection));
+
+    const status = projection.meta.status === "ready-for-review"
+      ? "ready-for-review" as const
+      : "audit-failed" as const;
+    const auditResult: AuditResult = {
+      passed: run.decision === "pass",
+      decision: run.decision,
+      issues: run.findings,
+      summary: "Recovered from canonical audit evidence after an interrupted production run.",
+      parseFailed: false,
+      overallScore: run.overallScore,
+      contentHash: projection.contentHash,
+      provenance: {
+        ...run.provenance,
+        operationId: run.operationId,
+        attemptId: run.attemptId,
+        phase: run.phase,
+      },
+      tokenUsage: run.tokenUsage,
+    };
+    const identity = {
+      operationId: resume.operationId,
+      attemptId: resume.attemptId,
+      phase: run.phase,
+      contentHash: projection.contentHash,
+    };
+    const artifacts = [
+      projection.chapterRelativePath,
+      join("chapters", "index.json"),
+      auditRunRelativePath(run),
+    ].map(toPosixPath);
+    await this.runDerivedStep(profile.scaffoldLanguage, "finalize recovered production run projection", () =>
+      writeProductionRunSnapshot({
+        rootDir: bookDir,
+        runPath: resume.runPath,
+        run: createProductionRunSnapshot({
+          kind: "long-fiction",
+          id: `${book.id}:chapter-${String(resume.chapterNumber).padStart(4, "0")}`,
+          stage: `chapter-${resume.chapterNumber}`,
+          model: this.config.model,
+          skillIds: ["inkos-long-writing"],
+          resumeCursor: String(resume.chapterNumber),
+          ...identity,
+          status: status === "ready-for-review" ? "complete" : "needs-review",
+          artifacts,
+          observations: [createRangeObservation({
+            metric: "chapter-length",
+            actual: run.length.count,
+            target: run.length.target,
+            min: run.length.hardMin,
+            max: run.length.hardMax,
+            unit: run.length.countingMode,
+            evidence: toPosixPath(projection.chapterRelativePath),
+          })],
+        }),
+      }));
+
+    return {
+      chapterNumber: projection.meta.number,
+      title: projection.meta.title,
+      wordCount: projection.meta.wordCount,
+      auditResult,
+      revised: run.revision.accepted,
+      status,
+      lengthWarnings: projection.meta.lengthWarnings,
+      lengthTelemetry: projection.meta.lengthTelemetry,
+      tokenUsage: run.tokenUsage,
+    };
   }
 
   private async tryGenerateStyleGuide(
@@ -2645,9 +2908,33 @@ export class PipelineRunner {
     const bookId = book.id;
     const bookDir = this.state.bookDir(bookId);
     const chapterNumber = await this.state.getNextChapterNumber(bookId);
+    const resume = await this.loadResumableProductionRun(bookDir);
+    if (resume) {
+      await this.assertResumableAuditIdentity(bookDir, resume);
+      const projection = await this.state.loadCanonicalChapterProjection(bookId, resume.chapterNumber);
+      if (
+        projection?.auditRun
+        && projection.auditRun.operationId === resume.operationId
+        && projection.auditRun.attemptId === resume.attemptId
+      ) {
+        return this.completeRecoveredProductionRun({
+          book,
+          profile,
+          resume,
+          projection: { ...projection, auditRun: projection.auditRun },
+        });
+      }
+      if (resume.chapterNumber !== chapterNumber) {
+        throw this.statePreflightError(
+          `Interrupted chapter ${resume.chapterNumber} has no matching terminal canonical audit evidence.`,
+        );
+      }
+    }
     const paddedChapter = String(chapterNumber).padStart(4, "0");
-    const runPath = join("story", "runtime", `chapter-${paddedChapter}.run.json`);
+    const runPath = resume?.runPath ?? join("story", "runtime", `chapter-${paddedChapter}.run.json`);
     const runId = `${bookId}:chapter-${paddedChapter}`;
+    const operationId = resume?.operationId ?? randomUUID();
+    const attemptId = resume?.attemptId ?? randomUUID();
     const baseRun = {
       kind: "long-fiction" as const,
       id: runId,
@@ -2655,6 +2942,10 @@ export class PipelineRunner {
       model: this.config.model,
       skillIds: ["inkos-long-writing"],
       resumeCursor: String(chapterNumber),
+      operationId,
+      attemptId,
+      phase: resume?.phase ?? "initial" as const,
+      ...(resume?.contentHash ? { contentHash: resume.contentHash } : {}),
     };
 
     await writeProductionRunSnapshot({
@@ -2675,6 +2966,7 @@ export class PipelineRunner {
         wordCount,
         temperatureOverride,
         externalContext,
+        { operationId, attemptId },
       );
       const chapterPrefix = `${paddedChapter}_`;
       const chapterFile = (await readdir(join(bookDir, "chapters")))
@@ -2687,6 +2979,14 @@ export class PipelineRunner {
         profile.language,
       );
       const chapterPath = toPosixPath(join("chapters", chapterFile));
+      const terminalContentHash = result.auditResult.contentHash
+        ?? computeChapterContentHash(await readFile(join(bookDir, chapterPath), "utf-8"));
+      const terminalIdentity = {
+        operationId,
+        attemptId,
+        phase: result.auditResult.provenance?.phase ?? "initial" as const,
+        contentHash: terminalContentHash,
+      };
       const artifacts = [
         chapterPath,
         join("chapters", "index.json"),
@@ -2695,24 +2995,26 @@ export class PipelineRunner {
         join("story", "snapshots", String(chapterNumber)),
         join("story", "runtime", `chapter-${paddedChapter}.trace.json`),
       ].map(toPosixPath);
-      await writeProductionRunSnapshot({
-        rootDir: bookDir,
-        runPath,
-        run: createProductionRunSnapshot({
-          ...baseRun,
-          status: result.status === "ready-for-review" ? "complete" : "needs-review",
-          artifacts,
-          observations: [createRangeObservation({
-            metric: "chapter-length",
-            actual: result.wordCount,
-            target: lengthSpec.target,
-            min: lengthSpec.hardMin,
-            max: lengthSpec.hardMax,
-            unit: lengthSpec.countingMode,
-            evidence: chapterPath,
-          })],
-        }),
-      });
+      await this.runDerivedStep(profile.scaffoldLanguage, "finalize production run projection", () =>
+        writeProductionRunSnapshot({
+          rootDir: bookDir,
+          runPath,
+          run: createProductionRunSnapshot({
+            ...baseRun,
+            ...terminalIdentity,
+            status: result.status === "ready-for-review" ? "complete" : "needs-review",
+            artifacts,
+            observations: [createRangeObservation({
+              metric: "chapter-length",
+              actual: result.wordCount,
+              target: lengthSpec.target,
+              min: lengthSpec.hardMin,
+              max: lengthSpec.hardMax,
+              unit: lengthSpec.countingMode,
+              evidence: chapterPath,
+            })],
+          }),
+        }));
       return result;
     } catch (error) {
       const cancelled = this.currentAbortSignal()?.aborted === true;
@@ -2737,6 +3039,7 @@ export class PipelineRunner {
     wordCount?: number,
     temperatureOverride?: number,
     externalContext?: string,
+    auditIdentity?: { readonly operationId: string; readonly attemptId: string },
   ): Promise<ChapterPipelineResult> {
     const bookId = book.id;
     this.throwIfOperationAborted();
@@ -2851,6 +3154,8 @@ export class PipelineRunner {
         // Manual mode still performs the initial audit, but never auto-revises.
         maxReviewIterations: manualReview ? 0 : this.config.writingReviewRetries,
         autoRevisionAllowed: !manualReview,
+        operationId: auditIdentity?.operationId,
+        attemptId: auditIdentity?.attemptId,
         settleRevisionCandidate: async (normalizedContent) => {
           try {
             const settled = await this.buildPersistenceOutput(

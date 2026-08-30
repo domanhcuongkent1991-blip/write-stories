@@ -1,8 +1,9 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { randomUUID } from "node:crypto";
 import { createRequire } from "node:module";
 import { mkdtemp, mkdir, readFile, readdir, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { buildImportFoundationSource, PipelineRunner } from "../pipeline/runner.js";
 import * as llmProvider from "../llm/provider.js";
 import { StateManager } from "../state/manager.js";
@@ -25,6 +26,11 @@ import { MemoryDB } from "../state/memory-db.js";
 import * as memoryDbModule from "../state/memory-db.js";
 import { countChapterLength } from "../utils/length-metrics.js";
 import { computeChapterContentHash } from "../audit/chapter-audit-evaluator.js";
+import {
+  auditRunRelativePath,
+  serializeAuditRun,
+  type AuditRunV1,
+} from "../audit/audit-run.js";
 import {
   listChapterVersions,
   readChapterVersion,
@@ -331,6 +337,98 @@ async function enableViWriting(root: string): Promise<() => void> {
     if (previous === undefined) delete process.env.INKOS_EXPERIMENTAL_WRITING_VI;
     else process.env.INKOS_EXPERIMENTAL_WRITING_VI = previous;
   };
+}
+
+function productionAuditRun(input: {
+  readonly bookId: string;
+  readonly chapterNumber: number;
+  readonly contentHash: string;
+  readonly operationId?: string;
+  readonly attemptId?: string;
+  readonly phase?: AuditRunV1["phase"];
+  readonly decision?: AuditRunV1["decision"];
+}): AuditRunV1 {
+  const operationId = input.operationId ?? randomUUID();
+  const attemptId = input.attemptId ?? randomUUID();
+  const phase = input.phase ?? "initial";
+  const decision = input.decision ?? "pass";
+  return {
+    schemaVersion: 1,
+    kind: "audit-run-v1",
+    operationId,
+    attemptId,
+    operation: phase === "post-revision" ? "revise" : "write",
+    phase,
+    bookId: input.bookId,
+    chapterNumber: input.chapterNumber,
+    startedAt: "2026-08-29T00:00:00.000Z",
+    completedAt: "2026-08-29T00:00:01.000Z",
+    durationMs: 1000,
+    contentHash: input.contentHash,
+    length: {
+      count: 220,
+      countingMode: "zh_chars",
+      target: 220,
+      softMin: 190,
+      softMax: 250,
+      hardMin: 160,
+      hardMax: 280,
+    },
+    decision,
+    passed: decision === "pass",
+    overallScore: decision === "pass" ? 95 : 50,
+    findings: [],
+    revision: { attempted: false, candidateProduced: false, accepted: false },
+    canonicalCommitOutcome: "terminal-commit",
+    provenance: {
+      source: "pipeline-runner",
+      operationId,
+      attemptId,
+      phase,
+    },
+    retryCounts: { transport: 0, output: 0, quality: 0 },
+    tokenUsage: ZERO_USAGE,
+  };
+}
+
+async function writeProductionAuditRun(bookDir: string, run: AuditRunV1): Promise<string> {
+  const relativePath = auditRunRelativePath(run);
+  const target = join(bookDir, relativePath);
+  await mkdir(dirname(target), { recursive: true });
+  await writeFile(target, serializeAuditRun(run), "utf-8");
+  return relativePath;
+}
+
+async function writeProductionResumeSnapshot(input: {
+  readonly bookDir: string;
+  readonly chapterNumber: number;
+  readonly operationId: string;
+  readonly attemptId: string;
+  readonly phase?: AuditRunV1["phase"];
+  readonly contentHash?: string;
+  readonly status?: "running" | "failed";
+}): Promise<string> {
+  const padded = String(input.chapterNumber).padStart(4, "0");
+  const runPath = join(input.bookDir, "story", "runtime", `chapter-${padded}.run.json`);
+  await mkdir(dirname(runPath), { recursive: true });
+  await writeFile(runPath, JSON.stringify({
+    version: 1,
+    kind: "long-fiction",
+    id: `test-book:chapter-${padded}`,
+    status: input.status ?? "running",
+    stage: `chapter-${input.chapterNumber}`,
+    artifacts: [],
+    observations: [],
+    model: "test-model",
+    skillIds: ["inkos-long-writing"],
+    resumeCursor: String(input.chapterNumber),
+    operationId: input.operationId,
+    attemptId: input.attemptId,
+    phase: input.phase ?? "initial",
+    ...(input.contentHash ? { contentHash: input.contentHash } : {}),
+    updatedAt: "2026-08-29T00:00:00.000Z",
+  }, null, 2), "utf-8");
+  return runPath;
 }
 
 describe("PipelineRunner", () => {
@@ -2620,6 +2718,214 @@ describe("PipelineRunner", () => {
         "story/current_state.md",
         "story/pending_hooks.md",
       ]));
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("resumes a terminal canonical chapter by rebuilding projections without model calls or chapter rewrites", async () => {
+    const { root, runner, state, bookId } = await createRunnerFixture();
+    const bookDir = state.bookDir(bookId);
+    const chapterContent = `# 第1章 终局证据\n\n${"稳".repeat(220)}`;
+    const contentHash = computeChapterContentHash(chapterContent);
+    const operationId = randomUUID();
+    const attemptId = randomUUID();
+    const chapterPath = join(bookDir, "chapters", "0001_终局证据.md");
+    await writeFile(chapterPath, chapterContent, "utf-8");
+    const auditRun = productionAuditRun({
+      bookId,
+      chapterNumber: 1,
+      contentHash,
+      operationId,
+      attemptId,
+    });
+    const auditPath = await writeProductionAuditRun(bookDir, auditRun);
+    const runPath = await writeProductionResumeSnapshot({
+      bookDir,
+      chapterNumber: 1,
+      operationId,
+      attemptId,
+      contentHash,
+    });
+    const chapterBefore = await stat(chapterPath);
+    const auditBefore = await readFile(join(bookDir, auditPath), "utf-8");
+    const planner = vi.spyOn(PlannerAgent.prototype, "planChapter");
+    const writer = vi.spyOn(WriterAgent.prototype, "writeChapter");
+    const auditor = vi.spyOn(ContinuityAuditor.prototype, "auditChapter");
+
+    try {
+      const result = await runner.writeNextChapter(bookId, 220);
+
+      expect(result).toMatchObject({
+        chapterNumber: 1,
+        title: "终局证据",
+        status: "ready-for-review",
+        revised: false,
+        auditResult: {
+          decision: "pass",
+          passed: true,
+          contentHash,
+        },
+      });
+      expect(planner).not.toHaveBeenCalled();
+      expect(writer).not.toHaveBeenCalled();
+      expect(auditor).not.toHaveBeenCalled();
+      expect(await readFile(chapterPath, "utf-8")).toBe(chapterContent);
+      expect((await stat(chapterPath)).mtimeMs).toBe(chapterBefore.mtimeMs);
+      expect(await readFile(join(bookDir, auditPath), "utf-8")).toBe(auditBefore);
+
+      const rebuiltIndex = JSON.parse(await readFile(join(bookDir, "chapters", "index.json"), "utf-8"));
+      expect(rebuiltIndex[0]).toMatchObject({
+        number: 1,
+        status: "ready-for-review",
+        auditDecision: "pass",
+        auditAttemptId: attemptId,
+        auditRunPaths: [auditPath],
+      });
+      const completedRun = JSON.parse(await readFile(runPath, "utf-8"));
+      expect(completedRun).toMatchObject({
+        status: "complete",
+        operationId,
+        attemptId,
+        phase: "initial",
+        contentHash,
+      });
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("reuses production audit identity when resuming before canonical commit", async () => {
+    const { root, runner, state, bookId } = await createRunnerFixture();
+    const bookDir = state.bookDir(bookId);
+    const operationId = randomUUID();
+    const attemptId = randomUUID();
+    const runPath = await writeProductionResumeSnapshot({
+      bookDir,
+      chapterNumber: 1,
+      operationId,
+      attemptId,
+      status: "failed",
+    });
+    const content = "续".repeat(220);
+    vi.spyOn(WriterAgent.prototype, "writeChapter").mockResolvedValue(createWriterOutput({
+      content,
+      wordCount: content.length,
+    }));
+    vi.spyOn(ContinuityAuditor.prototype, "auditChapter").mockResolvedValue(createAuditResult({
+      passed: true,
+      decision: "pass",
+      issues: [],
+      overallScore: 95,
+    }));
+
+    try {
+      const result = await runner.writeNextChapter(bookId, 220);
+      const contentHash = computeChapterContentHash(content);
+      const auditPath = join(
+        bookDir,
+        "story",
+        "audit",
+        "runs",
+        "chapter-0001",
+        `${attemptId}.initial.audit-run-v1.json`,
+      );
+      const auditRun = JSON.parse(await readFile(auditPath, "utf-8"));
+      const completedRun = JSON.parse(await readFile(runPath, "utf-8"));
+
+      expect(result.chapterNumber).toBe(1);
+      expect(auditRun).toMatchObject({ operationId, attemptId, phase: "initial", contentHash });
+      expect(completedRun).toMatchObject({ operationId, attemptId, phase: "initial", contentHash });
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("fails preflight when a resumed attempt and phase point at a different audit hash", async () => {
+    const { root, runner, state, bookId } = await createRunnerFixture();
+    const bookDir = state.bookDir(bookId);
+    const operationId = randomUUID();
+    const attemptId = randomUUID();
+    await writeProductionResumeSnapshot({
+      bookDir,
+      chapterNumber: 1,
+      operationId,
+      attemptId,
+      contentHash: "a".repeat(64),
+    });
+    await writeProductionAuditRun(bookDir, productionAuditRun({
+      bookId,
+      chapterNumber: 1,
+      operationId,
+      attemptId,
+      contentHash: "b".repeat(64),
+    }));
+    const writer = vi.spyOn(WriterAgent.prototype, "writeChapter");
+
+    try {
+      await expect(runner.writeNextChapter(bookId, 220)).rejects.toMatchObject({
+        code: "STATE_PREFLIGHT_FAILED",
+      });
+      expect(writer).not.toHaveBeenCalled();
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("warns when resume projection persistence fails after canonical commit", async () => {
+    const { logger, warnings } = createCaptureLogger();
+    const { root, runner, state, bookId } = await createRunnerFixture({ logger });
+    const bookDir = state.bookDir(bookId);
+    const chapterContent = `# 第1章 已提交\n\n${"真".repeat(220)}`;
+    const contentHash = computeChapterContentHash(chapterContent);
+    const operationId = randomUUID();
+    const attemptId = randomUUID();
+    const chapterPath = join(bookDir, "chapters", "0001_已提交.md");
+    await writeFile(chapterPath, chapterContent, "utf-8");
+    await writeProductionAuditRun(bookDir, productionAuditRun({
+      bookId,
+      chapterNumber: 1,
+      contentHash,
+      operationId,
+      attemptId,
+    }));
+    await writeProductionResumeSnapshot({
+      bookDir,
+      chapterNumber: 1,
+      operationId,
+      attemptId,
+      contentHash,
+    });
+    const originalCommit = atomicFileSetModule.commitAtomicFileSet;
+    vi.spyOn(atomicFileSetModule, "commitAtomicFileSet").mockImplementation(async (input) => {
+      if (input.writes.length === 1 && input.writes[0]?.relativePath === join("chapters", "index.json")) {
+        throw new Error("projection disk unavailable");
+      }
+      await originalCommit(input);
+    });
+
+    try {
+      await expect(runner.writeNextChapter(bookId, 220)).resolves.toMatchObject({ chapterNumber: 1 });
+      expect(await readFile(chapterPath, "utf-8")).toBe(chapterContent);
+      await expect(stat(join(bookDir, "chapters", "index.json"))).rejects.toThrow();
+      expect(warnings.join("\n")).toMatch(/projection disk unavailable/);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("preserves an incomplete canonical transaction and stops before model work", async () => {
+    const { root, runner, state, bookId } = await createRunnerFixture();
+    const transactionName = ".inkos-file-txn-preserve";
+    await mkdir(join(state.bookDir(bookId), transactionName, "backup"), { recursive: true });
+    const writer = vi.spyOn(WriterAgent.prototype, "writeChapter");
+
+    try {
+      await expect(runner.writeNextChapter(bookId, 220)).rejects.toMatchObject({
+        code: "CANONICAL_TRANSACTION_INCOMPLETE",
+      });
+      expect(writer).not.toHaveBeenCalled();
+      expect(await readdir(state.bookDir(bookId))).toContain(transactionName);
     } finally {
       await rm(root, { recursive: true, force: true });
     }
