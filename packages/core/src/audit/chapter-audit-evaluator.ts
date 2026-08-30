@@ -143,6 +143,18 @@ export function evaluateChapterAudit(input: ChapterAuditEvaluationInput): Chapte
   const suppliedDeterministic = [...input.deterministicFindings];
   if (input.lengthSpec) {
     const count = countChapterLength(input.content, input.lengthSpec.countingMode);
+    const isVietnamese = input.lengthSpec.countingMode === "vi_wordlike_tokens_v1";
+    if (isVietnamese && count > input.lengthSpec.softMax && count <= input.lengthSpec.hardMax) {
+      suppliedDeterministic.unshift({
+        severity: "warning",
+        category: "length",
+        description: `Chapter length ${formatLengthCount(count, input.lengthSpec.countingMode)} is above the preferred range ${input.lengthSpec.softMin}-${input.lengthSpec.softMax}.`,
+        suggestion: "Prefer the chapter's target range unless the additional length is required for continuity.",
+        ruleId: "length.soft-range",
+        repairScope: "structural",
+        repairTarget: "prose",
+      });
+    }
     if (isOutsideHardRange(count, input.lengthSpec)) {
       suppliedDeterministic.unshift({
         severity: "critical",

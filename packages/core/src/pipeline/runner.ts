@@ -65,7 +65,7 @@ import {
 import { HooksStateSchema } from "../models/runtime-state.js";
 import type { ChapterIntent, ChapterMemo, ChapterTrace, ContextPackage, RuleStack } from "../models/input-governance.js";
 import type { ContextCompressionCallback } from "../models/context-compression.js";
-import { buildLengthSpec, countChapterLength, formatLengthCount, isOutsideHardRange, resolveLengthCountingMode, type LengthLanguage } from "../utils/length-metrics.js";
+import { buildLengthSpec, countChapterLength, formatLengthCount, isOutsideHardRange, isOutsideSoftRange, resolveLengthCountingMode, type LengthLanguage } from "../utils/length-metrics.js";
 import {
   resolveWritingLanguageProfile,
   type WritingLanguageProfile,
@@ -4990,13 +4990,27 @@ ${matrix}`,
     lengthSpec: LengthSpec,
     language: ScaffoldLanguage,
   ): string[] {
-    if (!isOutsideHardRange(finalCount, lengthSpec)) {
+    const isVietnamese = lengthSpec.countingMode === "vi_wordlike_tokens_v1";
+    const outsideWarningRange = isVietnamese
+      ? isOutsideSoftRange(finalCount, lengthSpec)
+      : isOutsideHardRange(finalCount, lengthSpec);
+    if (!outsideWarningRange) {
       return [];
     }
+    const min = isVietnamese
+      ? lengthSpec.softMin
+      : lengthSpec.hardMin;
+    const max = isVietnamese
+      ? lengthSpec.softMax
+      : lengthSpec.hardMax;
     return [
       this.localize(language, {
-        zh: `第${chapterNumber}章未达到篇幅预算（${lengthSpec.hardMin}-${lengthSpec.hardMax}，实际 ${finalCount}）。`,
-        en: `Chapter ${chapterNumber} is outside its length budget (${lengthSpec.hardMin}-${lengthSpec.hardMax}, actual ${finalCount}).`,
+        zh: isVietnamese
+          ? `第${chapterNumber}章篇幅超出建议区间（${min}-${max}，实际 ${finalCount}）。`
+          : `第${chapterNumber}章未达到篇幅预算（${min}-${max}，实际 ${finalCount}）。`,
+        en: isVietnamese
+          ? `Chapter ${chapterNumber} is outside its preferred length range (${min}-${max}, actual ${finalCount}).`
+          : `Chapter ${chapterNumber} is outside its length budget (${min}-${max}, actual ${finalCount}).`,
       }),
     ];
   }

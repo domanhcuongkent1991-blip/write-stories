@@ -24,7 +24,7 @@ import type { BookConfig } from "../models/book.js";
 import type { ChapterMeta } from "../models/chapter.js";
 import { MemoryDB } from "../state/memory-db.js";
 import * as memoryDbModule from "../state/memory-db.js";
-import { countChapterLength } from "../utils/length-metrics.js";
+import { buildLengthSpec, countChapterLength } from "../utils/length-metrics.js";
 import { computeChapterContentHash } from "../audit/chapter-audit-evaluator.js";
 import {
   auditRunRelativePath,
@@ -4142,6 +4142,28 @@ describe("PipelineRunner", () => {
       );
       expect(chapterMeta?.lengthWarnings?.[0]).toContain("未达到篇幅预算");
       expect(chapterMeta?.lengthTelemetry?.lengthWarning).toBe(true);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("uses the preferred Vietnamese range for overflow warnings", async () => {
+    const { root, runner } = await createRunnerFixture();
+    const spec = buildLengthSpec(1150, "vi");
+
+    try {
+      const warnings = (runner as unknown as {
+        buildLengthWarnings: (
+          chapterNumber: number,
+          finalCount: number,
+          lengthSpec: typeof spec,
+          language: "en",
+        ) => string[];
+      }).buildLengthWarnings(1, 1350, spec, "en");
+
+      expect(warnings).toHaveLength(1);
+      expect(warnings[0]).toContain("preferred length range");
+      expect(warnings[0]).toContain("1000-1300");
     } finally {
       await rm(root, { recursive: true, force: true });
     }

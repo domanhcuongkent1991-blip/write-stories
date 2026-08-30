@@ -15,6 +15,15 @@ const lengthSpec = {
   countingMode: "vi_wordlike_tokens_v1" as const,
 };
 
+const viShortLengthSpec = {
+  target: 1150,
+  softMin: 1000,
+  softMax: 1300,
+  hardMin: 1000,
+  hardMax: 1500,
+  countingMode: "vi_wordlike_tokens_v1" as const,
+};
+
 describe("chapter audit canonicalization", () => {
   it("normalizes line endings, BOM and Unicode while excluding non-prose Markdown", () => {
     const crlf = "\uFEFF---\r\ntitle: Một chương\r\n---\r\n# Tiêu đề\r\nCa\u0301nh  cửa mở.\r\n```ts\r\nconst secret = true;\r\n```\r\n";
@@ -32,6 +41,57 @@ describe("chapter audit canonicalization", () => {
 });
 
 describe("evaluateChapterAudit", () => {
+  function evaluateVietnameseLength(count: number) {
+    return evaluateChapterAudit({
+      content: `${"Một ".repeat(count)}câu.`,
+      lengthSpec: viShortLengthSpec,
+      operation: "audit",
+      revisionAttempts: 0,
+      maxRevisionAttempts: 1,
+      autoRevisionAllowed: false,
+      deterministicFindings: [],
+      stateFindings: [],
+      llmAudit: { passed: true, overallScore: 95, summary: "clean", issues: [] },
+    });
+  }
+
+  it("accepts Vietnamese chapters inside the preferred range", () => {
+    const result = evaluateVietnameseLength(1150);
+
+    expect(result.decision).toBe("pass");
+    expect(result.findings).toEqual([]);
+  });
+
+  it("warns but does not fail Vietnamese chapters above the preferred range", () => {
+    const result = evaluateVietnameseLength(1350);
+
+    expect(result.decision).toBe("pass");
+    expect(result.passed).toBe(true);
+    expect(result.findings).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        ruleId: "length.soft-range",
+        severity: "warning",
+        verification: "verified",
+      }),
+    ]));
+  });
+
+  it("blocks Vietnamese chapters below the lower bound or above the safety ceiling", () => {
+    for (const count of [950, 1550]) {
+      const result = evaluateVietnameseLength(count);
+
+      expect(result.decision).toBe("repair-required");
+      expect(result.passed).toBe(false);
+      expect(result.findings).toEqual(expect.arrayContaining([
+        expect.objectContaining({
+          ruleId: "length.hard-range",
+          severity: "critical",
+          verification: "verified",
+        }),
+      ]));
+    }
+  });
+
   it("marks LLM-only findings unverified and keeps the supplied audit metadata", () => {
     const content = "Một câu chuyện.\n";
     const result = evaluateChapterAudit({
