@@ -1,5 +1,7 @@
 import type { AuditIssue } from "../agents/continuity.js";
-import type { HookOps } from "../models/runtime-state.js";
+import { HookRecordSchema, type HookOps, type HookRecord } from "../models/runtime-state.js";
+import type { StoredHook } from "../state/memory-db.js";
+import { normalizeHookPayoffTiming } from "./hook-lifecycle.js";
 
 /**
  * Legacy prose heuristic for the memo's "## 本章 hook 账" / "## Hook ledger
@@ -163,11 +165,42 @@ export function validateHookLedger(
   return violations;
 }
 
-export function hookOpsFromLedger(memoBody: string): HookOps {
+export interface HookOpsFromLedgerOptions {
+  /** The authoritative live hook snapshot; memo IDs are never trusted alone. */
+  readonly activeHooks: ReadonlyArray<StoredHook>;
+  readonly chapterNumber: number;
+}
+
+export class HookLedgerReferenceError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "HookLedgerReferenceError";
+  }
+}
+
+export function hookOpsFromLedger(
+  memoBody: string,
+  options?: HookOpsFromLedgerOptions,
+): HookOps {
   const ledger = parseHookLedger(memoBody);
+  const entries = [...ledger.open, ...ledger.advance, ...ledger.resolve, ...ledger.defer];
+  if (entries.length > 0 && !options) {
+    throw new HookLedgerReferenceError(
+      "an authoritative active hook snapshot is required for stable ledger IDs",
+    );
+  }
+  const knownHooks = new Map((options?.activeHooks ?? []).map((hook) => [hook.hookId, hook]));
+  for (const entry of entries) {
+    if (!knownHooks.has(entry.id)) {
+      throw new HookLedgerReferenceError(`unknown stable hook ID ${entry.id} in chapter memo`);
+    }
+  }
   return {
-    upsert: [],
-    mention: dedupeById(ledger.advance).map((entry) => entry.id),
+    upsert: dedupeById(ledger.advance).map((entry) => toAdvancingHookRecord(
+      knownHooks.get(entry.id)!,
+      options!.chapterNumber,
+    )),
+    mention: [],
     resolve: dedupeById(ledger.resolve).map((entry) => entry.id),
     defer: dedupeById(ledger.defer).map((entry) => entry.id),
   };
@@ -178,9 +211,12 @@ export function acceptanceCriteriaFromHookOps(
   language: "zh" | "en",
 ): string[] {
   const actionLabel = language === "en"
-    ? { mention: "advanced", resolve: "resolved", defer: "explicitly deferred" }
-    : { mention: "通过可观察动作推进", resolve: "在运行时真相中回收", defer: "在运行时真相中明确延后" };
+    ? { upsert: "advanced", mention: "mentioned", resolve: "resolved", defer: "explicitly deferred" }
+    : { upsert: "通过运行时 upsert 推进", mention: "被正文提及", resolve: "在运行时真相中回收", defer: "在运行时真相中明确延后" };
   return [
+    ...hookOps.upsert.map((record) => language === "en"
+      ? `Hook ${record.hookId} is ${actionLabel.upsert} through an advancing runtime upsert.`
+      : `伏笔 ${record.hookId} 必须通过运行时 upsert 推进。`),
     ...hookOps.mention.map((hookId) => language === "en"
       ? `Hook ${hookId} is ${actionLabel.mention} through observable chapter action.`
       : `伏笔 ${hookId} 必须${actionLabel.mention}。`),
@@ -191,6 +227,32 @@ export function acceptanceCriteriaFromHookOps(
       ? `Hook ${hookId} is ${actionLabel.defer} in runtime truth.`
       : `伏笔 ${hookId} 必须${actionLabel.defer}。`),
   ];
+}
+
+function toAdvancingHookRecord(hook: StoredHook, chapterNumber: number): HookRecord {
+  const candidate = {
+    hookId: hook.hookId,
+    startChapter: hook.startChapter,
+    type: hook.type || "unspecified",
+    status: "progressing" as const,
+    lastAdvancedChapter: chapterNumber,
+    expectedPayoff: hook.expectedPayoff ?? "",
+    ...(normalizeHookPayoffTiming(hook.payoffTiming)
+      ? { payoffTiming: normalizeHookPayoffTiming(hook.payoffTiming) }
+      : {}),
+    notes: hook.notes ?? "",
+    ...(hook.dependsOn ? { dependsOn: [...hook.dependsOn] } : {}),
+    ...(hook.paysOffInArc ? { paysOffInArc: hook.paysOffInArc } : {}),
+    ...(hook.coreHook !== undefined ? { coreHook: hook.coreHook } : {}),
+    ...(hook.halfLifeChapters !== undefined ? { halfLifeChapters: hook.halfLifeChapters } : {}),
+    advancedCount: (hook.advancedCount ?? 0) + 1,
+    ...(hook.promoted !== undefined ? { promoted: hook.promoted } : {}),
+  };
+  const parsed = HookRecordSchema.safeParse(candidate);
+  if (!parsed.success) {
+    throw new HookLedgerReferenceError(`active hook ${hook.hookId} is not a valid runtime record`);
+  }
+  return parsed.data;
 }
 
 function extractLedgerSection(memoBody: string): string | undefined {

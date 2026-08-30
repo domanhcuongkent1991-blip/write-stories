@@ -10,6 +10,106 @@ const expected = {
 };
 
 describe("validateExpectedHookOps", () => {
+  it("does not satisfy an advance upsert unless the typed record advances this chapter", () => {
+    const issues = validateExpectedHookOps({
+      expected: {
+        upsert: [{
+          hookId: "H007",
+          startChapter: 1,
+          type: "mystery",
+          status: "progressing",
+          lastAdvancedChapter: 4,
+          expectedPayoff: "badge",
+          notes: "",
+        }],
+        mention: [],
+        resolve: [],
+        defer: [],
+      },
+      actual: {
+        upsert: [{
+          hookId: "H007",
+          startChapter: 1,
+          type: "mystery",
+          status: "progressing",
+          lastAdvancedChapter: 3,
+          expectedPayoff: "badge",
+          notes: "",
+        }],
+        mention: [],
+        resolve: [],
+        defer: [],
+      },
+      runtimeHooks: [{
+        hookId: "H007",
+        startChapter: 1,
+        type: "mystery",
+        status: "progressing",
+        lastAdvancedChapter: 3,
+        expectedPayoff: "badge",
+        notes: "",
+      }],
+      acceptanceCriteria: ["H007 must advance."],
+      contentHash,
+    });
+
+    expect(issues).toEqual([
+      expect.objectContaining({
+        severity: "warning",
+        verification: "unverified",
+        acceptanceCriteria: ["H007 must advance."],
+      }),
+    ]);
+  });
+
+  it("treats a terminal final status for an advance upsert as a verified contradiction", () => {
+    const issues = validateExpectedHookOps({
+      expected: {
+        upsert: [{
+          hookId: "H007",
+          startChapter: 1,
+          type: "mystery",
+          status: "progressing",
+          lastAdvancedChapter: 4,
+          expectedPayoff: "badge",
+          notes: "",
+        }],
+        mention: [],
+        resolve: [],
+        defer: [],
+      },
+      actual: {
+        upsert: [{
+          hookId: "H007",
+          startChapter: 1,
+          type: "mystery",
+          status: "resolved",
+          lastAdvancedChapter: 4,
+          expectedPayoff: "badge",
+          notes: "",
+        }],
+        mention: [],
+        resolve: [],
+        defer: [],
+      },
+      runtimeHooks: [{
+        hookId: "H007",
+        startChapter: 1,
+        type: "mystery",
+        status: "resolved",
+        lastAdvancedChapter: 4,
+        expectedPayoff: "badge",
+        notes: "",
+      }],
+      acceptanceCriteria: [],
+      contentHash,
+    });
+
+    expect(issues).toEqual([
+      expect.objectContaining({ severity: "critical", verification: "verified" }),
+    ]);
+  });
+
   it("accepts matching typed runtime operations", () => {
     expect(validateExpectedHookOps({
       expected,

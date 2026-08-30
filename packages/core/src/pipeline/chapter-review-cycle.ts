@@ -65,6 +65,8 @@ interface ReviewSnapshot {
 export interface RevisionCandidateSettlement {
   readonly valid: boolean;
   readonly rejectionReason?: string;
+  /** Deterministic/state findings computed from the exact settled candidate truth. */
+  readonly stateFindings?: ReadonlyArray<AuditIssue>;
   readonly truthFileOverrides?: {
     readonly currentState?: string;
     readonly ledger?: string;
@@ -175,6 +177,7 @@ export async function runChapterReviewCycle(params: {
     content: string,
     options?: {
       temperature?: number;
+      stateFindings?: ReadonlyArray<AuditIssue>;
       truthFileOverrides?: RevisionCandidateSettlement["truthFileOverrides"];
     },
   ): Promise<{ auditResult: AuditResult; score: number; lengthInRange: boolean }> => {
@@ -212,7 +215,7 @@ export async function runChapterReviewCycle(params: {
       lengthSpec: params.lengthSpec,
       llmAudit,
       deterministicFindings,
-      stateFindings: [],
+      stateFindings: options?.stateFindings ?? [],
       operation: assessmentCount === 0 ? "audit" : "re-audit",
       revisionAttempts,
       maxRevisionAttempts: 1,
@@ -434,6 +437,7 @@ export async function runChapterReviewCycle(params: {
       // the earlier in-range version. No in-loop normalize needed.
       const nextAssessment = await assess(revisedContent, {
         temperature: 0,
+        stateFindings: candidateSettlement.stateFindings,
         truthFileOverrides: candidateSettlement.truthFileOverrides,
       });
 

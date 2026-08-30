@@ -109,7 +109,13 @@ async function seedStoryFiles(bookDir: string): Promise<void> {
     writeFile(join(storyDir, "chapter_summaries.md"), "# Summaries\n", "utf-8"),
     writeFile(join(storyDir, "book_rules.md"), "# Rules\n- 禁止反派降智", "utf-8"),
     writeFile(join(storyDir, "current_state.md"), "# State\n- 主角在七号门附近", "utf-8"),
-    writeFile(join(storyDir, "pending_hooks.md"), "# Hooks\n", "utf-8"),
+    writeFile(join(storyDir, "pending_hooks.md"), [
+      "| hook_id | start_chapter | type | status | last_advanced_chapter | expected_payoff | notes |",
+      "| --- | --- | --- | --- | --- | --- | --- |",
+      "| H03 | 1 | mystery | open | 1 | Door 7 anomaly | |",
+      "| S004 | 1 | mystery | open | 1 | lock scratch | |",
+      "| H07 | 1 | mystery | open | 1 | mastermind | |",
+    ].join("\n"), "utf-8"),
     writeFile(join(storyDir, "subplot_board.md"), "# Subplot\n", "utf-8"),
     writeFile(join(storyDir, "emotional_arcs.md"), "# Arcs\n", "utf-8"),
     writeFile(join(storyDir, "character_matrix.md"), "# Matrix\n", "utf-8"),
@@ -159,8 +165,12 @@ describe("PlannerAgent.planChapter memo generation", () => {
     expect(result.memo.threadRefs).toEqual(["H03", "S004"]);
     expect(result.memo.body).toContain("## 当前任务");
     expect(result.intent.expectedHookOps).toEqual({
-      upsert: [],
-      mention: ["H03"],
+      upsert: [expect.objectContaining({
+        hookId: "H03",
+        status: "progressing",
+        lastAdvancedChapter: 1,
+      })],
+      mention: [],
       resolve: ["S004"],
       defer: ["H07"],
     });
@@ -242,6 +252,58 @@ describe("PlannerAgent.planChapter memo generation", () => {
     expect(userMsg?.content).toContain("上次输出的错误");
   });
 
+  it.each([
+    ["missing pacing code", (body: string) => body.replace(/\n## 节奏代码\nreveal\n/iu, "\n")],
+    ["legacy pacing label", (body: string) => body.replace(/reveal/iu, "推进章")],
+    ["invalid pacing code", (body: string) => body.replace(/reveal/iu, "side-quest")],
+  ])("retries a fresh memo when it has %s and accepts a canonical code", async (_label, mutate) => {
+    const chatSpy = vi.spyOn(llmProvider, "chatCompletion")
+      .mockResolvedValueOnce({
+        content: validMemoRaw(4).replace(/reveal/iu, _label === "legacy pacing label" ? "推进章" : "side-quest"),
+        usage: ZERO_USAGE,
+      } as unknown as Awaited<ReturnType<typeof llmProvider.chatCompletion>>)
+      .mockResolvedValueOnce({
+        content: mutate(validMemoRaw(4)),
+        usage: ZERO_USAGE,
+      } as unknown as Awaited<ReturnType<typeof llmProvider.chatCompletion>>)
+      .mockResolvedValueOnce({
+        content: validMemoRaw(4),
+        usage: ZERO_USAGE,
+      } as unknown as Awaited<ReturnType<typeof llmProvider.chatCompletion>>);
+
+    const result = await makePlanner().planChapter({
+      book: makeBook(),
+      bookDir,
+      chapterNumber: 4,
+    });
+
+    expect(chatSpy).toHaveBeenCalledTimes(3);
+    expect(result.intent.pacingCode).toBe("reveal");
+  });
+
+  it("retries and safely falls back when a fresh memo fabricates an unknown stable hook ID", async () => {
+    const chatSpy = vi.spyOn(llmProvider, "chatCompletion")
+      .mockResolvedValueOnce({
+        content: validMemoRaw(4).replace(/advance:\n- H03/iu, "advance:\n- H999"),
+        usage: ZERO_USAGE,
+      } as unknown as Awaited<ReturnType<typeof llmProvider.chatCompletion>>)
+      .mockResolvedValueOnce({
+        content: validMemoRaw(4),
+        usage: ZERO_USAGE,
+      } as unknown as Awaited<ReturnType<typeof llmProvider.chatCompletion>>);
+
+    const result = await makePlanner().planChapter({
+      book: makeBook(),
+      bookDir,
+      chapterNumber: 4,
+    });
+
+    expect(chatSpy).toHaveBeenCalledTimes(2);
+    expect(result.intent.expectedHookOps.upsert).toEqual([
+      expect.objectContaining({ hookId: "H03" }),
+    ]);
+  });
+
   // Phase hotfix 4: English books must receive English system + user prompts
   // and English golden-opening guidance for chapters ≤ 3.
   it("uses English prompts end-to-end when book.language is en", async () => {
@@ -253,6 +315,9 @@ describe("PlannerAgent.planChapter memo generation", () => {
 
 ## Current task
 Pin the Door 7 tampering from suspicion to live evidence.
+
+## Pacing Code
+reveal
 
 ## What the reader is waiting for right now
 1) Reader expects to learn whether Door 7 is really compromised.
@@ -354,6 +419,7 @@ ${VALID_EN_BODY}
     expect(result.memo.chapter).toBe(2);
     expect(result.memo.goal.length).toBeGreaterThan(0);
     expect(result.memo.body).toContain("## 当前任务");
+    expect(result.intent.pacingCode).toBe("bridge");
     expect(result.memo.body).toContain("## Planner warning");
     expect(result.intentMarkdown).toContain("Planner warning");
   });

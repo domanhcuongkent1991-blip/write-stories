@@ -8,6 +8,7 @@ import { buildLengthSpec } from "../utils/length-metrics.js";
 import {
   acceptanceCriteriaFromHookOps,
   hookOpsFromLedger,
+  parseHookLedger,
 } from "../utils/hook-ledger-validator.js";
 import { resolveWritingLanguageProfile } from "../utils/language.js";
 import { readBookRules as readAuthoritativeBookRules } from "./rules-reader.js";
@@ -158,6 +159,7 @@ export class PlannerAgent extends BaseAgent {
       chapterContext: input.externalContext,
       relevantHooks: memorySelection.hooks,
       recyclableHooks: memorySelection.recyclableHooks,
+      authoritativeActiveHooks: memorySelection.activeHooks,
       // Phase hotfix 4: thread book language through so the planner uses
       // English prompts (system + user template + golden opening guidance)
       // for English books instead of always-Chinese.
@@ -165,7 +167,10 @@ export class PlannerAgent extends BaseAgent {
       lengthSpec,
     });
 
-    intent.expectedHookOps = hookOpsFromLedger(memo.body);
+    intent.expectedHookOps = hookOpsFromLedger(memo.body, {
+      activeHooks: memorySelection.activeHooks,
+      chapterNumber: input.chapterNumber,
+    });
     intent.acceptanceCriteria = acceptanceCriteriaFromHookOps(
       intent.expectedHookOps,
       scaffoldLanguage,
@@ -214,6 +219,7 @@ export class PlannerAgent extends BaseAgent {
     readonly chapterContext?: string;
     readonly relevantHooks?: ReadonlyArray<StoredHook>;
     readonly recyclableHooks?: ReadonlyArray<StoredHook>;
+    readonly authoritativeActiveHooks?: ReadonlyArray<StoredHook>;
     readonly language?: ScaffoldLanguage;
     readonly lengthSpec: LengthSpec;
   }): Promise<ChapterMemo> {
@@ -288,7 +294,9 @@ export class PlannerAgent extends BaseAgent {
       );
 
       try {
-        return parseMemo(response.content, input.chapterNumber, input.isGoldenOpening);
+        const memo = parseMemo(response.content, input.chapterNumber, input.isGoldenOpening);
+        assertFreshMemoGovernance(memo.body, input.authoritativeActiveHooks);
+        return memo;
       } catch (error) {
         if (!(error instanceof PlannerParseError)) {
           throw error;
@@ -339,6 +347,9 @@ export class PlannerAgent extends BaseAgent {
         "## Current task",
         `Use the current chapter goal and authoritative book context to continue chapter ${input.chapterNumber} without inventing a new direction.`,
         "",
+        "## Pacing Code",
+        "bridge",
+        "",
         "## What the reader is waiting for right now",
         "Keep the reader's active expectation from the outline and previous chapter in focus; do not replace it with a generic scene.",
         "",
@@ -379,6 +390,9 @@ export class PlannerAgent extends BaseAgent {
       "",
       "## 当前任务",
       `沿用当前章节目标和权威设定推进第 ${input.chapterNumber} 章，不临时改方向，也不把章节写成泛泛过渡。`,
+      "",
+      "## 节奏代码",
+      "bridge",
       "",
       "## 读者此刻在等什么",
       "延续大纲和上一章形成的读者期待，优先回应当前已经建立的压力、证据、关系或目标变化。",
@@ -926,8 +940,32 @@ export class PlannerAgent extends BaseAgent {
 
 function pacingCodeFromMemo(memoBody: string): ChapterIntent["pacingCode"] {
   const match = memoBody.match(
-    /^##\s*(?:节奏代码|Pacing Code)\s*\r?\n\s*([a-z-]+)\s*$/imu,
+    /^##\s*(?:节奏代码|Pacing Code)\s*\r?\n\s*([^\r\n]+?)\s*$/imu,
   );
   const parsed = PacingCodeSchema.safeParse(match?.[1]?.toLocaleLowerCase());
-  return parsed.success ? parsed.data : "unknown";
+  return parsed.success && parsed.data !== "unknown" ? parsed.data : "unknown";
+}
+
+function assertFreshMemoGovernance(
+  memoBody: string,
+  authoritativeActiveHooks?: ReadonlyArray<StoredHook>,
+): void {
+  const match = memoBody.match(
+    /^##\s*(?:节奏代码|Pacing Code)\s*\r?\n\s*([^\r\n]+?)\s*$/imu,
+  );
+  const pacing = PacingCodeSchema.safeParse(match?.[1]?.toLocaleLowerCase());
+  if (!pacing.success || pacing.data === "unknown") {
+    throw new PlannerParseError(
+      "fresh memo must contain one canonical pacing code (setup|escalation|reveal|reversal|payoff|aftermath|bridge)",
+    );
+  }
+
+  if (authoritativeActiveHooks === undefined) return;
+  const knownIds = new Set(authoritativeActiveHooks.map((hook) => hook.hookId));
+  const ledger = parseHookLedger(memoBody);
+  for (const entry of [...ledger.open, ...ledger.advance, ...ledger.resolve, ...ledger.defer]) {
+    if (!knownIds.has(entry.id)) {
+      throw new PlannerParseError(`unknown stable hook ID ${entry.id} in fresh memo`);
+    }
+  }
 }

@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { runChapterReviewCycle } from "../pipeline/chapter-review-cycle.js";
+import { computeChapterContentHash } from "../audit/chapter-audit-evaluator.js";
 import type { AuditResult, AuditIssue } from "../agents/continuity.js";
 import type { LengthSpec } from "../models/length-governance.js";
 
@@ -261,6 +262,90 @@ describe("runChapterReviewCycle v9", () => {
     );
     expect(result.finalContent).toBe(normalizedCandidate);
     expect(result.auditResult.provenance?.phase).toBe("post-revision");
+  });
+
+  it("routes verified typed hook contradictions from settlement through the shared candidate gate", async () => {
+    const original = "原".repeat(200);
+    const candidate = "修".repeat(220);
+    const contentHash = computeChapterContentHash(candidate);
+    const auditChapter = vi.fn()
+      .mockResolvedValueOnce(createAuditResult({ passed: false, overallScore: 70 }))
+      .mockResolvedValueOnce(createAuditResult({ passed: true, overallScore: 95 }));
+    const result = await runChapterReviewCycle({
+      ...baseParams,
+      bookId: "book-1",
+      initialOutput: { content: original, wordCount: 200, postWriteErrors: [] },
+      createReviser: () => ({
+        reviseChapter: vi.fn().mockResolvedValue({
+          revisedContent: candidate,
+          wordCount: 220,
+          fixedIssues: ["hook"],
+          tokenUsage: ZERO_USAGE,
+        }),
+      }),
+      auditor: { auditChapter },
+      settleRevisionCandidate: async () => ({
+        valid: true,
+        stateFindings: [{
+          severity: "critical",
+          category: "hook-runtime-contradiction",
+          description: "advance was resolved",
+          suggestion: "restore progressing hook state",
+          source: "state",
+          verification: "verified",
+          evidence: { contentHash, stateRef: "runtime:hook:H007" },
+          repairTarget: "runtime-state",
+        }],
+      }),
+      runPostWriteChecks: (content) => content.startsWith("原")
+        ? [DETERMINISTIC_REPAIR]
+        : [],
+    });
+
+    expect(result.finalContent).toBe(original);
+    expect(result.revised).toBe(false);
+    expect(result.auditRuns?.[1]?.findings).toEqual(expect.arrayContaining([
+      expect.objectContaining({ category: "hook-runtime-contradiction", severity: "critical" }),
+    ]));
+  });
+
+  it("does not block a candidate for an unverified typed hook evidence warning", async () => {
+    const original = "原".repeat(200);
+    const candidate = "修".repeat(220);
+    const auditChapter = vi.fn()
+      .mockResolvedValueOnce(createAuditResult({ passed: false, overallScore: 70 }))
+      .mockResolvedValueOnce(createAuditResult({ passed: true, overallScore: 95 }));
+    const result = await runChapterReviewCycle({
+      ...baseParams,
+      initialOutput: { content: original, wordCount: 200, postWriteErrors: [] },
+      createReviser: () => ({
+        reviseChapter: vi.fn().mockResolvedValue({
+          revisedContent: candidate,
+          wordCount: 220,
+          fixedIssues: ["hook"],
+          tokenUsage: ZERO_USAGE,
+        }),
+      }),
+      auditor: { auditChapter },
+      settleRevisionCandidate: async () => ({
+        valid: true,
+        stateFindings: [{
+          severity: "warning",
+          category: "hook-runtime-evidence-missing",
+          description: "advance evidence missing",
+          suggestion: "review the settled delta",
+          source: "deterministic",
+          verification: "unverified",
+          repairTarget: "runtime-state",
+        }],
+      }),
+      runPostWriteChecks: (content) => content.startsWith("原")
+        ? [DETERMINISTIC_REPAIR]
+        : [],
+    });
+
+    expect(result.finalContent).toBe(candidate);
+    expect(result.revised).toBe(true);
   });
 
   it("rejects an unsettled candidate before post-revision audit", async () => {

@@ -4,6 +4,7 @@ import {
   parseHookLedger,
   validateHookLedger,
 } from "../utils/hook-ledger-validator.js";
+import type { StoredHook } from "../state/memory-db.js";
 
 const ZH_MEMO = `## 当前任务
 林秋潜入账房取回账册。
@@ -252,11 +253,70 @@ advance:
   });
 
   it("derives typed expected hook operations from stable memo hook IDs", () => {
-    expect(hookOpsFromLedger(ZH_MEMO)).toEqual({
+    const activeHooks: StoredHook[] = [
+      {
+        hookId: "H007",
+        startChapter: 1,
+        type: "mystery",
+        status: "open",
+        lastAdvancedChapter: 3,
+        expectedPayoff: "胖虎借条",
+        notes: "",
+      },
+      {
+        hookId: "H012",
+        startChapter: 2,
+        type: "mystery",
+        status: "progressing",
+        lastAdvancedChapter: 4,
+        expectedPayoff: "雷架焦痕",
+        notes: "",
+      },
+      {
+        hookId: "H003",
+        startChapter: 1,
+        type: "mystery",
+        status: "progressing",
+        lastAdvancedChapter: 3,
+        expectedPayoff: "杂役腰牌",
+        notes: "",
+      },
+      {
+        hookId: "H009",
+        startChapter: 1,
+        type: "mystery",
+        status: "open",
+        lastAdvancedChapter: 3,
+        expectedPayoff: "守拙诀来历",
+        notes: "",
+      },
+    ];
+    const ops = hookOpsFromLedger(ZH_MEMO, { activeHooks, chapterNumber: 12 });
+    expect(ops.upsert).toEqual([
+      expect.objectContaining({ hookId: "H007", status: "progressing", lastAdvancedChapter: 12 }),
+      expect.objectContaining({ hookId: "H012", status: "progressing", lastAdvancedChapter: 12 }),
+    ]);
+    expect(ops.mention).toEqual([]);
+    expect(ops.resolve).toEqual(["H003"]);
+    expect(ops.defer).toEqual(["H009"]);
+  });
+
+  it("rejects a stable hook ID that is not in the authoritative active snapshot", () => {
+    expect(() => hookOpsFromLedger(`## 本章 hook 账\nadvance:\n- H999 fabricated hook`, {
+      activeHooks: [],
+      chapterNumber: 12,
+    })).toThrow(/unknown.*H999/i);
+  });
+
+  it("keeps a generic advance note without a stable ID as an empty typed operation", () => {
+    expect(hookOpsFromLedger(`## 本章 hook 账\nadvance: keep the current pressure moving without naming a stable hook`, {
+      activeHooks: [],
+      chapterNumber: 12,
+    })).toEqual({
       upsert: [],
-      mention: ["H007", "H012"],
-      resolve: ["H003"],
-      defer: ["H009"],
+      mention: [],
+      resolve: [],
+      defer: [],
     });
   });
 });

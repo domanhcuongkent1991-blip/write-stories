@@ -3324,9 +3324,20 @@ export class PipelineRunner {
               && !validation.validation.repairRequired;
             settledRevisionCandidate = valid ? validation.persistenceOutput : undefined;
             settledRevisionCandidateValidated = valid;
+            const candidateHookFindings = valid && writeInput.chapterIntentData?.expectedHookOps
+              ? validateExpectedHookOps({
+                expected: writeInput.chapterIntentData.expectedHookOps,
+                actual: validation.persistenceOutput.runtimeStateDelta?.hookOps
+                  ?? { upsert: [], mention: [], resolve: [], defer: [] },
+                runtimeHooks: validation.persistenceOutput.runtimeStateSnapshot?.hooks.hooks ?? [],
+                acceptanceCriteria: writeInput.chapterIntentData.acceptanceCriteria ?? [],
+                contentHash: computeChapterContentHash(validation.persistenceOutput.content),
+              })
+              : [];
             return valid
               ? {
                   valid: true,
+                  stateFindings: candidateHookFindings,
                   truthFileOverrides: {
                     currentState: validation.persistenceOutput.updatedState,
                     ledger: validation.persistenceOutput.updatedLedger || undefined,

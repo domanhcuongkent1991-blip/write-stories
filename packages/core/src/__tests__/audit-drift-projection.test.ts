@@ -115,6 +115,94 @@ describe("audit drift projection", () => {
     })).toEqual([]);
   });
 
+  it("uses fingerprints as the lifecycle identity before occurrence finding IDs", () => {
+    const critical = issue({
+      findingId: "duplicate-occurrence",
+      fingerprint: "critical-fingerprint",
+      severity: "critical",
+      description: "Critical runtime contradiction",
+    });
+    const warning = issue({
+      findingId: "duplicate-occurrence",
+      fingerprint: "warning-fingerprint",
+      description: "Minor pacing warning",
+    });
+
+    const findings = selectAuditDriftFindings({
+      runs: [run({ chapter: 10, findings: [warning, critical] })],
+      currentChapter: 10,
+    });
+
+    expect(findings.map((finding) => finding.description)).toEqual([
+      "Critical runtime contradiction",
+      "Minor pacing warning",
+    ]);
+  });
+
+  it("does not collide blank finding IDs when fingerprints are absent", () => {
+    const findings = selectAuditDriftFindings({
+      runs: [run({
+        chapter: 10,
+        findings: [
+          issue({ findingId: "", description: "First semantic warning" }),
+          issue({ findingId: "", description: "Second semantic warning" }),
+        ],
+      })],
+      currentChapter: 10,
+    });
+
+    expect(findings.map((finding) => finding.description)).toEqual([
+      "First semantic warning",
+      "Second semantic warning",
+    ]);
+  });
+
+  it("does not let a reused non-empty occurrence ID hide a different critical finding", () => {
+    const findings = selectAuditDriftFindings({
+      runs: [run({
+        chapter: 10,
+        findings: [
+          issue({ findingId: "reused", description: "Warning with one meaning" }),
+          issue({ findingId: "reused", severity: "critical", description: "Critical with another meaning" }),
+        ],
+      })],
+      currentChapter: 10,
+    });
+
+    expect(findings.map((finding) => finding.description)).toEqual([
+      "Critical with another meaning",
+      "Warning with one meaning",
+    ]);
+  });
+
+  it("closes an older open finding when a later chapter resolves the same fingerprint", () => {
+    const open = issue({ findingId: "old-occurrence", fingerprint: "same-fingerprint", ttlChapters: 5 });
+    const resolved = issue({
+      findingId: "new-occurrence",
+      fingerprint: "same-fingerprint",
+      lifecycle: "resolved",
+      ttlChapters: 5,
+    });
+
+    expect(selectAuditDriftFindings({
+      runs: [
+        run({ chapter: 8, findings: [open] }),
+        run({ chapter: 9, findings: [resolved] }),
+      ],
+      currentChapter: 9,
+    })).toEqual([]);
+  });
+
+  it("does not project a legacy finding with missing verification and blank suggestion", () => {
+    expect(selectAuditDriftFindings({
+      runs: [run({
+        chapter: 10,
+        findings: [issue({ verification: undefined, suggestion: "" })],
+      })],
+      currentChapter: 10,
+    })).toEqual([]);
+  });
+
   it("uses the latest terminal evidence for a chapter so repaired findings do not linger", () => {
     const oldRun = run({
       chapter: 6,

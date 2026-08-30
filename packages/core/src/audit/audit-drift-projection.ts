@@ -38,6 +38,17 @@ export function selectAuditDriftFindings(params: {
 
   for (const run of [...latestRunByChapter.values()].sort(compareRunsOldestFirst)) {
     for (const finding of run.findings) {
+      const findingId = finding.findingId?.trim();
+      const terminalLifecycle = finding.lifecycle === "resolved"
+        || finding.lifecycle === "superseded"
+        || finding.lifecycle === "expired";
+      if (terminalLifecycle && findingId && !finding.fingerprint?.trim()) {
+        for (const [identity, record] of latestByIdentity) {
+          if (!record.issue.fingerprint?.trim() && record.issue.findingId?.trim() === findingId) {
+            latestByIdentity.delete(identity);
+          }
+        }
+      }
       latestByIdentity.set(findingIdentity(finding), {
         issue: finding,
         chapterNumber: run.chapterNumber,
@@ -119,7 +130,8 @@ function isProjectable(
   if (issue.verification === "stale" || (issue.severity !== "critical" && issue.severity !== "warning")) {
     return false;
   }
-  if (issue.verification === "unverified" && issue.suggestion.trim().length === 0) {
+  if ((issue.verification === "unverified" || issue.verification === undefined)
+    && issue.suggestion.trim().length === 0) {
     return false;
   }
   const ttl = positiveIntegerOr(issue.ttlChapters, defaultTtl);
@@ -127,9 +139,20 @@ function isProjectable(
 }
 
 function findingIdentity(issue: AuditIssue): string {
-  return issue.findingId
-    ?? issue.fingerprint
-    ?? `${issue.category}\u0000${issue.description}`;
+  const fingerprint = issue.fingerprint?.trim();
+  if (fingerprint) return `fingerprint\u0000${fingerprint}`;
+
+  // Occurrence IDs are not semantic identity: a reused/blank ID must not make
+  // one finding overwrite an unrelated finding. Keep enough normalized
+  // meaning to dedupe the same legacy issue while preserving distinct issues.
+  return [
+    issue.category,
+    issue.ruleId ?? "",
+    issue.repairTarget ?? "",
+    issue.severity,
+    issue.description.trim(),
+    issue.suggestion.trim(),
+  ].join("\u0000");
 }
 
 function compareRunsOldestFirst(left: AuditRunV1, right: AuditRunV1): number {

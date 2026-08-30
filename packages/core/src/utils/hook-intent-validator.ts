@@ -16,14 +16,16 @@ export function validateExpectedHookOps(input: {
   readonly acceptanceCriteria: ReadonlyArray<string>;
   readonly contentHash: string;
 }): ReadonlyArray<AuditIssue> {
-  const actualActions = indexActualActions(input.actual);
+  const actual = indexActualActions(input.actual);
+  const actualActions = actual.actions;
   const runtimeById = new Map(input.runtimeHooks.map((hook) => [hook.hookId, hook]));
   const findings: AuditIssue[] = [];
 
   for (const expected of flattenExpectedActions(input.expected)) {
-    const actual = actualActions.get(expected.hookId) ?? new Set<HookAction>();
+    const actualForHook = actualActions.get(expected.hookId) ?? new Set<HookAction>();
     const runtimeHook = runtimeById.get(expected.hookId);
-    const contradiction = contradictoryAction(expected, actual, runtimeHook);
+    const actualUpsert = actual.upserts.get(expected.hookId);
+    const contradiction = contradictoryAction(expected, actualForHook, runtimeHook, actualUpsert);
     const acceptanceCriteria = relevantAcceptanceCriteria(
       input.acceptanceCriteria,
       expected.hookId,
@@ -48,7 +50,7 @@ export function validateExpectedHookOps(input: {
       });
       continue;
     }
-    if (operationSatisfied(expected, actual, runtimeHook)) continue;
+    if (operationSatisfied(expected, actualForHook, runtimeHook, actualUpsert)) continue;
 
     findings.push({
       severity: "warning",
@@ -77,24 +79,32 @@ function flattenExpectedActions(expected: HookOps): ExpectedHookAction[] {
   ];
 }
 
-function indexActualActions(actual: HookOps): Map<string, Set<HookAction>> {
+function indexActualActions(actual: HookOps): {
+  readonly actions: Map<string, Set<HookAction>>;
+  readonly upserts: Map<string, HookRecord>;
+} {
   const result = new Map<string, Set<HookAction>>();
+  const upserts = new Map<string, HookRecord>();
   const add = (hookId: string, action: HookAction) => {
     const actions = result.get(hookId) ?? new Set<HookAction>();
     actions.add(action);
     result.set(hookId, actions);
   };
-  for (const record of actual.upsert) add(record.hookId, "upsert");
+  for (const record of actual.upsert) {
+    add(record.hookId, "upsert");
+    upserts.set(record.hookId, record);
+  }
   for (const hookId of actual.mention) add(hookId, "mention");
   for (const hookId of actual.resolve) add(hookId, "resolve");
   for (const hookId of actual.defer) add(hookId, "defer");
-  return result;
+  return { actions: result, upserts };
 }
 
 function operationSatisfied(
   expected: ExpectedHookAction,
   actual: ReadonlySet<HookAction>,
   runtimeHook?: HookRecord,
+  actualUpsert?: HookRecord,
 ): boolean {
   if (expected.action === "mention") {
     return actual.has("mention") || actual.has("resolve") || actual.has("upsert");
@@ -105,18 +115,18 @@ function operationSatisfied(
   if (expected.action === "defer") {
     return actual.has("defer") || runtimeHook?.status === "deferred";
   }
-  const actualUpsert = actual.has("upsert");
-  return actualUpsert && (
-    expected.record === undefined
-    || runtimeHook === undefined
-    || runtimeHook.status === expected.record.status
-  );
+  if (!actual.has("upsert")) return false;
+  const finalHook = runtimeHook ?? actualUpsert;
+  if (finalHook === undefined || finalHook.status === "resolved" || finalHook.status === "deferred") return false;
+  if (expected.record === undefined || actualUpsert === undefined) return false;
+  return actualUpsert.lastAdvancedChapter >= expected.record.lastAdvancedChapter;
 }
 
 function contradictoryAction(
   expected: ExpectedHookAction,
   actual: ReadonlySet<HookAction>,
   runtimeHook?: HookRecord,
+  actualUpsert?: HookRecord,
 ): string | undefined {
   if (expected.action === "resolve" && (actual.has("defer") || runtimeHook?.status === "deferred")) {
     return "defer";
@@ -127,8 +137,13 @@ function contradictoryAction(
   if (expected.action === "mention" && actual.has("defer")) {
     return "defer";
   }
-  if (expected.action === "upsert" && expected.record && runtimeHook && runtimeHook.status !== expected.record.status) {
-    return `upsert:${runtimeHook.status}`;
+  if (expected.action === "upsert") {
+    if (actual.has("resolve")) return "resolve";
+    if (actual.has("defer")) return "defer";
+    const finalHook = runtimeHook ?? actualUpsert;
+    if (finalHook?.status === "resolved" || finalHook?.status === "deferred") {
+      return `upsert:${finalHook.status}`;
+    }
   }
   return undefined;
 }
