@@ -78,6 +78,78 @@ describe("Studio task snapshots", () => {
     });
   });
 
+  it("persists optional audit telemetry with a task snapshot", async () => {
+    await saveStudioTaskSnapshot(root, {
+      version: 1,
+      sessionId: "session-telemetry",
+      requestedIntent: "short_run",
+      updatedAt: 20,
+      execution: {
+        id: "task-telemetry",
+        tool: "sub_agent",
+        label: "Audit chapter",
+        status: "completed",
+        startedAt: 10,
+        bookId: "book-1",
+        chapter: 3,
+        attemptId: "core-attempt-3",
+        operationPhase: "completed",
+        decision: "repair-required",
+        verifiedBlockerCount: 2,
+        revisionAttempted: true,
+        revisionOutcome: "rejected",
+        rejectionReason: "verified blocker remains",
+        retryClass: "quality",
+        provider: "openai",
+        model: "gpt-5.4",
+      },
+    });
+
+    await expect(loadStudioTaskSnapshot(root, "session-telemetry")).resolves.toMatchObject({
+      execution: {
+        bookId: "book-1",
+        chapter: 3,
+        attemptId: "core-attempt-3",
+        decision: "repair-required",
+        revisionAttempted: true,
+        revisionOutcome: "rejected",
+      },
+    });
+  });
+
+  it("rejects a persisted snapshot with invalid audit telemetry", async () => {
+    const path = studioTaskSnapshotPath(root, "session-invalid-telemetry");
+    await saveStudioTaskSnapshot(root, {
+      version: 1,
+      sessionId: "session-invalid-telemetry",
+      requestedIntent: "short_run",
+      updatedAt: 10,
+      execution: {
+        id: "task-invalid-telemetry",
+        tool: "sub_agent",
+        label: "Audit chapter",
+        status: "completed",
+        startedAt: 10,
+      },
+    });
+    await writeFile(path, JSON.stringify({
+      version: 1,
+      sessionId: "session-invalid-telemetry",
+      requestedIntent: "short_run",
+      updatedAt: 20,
+      execution: {
+        id: "task-invalid-telemetry",
+        tool: "sub_agent",
+        label: "Audit chapter",
+        status: "completed",
+        startedAt: 10,
+        decision: "accepted-anyway",
+      },
+    }), "utf-8");
+
+    await expect(loadStudioTaskSnapshot(root, "session-invalid-telemetry")).resolves.toBeNull();
+  });
+
   it("treats a corrupt snapshot as unavailable instead of crashing session restore", async () => {
     const path = studioTaskSnapshotPath(root, "session-3");
     await saveStudioTaskSnapshot(root, {

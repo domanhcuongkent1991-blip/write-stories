@@ -16,6 +16,7 @@ import {
 import { buildApiUrl } from "../../hooks/use-api";
 import { translateAppString } from "../../lib/app-language";
 import type { StringKey } from "../../i18n/catalog";
+import type { AuditDecision, OperationTelemetry, RevisionOutcome } from "../../shared/contracts";
 import { chatSelectors, useChatStore } from "../../store/chat";
 import { usePreferencesStore } from "../../store/preferences";
 import {
@@ -437,7 +438,7 @@ interface ChapterRevisionIssueDetails {
   readonly suggestion?: string;
 }
 
-interface ChapterRevisionDetails {
+interface ChapterRevisionDetails extends Pick<OperationTelemetry, "decision" | "verifiedBlockerCount" | "revisionAttempted" | "revisionOutcome" | "rejectionReason" | "provider" | "model"> {
   readonly chapterNumber?: number;
   readonly applied: boolean;
   readonly status?: string;
@@ -445,13 +446,21 @@ interface ChapterRevisionDetails {
   readonly fixedIssues: ReadonlyArray<string>;
   readonly auditIssues: ReadonlyArray<ChapterRevisionIssueDetails>;
   readonly skippedReason?: string;
-  readonly decision?: string;
-  readonly verifiedBlockerCount?: number;
-  readonly revisionOutcome?: string;
-  readonly rejectionReason?: string;
-  readonly provider?: string;
-  readonly model?: string;
 }
+
+const AUDIT_DECISION_LABEL_KEYS: Readonly<Record<AuditDecision, StringKey>> = {
+  pass: "auditTelemetry.decision.pass",
+  "repair-required": "auditTelemetry.decision.repairRequired",
+  fail: "auditTelemetry.decision.fail",
+  inconclusive: "auditTelemetry.decision.inconclusive",
+};
+
+const REVISION_OUTCOME_LABEL_KEYS: Readonly<Record<RevisionOutcome, StringKey>> = {
+  "not-needed": "auditTelemetry.revision.notNeeded",
+  accepted: "auditTelemetry.revision.accepted",
+  rejected: "auditTelemetry.revision.rejected",
+  inconclusive: "auditTelemetry.revision.inconclusive",
+};
 
 interface ChapterStateResyncDetails {
   readonly chapterNumber?: number;
@@ -477,6 +486,16 @@ function parseChapterAuditIssues(value: unknown): ReadonlyArray<ChapterRevisionI
   });
 }
 
+function auditDecisionField(record: Record<string, unknown>): AuditDecision | undefined {
+  const value = stringField(record, "decision");
+  return value === "pass" || value === "repair-required" || value === "fail" || value === "inconclusive" ? value : undefined;
+}
+
+function revisionOutcomeField(record: Record<string, unknown>): RevisionOutcome | undefined {
+  const value = stringField(record, "revisionOutcome");
+  return value === "not-needed" || value === "accepted" || value === "rejected" || value === "inconclusive" ? value : undefined;
+}
+
 export function getChapterRevisionDetails(exec: ToolExecution): ChapterRevisionDetails | null {
   if (exec.tool !== "sub_agent" || !exec.details || typeof exec.details !== "object" || Array.isArray(exec.details)) return null;
   const details = exec.details as Record<string, unknown>;
@@ -489,9 +508,10 @@ export function getChapterRevisionDetails(exec: ToolExecution): ChapterRevisionD
     fixedIssues: rawStringArrayField(details, "fixedIssues"),
     auditIssues: parseChapterAuditIssues(details.auditIssues),
     skippedReason: stringField(details, "skippedReason"),
-    decision: stringField(details, "decision"),
+    decision: auditDecisionField(details),
     verifiedBlockerCount: numberField(details, "verifiedBlockerCount"),
-    revisionOutcome: stringField(details, "revisionOutcome"),
+    revisionAttempted: booleanField(details, "revisionAttempted"),
+    revisionOutcome: revisionOutcomeField(details),
     rejectionReason: stringField(details, "rejectionReason"),
     provider: stringField(details, "provider"),
     model: stringField(details, "model"),
@@ -559,13 +579,14 @@ function ChapterRevisionPreview({ exec }: { exec: ToolExecution }) {
       {details.skippedReason && (
         <div className="mt-2 text-[13px] leading-5 text-muted-foreground">{details.skippedReason}</div>
       )}
-      {(details.decision || details.verifiedBlockerCount !== undefined || details.revisionOutcome || details.rejectionReason || details.provider || details.model) && (
+      {(details.decision || details.verifiedBlockerCount !== undefined || details.revisionAttempted !== undefined || details.revisionOutcome || details.rejectionReason || details.provider || details.model) && (
         <div className="mt-2 grid min-w-0 gap-1 text-[12px] leading-5 text-muted-foreground sm:grid-cols-2">
-          {details.decision && <div className="break-words">Decision: {details.decision}</div>}
-          {details.verifiedBlockerCount !== undefined && <div>Verified blockers: {details.verifiedBlockerCount}</div>}
-          {details.revisionOutcome && <div>Revision: {details.revisionOutcome}</div>}
-          {details.rejectionReason && <div className="break-words">Reason: {details.rejectionReason}</div>}
-          {(details.provider || details.model) && <div className="break-words">Provider: {[details.provider, details.model].filter(Boolean).join(" / ")}</div>}
+          {details.decision && <div className="break-words">{t("auditTelemetry.decision")}{t("interactive.tool.separator")}{t(AUDIT_DECISION_LABEL_KEYS[details.decision])}</div>}
+          {details.verifiedBlockerCount !== undefined && <div>{t("auditTelemetry.verifiedBlockers")}{t("interactive.tool.separator")}{details.verifiedBlockerCount}</div>}
+          {details.revisionAttempted !== undefined && <div>{t("auditTelemetry.revisionAttempted")}{t("interactive.tool.separator")}{details.revisionAttempted ? t("auditTelemetry.yes") : t("auditTelemetry.no")}</div>}
+          {details.revisionOutcome && <div>{t("auditTelemetry.revisionOutcome")}{t("interactive.tool.separator")}{t(REVISION_OUTCOME_LABEL_KEYS[details.revisionOutcome])}</div>}
+          {details.rejectionReason && <div className="break-words">{t("auditTelemetry.reason")}{t("interactive.tool.separator")}{details.rejectionReason}</div>}
+          {(details.provider || details.model) && <div className="break-words">{t("auditTelemetry.provider")}{t("interactive.tool.separator")}{[details.provider, details.model].filter(Boolean).join(" / ")}</div>}
         </div>
       )}
       {details.fixedIssues.length > 0 && (

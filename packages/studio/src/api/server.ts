@@ -142,6 +142,7 @@ import {
   type AgentSessionAttachment,
 } from "@actalk/inkos-core";
 import { isConfirmedProductionAction } from "../shared/confirmed-production.js";
+import type { AuditDecision, OperationPhase, OperationTelemetry } from "../shared/contracts.js";
 import { summarizeToolResult } from "../shared/tool-result.js";
 import { access, mkdir, readFile, readdir, rename, rm, stat, writeFile } from "node:fs/promises";
 import { dirname, isAbsolute, join, relative, resolve } from "node:path";
@@ -1647,6 +1648,14 @@ interface StudioBookListSummary {
 // --- Event bus for SSE ---
 
 type EventHandler = (event: string, data: unknown) => void;
+type AuditOperationEvent = OperationTelemetry & {
+  readonly bookId: string;
+  readonly chapter: number;
+  readonly operationPhase: OperationPhase;
+  readonly passed?: boolean;
+  readonly error?: string;
+  readonly code?: string;
+};
 const subscribers = new Set<EventHandler>();
 const bookCreateStatus = new Map<string, { status: "creating" | "error"; error?: string }>();
 
@@ -1700,6 +1709,19 @@ function broadcast(event: string, data: unknown): void {
   for (const handler of subscribers) {
     handler(event, data);
   }
+}
+
+function broadcastAuditOperation(
+  event: "audit:start" | "audit:complete" | "audit:error",
+  data: AuditOperationEvent,
+): void {
+  broadcast(event, data);
+}
+
+function asAuditDecision(value: unknown): AuditDecision | undefined {
+  return value === "pass" || value === "repair-required" || value === "fail" || value === "inconclusive"
+    ? value
+    : undefined;
 }
 
 type StudioCreateBookPayload = {
@@ -5517,7 +5539,9 @@ export function createStudioServer(
       throw new ApiError(400, "INVALID_CHAPTER_NUMBER", "chapter must be a positive integer.");
     }
 
-    broadcast("audit:start", { bookId: id, chapter: chapterNum, operationPhase: "auditing" });
+    // Core only exposes provenance after auditDraft settles, so start/error events
+    // deliberately omit attemptId rather than inventing a conflicting Studio ID.
+    broadcastAuditOperation("audit:start", { bookId: id, chapter: chapterNum, operationPhase: "auditing" });
     try {
       const pipelineConfig = await buildPipelineConfig({ bookIdForSettings: id });
       const pipeline = new PipelineRunner(pipelineConfig);
@@ -5525,6 +5549,7 @@ export function createStudioServer(
       const resultRecord = result as unknown as Record<string, unknown>;
       const provenance = resultRecord.provenance as Record<string, unknown> | undefined;
       const attemptId = typeof provenance?.attemptId === "string" ? provenance.attemptId : undefined;
+      const decision = asAuditDecision(resultRecord.decision);
       const verifiedBlockerCount = Array.isArray(resultRecord.issues)
         ? resultRecord.issues.filter((issue) => {
             const entry = issue as Record<string, unknown>;
@@ -5534,12 +5559,12 @@ export function createStudioServer(
       const provider = typeof (pipelineConfig.defaultLLMConfig as { readonly provider?: unknown } | undefined)?.provider === "string"
         ? (pipelineConfig.defaultLLMConfig as { readonly provider: string }).provider
         : undefined;
-      broadcast("audit:complete", {
+      broadcastAuditOperation("audit:complete", {
         bookId: id,
         chapter: chapterNum,
         operationPhase: "completed",
         passed: resultRecord.passed === true,
-        ...(typeof resultRecord.decision === "string" ? { decision: resultRecord.decision } : {}),
+        ...(decision ? { decision } : {}),
         verifiedBlockerCount,
         revisionAttempted: false,
         revisionOutcome: "not-needed",
@@ -5561,7 +5586,7 @@ export function createStudioServer(
       const details = e as { readonly code?: unknown; readonly message?: unknown };
       const code = typeof details.code === "string" ? details.code : undefined;
       const message = e instanceof Error ? e.message : String(e);
-      broadcast("audit:error", {
+      broadcastAuditOperation("audit:error", {
         bookId: id,
         chapter: chapterNum,
         operationPhase: "failed",

@@ -717,6 +717,7 @@ describe("runtime labels follow UI locale", () => {
   });
 
   it("renders revision decision and safe provider provenance in a narrow-safe telemetry block", () => {
+    setAppLanguage("en");
     const exec = makeExec({
       id: "revision-telemetry",
       tool: "sub_agent",
@@ -739,10 +740,40 @@ describe("runtime labels follow UI locale", () => {
 
     const html = renderToStaticMarkup(React.createElement(ToolExecutionSteps, { executions: [exec] }));
 
-    expect(html).toContain("Decision: inconclusive");
+    expect(html).toContain("Decision: Inconclusive");
     expect(html).toContain("Verified blockers: 2");
     expect(html).toContain("Provider: openai / gpt-5.4");
     expect(html).toContain("min-w-0");
+  });
+
+  it("localizes revision telemetry and renders whether a revision was attempted", () => {
+    setAppLanguage("vi");
+    const exec = makeExec({
+      id: "revision-telemetry-vi",
+      tool: "sub_agent",
+      agent: "reviser",
+      label: "Revise chapter",
+      details: {
+        kind: "chapter_revision",
+        chapterNumber: 1,
+        applied: false,
+        fixedIssues: [],
+        auditIssues: [],
+        decision: "inconclusive",
+        revisionAttempted: true,
+        revisionOutcome: "rejected",
+        provider: "openai",
+        model: "gpt-5.4",
+      },
+    });
+
+    const html = renderToStaticMarkup(React.createElement(ToolExecutionSteps, { executions: [exec] }));
+
+    expect(html).toContain("Quyết định: Không kết luận");
+    expect(html).toContain("Đã thử sửa: Có");
+    expect(html).toContain("Kết quả sửa: Bị từ chối");
+    expect(html).toContain("Nhà cung cấp: openai / gpt-5.4");
+    expect(html).not.toMatch(/[\u4e00-\u9fff]/);
   });
 
   it.each([

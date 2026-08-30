@@ -101,7 +101,7 @@ export type RetryClass = "transport" | "output" | "quality";
 /** Compatibility-safe payload carried by Studio audit/revision SSE events. */
 export interface OperationTelemetry {
   readonly bookId?: string;
-  readonly chapter?: number;
+  readonly chapter?: number | null;
   readonly attemptId?: string;
   readonly operationPhase?: OperationPhase;
   readonly decision?: AuditDecision;
@@ -126,7 +126,7 @@ export interface RunActionPayload {
   readonly chapterNumber?: number;
 }
 
-export interface StudioRun {
+export interface StudioRun extends OperationTelemetry {
   readonly id: string;
   readonly bookId: string;
   readonly chapter: number | null;
@@ -143,7 +143,7 @@ export interface StudioRun {
   readonly error?: string;
 }
 
-export interface RunStreamEvent {
+export interface RunStreamEvent extends OperationTelemetry {
   readonly type: "snapshot" | "status" | "stage" | "log";
   readonly runId: string;
   readonly run?: StudioRun;

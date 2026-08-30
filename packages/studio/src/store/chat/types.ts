@@ -1,4 +1,5 @@
 import type { ActionPayload, ActionSource, PlayMode, RequestedIntent, SessionKind } from "@actalk/inkos-core";
+import type { OperationTelemetry } from "../../shared/contracts";
 
 // -- Data types --
 
@@ -18,7 +19,7 @@ export interface PipelineStage {
   };
 }
 
-export interface ToolExecution {
+export interface ToolExecution extends OperationTelemetry {
   id: string;
   tool: string;
   agent?: string;

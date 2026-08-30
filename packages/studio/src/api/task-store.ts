@@ -1,10 +1,11 @@
 import { mkdir, readFile, unlink, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import type { RequestedIntent } from "@actalk/inkos-core";
+import type { AuditDecision, OperationPhase, OperationTelemetry, RevisionOutcome, RetryClass } from "../shared/contracts.js";
 
 export type StudioTaskExecutionStatus = "running" | "processing" | "completed" | "error";
 
-export interface StudioTaskExecution {
+export interface StudioTaskExecution extends OperationTelemetry {
   readonly id: string;
   readonly tool: string;
   readonly agent?: string;
@@ -51,6 +52,37 @@ function isExecutionStatus(value: unknown): value is StudioTaskExecutionStatus {
   return value === "running" || value === "processing" || value === "completed" || value === "error";
 }
 
+function isOperationPhase(value: unknown): value is OperationPhase {
+  return value === "writing" || value === "auditing" || value === "revising" || value === "re-auditing" || value === "persisting" || value === "completed" || value === "failed";
+}
+
+function isAuditDecision(value: unknown): value is AuditDecision {
+  return value === "pass" || value === "repair-required" || value === "fail" || value === "inconclusive";
+}
+
+function isRevisionOutcome(value: unknown): value is RevisionOutcome {
+  return value === "not-needed" || value === "accepted" || value === "rejected" || value === "inconclusive";
+}
+
+function isRetryClass(value: unknown): value is RetryClass {
+  return value === "transport" || value === "output" || value === "quality";
+}
+
+function hasValidOperationTelemetry(execution: Record<string, unknown>): boolean {
+  return (execution.bookId === undefined || typeof execution.bookId === "string")
+    && (execution.chapter === undefined || execution.chapter === null || (typeof execution.chapter === "number" && Number.isInteger(execution.chapter) && execution.chapter > 0))
+    && (execution.attemptId === undefined || typeof execution.attemptId === "string")
+    && (execution.operationPhase === undefined || isOperationPhase(execution.operationPhase))
+    && (execution.decision === undefined || isAuditDecision(execution.decision))
+    && (execution.verifiedBlockerCount === undefined || (typeof execution.verifiedBlockerCount === "number" && Number.isInteger(execution.verifiedBlockerCount) && execution.verifiedBlockerCount >= 0))
+    && (execution.revisionAttempted === undefined || typeof execution.revisionAttempted === "boolean")
+    && (execution.revisionOutcome === undefined || isRevisionOutcome(execution.revisionOutcome))
+    && (execution.rejectionReason === undefined || typeof execution.rejectionReason === "string")
+    && (execution.retryClass === undefined || isRetryClass(execution.retryClass))
+    && (execution.provider === undefined || typeof execution.provider === "string")
+    && (execution.model === undefined || typeof execution.model === "string");
+}
+
 function parseStudioTaskSnapshot(value: unknown): StudioTaskSnapshot | null {
   if (!isRecord(value) || value.version !== 1) return null;
   if (typeof value.sessionId !== "string" || typeof value.requestedIntent !== "string") return null;
@@ -69,6 +101,7 @@ function parseStudioTaskSnapshot(value: unknown): StudioTaskSnapshot | null {
   if (execution.logs !== undefined && (!Array.isArray(execution.logs) || execution.logs.some((log) => typeof log !== "string"))) {
     return null;
   }
+  if (!hasValidOperationTelemetry(execution)) return null;
 
   return value as unknown as StudioTaskSnapshot;
 }

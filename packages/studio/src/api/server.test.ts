@@ -824,6 +824,61 @@ describe("createStudioServer daemon lifecycle", () => {
     });
   });
 
+  it("broadcasts the Core attempt only after auditDraft returns provenance", async () => {
+    const { createStudioServer } = await import("./server.js");
+    const app = createStudioServer(cloneProjectConfig() as never, root);
+    const response = await app.request("http://localhost/api/v1/events");
+    const reader = response.body!.getReader();
+    const events: Array<{ event: string; data: Record<string, unknown> | null }> = [];
+    const pump = (async () => {
+      const decoder = new TextDecoder();
+      let buffer = "";
+      try {
+        for (;;) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          buffer += decoder.decode(value, { stream: true });
+          let frameEnd = buffer.indexOf("\n\n");
+          while (frameEnd !== -1) {
+            const lines = buffer.slice(0, frameEnd).split("\n");
+            buffer = buffer.slice(frameEnd + 2);
+            const eventName = lines.find((line) => line.startsWith("event:"))?.slice("event:".length).trim();
+            const dataRaw = lines.find((line) => line.startsWith("data:"))?.slice("data:".length).trim();
+            if (eventName) events.push({ event: eventName, data: dataRaw ? JSON.parse(dataRaw) as Record<string, unknown> : null });
+            frameEnd = buffer.indexOf("\n\n");
+          }
+        }
+      } catch {
+        // Cancelling the test SSE stream interrupts the pending reader by design.
+      }
+    })();
+
+    try {
+      await vi.waitFor(() => expect(events.some((entry) => entry.event === "ping")).toBe(true));
+      await app.request("http://localhost/api/v1/books/demo-book/audit/3", { method: "POST" });
+      auditDraftMock.mockRejectedValueOnce(new Error("audit transport failed"));
+      await app.request("http://localhost/api/v1/books/demo-book/audit/3", { method: "POST" });
+
+      await vi.waitFor(() => expect(events.some((entry) => entry.event === "audit:error")).toBe(true));
+      expect(events.find((entry) => entry.event === "audit:start")?.data).toMatchObject({
+        bookId: "demo-book",
+        chapter: 3,
+        operationPhase: "auditing",
+      });
+      expect(events.find((entry) => entry.event === "audit:start")?.data?.attemptId).toBeUndefined();
+      expect(events.find((entry) => entry.event === "audit:complete")?.data).toMatchObject({
+        bookId: "demo-book",
+        chapter: 3,
+        operationPhase: "completed",
+        attemptId: "core-attempt-1",
+      });
+      expect(events.find((entry) => entry.event === "audit:error")?.data?.attemptId).toBeUndefined();
+    } finally {
+      await reader.cancel();
+      await pump;
+    }
+  });
+
   it("returns fail and inconclusive Core audit decisions without converting them to success", async () => {
     const { createStudioServer } = await import("./server.js");
     const app = createStudioServer(cloneProjectConfig() as never, root);
