@@ -3,6 +3,20 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { PipelineRunner, type ChapterPipelineResult } from "../pipeline/runner.js";
+import type { BookConfig } from "../models/book.js";
+
+const BATCH_BOOK: BookConfig = {
+  id: "demo-book",
+  title: "Batch fixture",
+  genre: "urban",
+  platform: "qidian",
+  status: "active",
+  language: "zh",
+  targetChapters: 20,
+  chapterWordCount: 1800,
+  createdAt: "2026-01-01T00:00:00.000Z",
+  updatedAt: "2026-01-01T00:00:00.000Z",
+};
 
 function chapter(
   chapterNumber: number,
@@ -47,10 +61,18 @@ describe("PipelineRunner.writeChapters", () => {
       .mockResolvedValueOnce(chapter(5));
     const onChapterComplete = vi.fn();
     const internals = runner as unknown as {
-      state: { acquireBookLock: typeof acquireBookLock };
+      state: {
+        acquireBookLock: typeof acquireBookLock;
+        loadBookConfig: () => Promise<BookConfig>;
+        bookDir: (bookId: string) => string;
+      };
       _writeNextChapterLocked: typeof writeLocked;
     };
-    internals.state = { acquireBookLock };
+    internals.state = {
+      acquireBookLock,
+      loadBookConfig: async () => BATCH_BOOK,
+      bookDir: () => root,
+    };
     internals._writeNextChapterLocked = writeLocked;
 
     const results = await runner.writeChapters("demo-book", 3, { onChapterComplete });
@@ -77,10 +99,18 @@ describe("PipelineRunner.writeChapters", () => {
       .mockResolvedValueOnce(chapter(8, "audit-failed"))
       .mockResolvedValueOnce(chapter(9));
     const internals = runner as unknown as {
-      state: { acquireBookLock: () => Promise<typeof release> };
+      state: {
+        acquireBookLock: () => Promise<typeof release>;
+        loadBookConfig: () => Promise<BookConfig>;
+        bookDir: (bookId: string) => string;
+      };
       _writeNextChapterLocked: typeof writeLocked;
     };
-    internals.state = { acquireBookLock: async () => release };
+    internals.state = {
+      acquireBookLock: async () => release,
+      loadBookConfig: async () => BATCH_BOOK,
+      bookDir: () => root,
+    };
     internals._writeNextChapterLocked = writeLocked;
 
     const results = await runner.writeChapters("demo-book", 5);
@@ -106,10 +136,18 @@ describe("PipelineRunner.writeChapters", () => {
       controller.signal.addEventListener("abort", () => reject(controller.signal.reason), { once: true });
     }));
     const internals = runner as unknown as {
-      state: { acquireBookLock: typeof acquireBookLock };
+      state: {
+        acquireBookLock: typeof acquireBookLock;
+        loadBookConfig: () => Promise<BookConfig>;
+        bookDir: (bookId: string) => string;
+      };
       _writeNextChapterLocked: typeof writeLocked;
     };
-    internals.state = { acquireBookLock };
+    internals.state = {
+      acquireBookLock,
+      loadBookConfig: async () => BATCH_BOOK,
+      bookDir: () => root,
+    };
     internals._writeNextChapterLocked = writeLocked;
 
     const pending = runner.runWithAbortSignal(
