@@ -3,6 +3,9 @@ import type { AssistantMessage, Model, Api } from "@mariozechner/pi-ai";
 import {
   __resetFixedTemperatureWarnings,
   chatCompletion,
+  ContextWindowExceededError,
+  LLMError,
+  normalizeLLMError,
   type LLMClient,
 } from "../llm/provider.js";
 import { runWithAgentTrajectory } from "../llm/agent-trajectory.js";
@@ -229,6 +232,7 @@ describe("chatCompletion via pi-ai", () => {
     const result = await chatCompletion(client, "test-model", [{ role: "user", content: "ping" }]);
 
     expect(result.content).toBe("recovered");
+    expect(result.retryCounts).toEqual({ transport: 1, output: 0, quality: 0 });
     expect(mockStreamSimple).toHaveBeenCalledTimes(2);
   });
 
@@ -355,6 +359,22 @@ describe("chatCompletion via pi-ai", () => {
     expect(mockStreamSimple).not.toHaveBeenCalled();
   });
 
+  it("does not accept pi-ai non-stream output marked as an error", async () => {
+    mockCompleteSimple.mockResolvedValue({
+      ...makeAssistantMessage("partial before provider error"),
+      stopReason: "error",
+      errorMessage: "upstream response interrupted",
+    });
+
+    const error = await captureError(chatCompletion(makeClient(0.7, { stream: false }), "test-model", [
+      { role: "user", content: "ping" },
+    ], { retry: false }));
+
+    expect(error).toBeInstanceOf(LLMError);
+    expect((error as LLMError).errorClass).toBe("transport");
+    expect(error).toBeInstanceOf(Error);
+  });
+
   it("uses native fetch transport for custom openai-compatible chat", async () => {
     const fetchMock = vi.fn().mockResolvedValue({
       ok: true,
@@ -381,6 +401,91 @@ describe("chatCompletion via pi-ai", () => {
     expect(mockCompleteSimple).not.toHaveBeenCalled();
     expect(mockStreamSimple).not.toHaveBeenCalled();
 
+    vi.unstubAllGlobals();
+  });
+
+  it("normalizes OpenAI chat metadata without exposing provider-specific payload fields", async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      headers: new Headers({ "x-request-id": "req-chat-1" }),
+      json: async () => ({
+        id: "chatcmpl-1",
+        choices: [{ message: { content: "metadata ok" }, finish_reason: "stop" }],
+        usage: {
+          prompt_tokens: 10,
+          completion_tokens: 7,
+          total_tokens: 17,
+          prompt_tokens_details: { cached_tokens: 3 },
+          completion_tokens_details: { reasoning_tokens: 4 },
+          provider_private_field: "must-not-flow",
+        },
+        provider_private_field: "must-not-flow",
+      }),
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const result = await chatCompletion(makeClient(0.7, {
+      service: "custom",
+      stream: false,
+      _piModel: { ...MOCK_PI_MODEL, baseUrl: "https://gateway.example/v1" },
+    }), "gpt-compatible", [{ role: "user", content: "ping" }]);
+
+    expect(result).toMatchObject({
+      content: "metadata ok",
+      finishReason: "stop",
+      responseId: "chatcmpl-1",
+      cachedInputTokens: 3,
+      reasoningTokens: 4,
+      providerRequestId: "req-chat-1",
+    });
+    expect(result).not.toHaveProperty("provider_private_field");
+    vi.unstubAllGlobals();
+  });
+
+  it("normalizes OpenAI Responses metadata and tolerates missing metadata", async () => {
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce({
+        ok: true,
+        headers: new Headers({ "request-id": "req-response-1" }),
+        json: async () => ({
+          id: "resp-1",
+          status: "completed",
+          output: [{ content: [{ type: "output_text", text: "response ok" }] }],
+          usage: {
+            input_tokens: 8,
+            output_tokens: 5,
+            total_tokens: 13,
+            input_tokens_details: { cached_tokens: 2 },
+            output_tokens_details: { reasoning_tokens: 1 },
+          },
+        }),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          output: [{ content: [{ type: "output_text", text: "minimal response" }] }],
+        }),
+      });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const client = makeClient(0.7, {
+      service: "custom",
+      apiFormat: "responses",
+      stream: false,
+      _piModel: { ...MOCK_PI_MODEL, api: "openai-responses" as Api, baseUrl: "https://gateway.example/v1" },
+    });
+    const first = await chatCompletion(client, "responses-model", [{ role: "user", content: "ping" }]);
+    const second = await chatCompletion(client, "responses-model", [{ role: "user", content: "ping" }]);
+
+    expect(first).toMatchObject({
+      finishReason: "completed",
+      responseId: "resp-1",
+      cachedInputTokens: 2,
+      reasoningTokens: 1,
+      providerRequestId: "req-response-1",
+    });
+    expect(second).not.toHaveProperty("finishReason");
+    expect(second).not.toHaveProperty("responseId");
     vi.unstubAllGlobals();
   });
 
@@ -881,6 +986,214 @@ describe("chatCompletion via pi-ai", () => {
     expect(mockStreamSimple).not.toHaveBeenCalled();
 
     vi.unstubAllGlobals();
+  });
+
+  it("retries reasoning-only output at most once and reports separated retry counters", async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        choices: [{ message: { reasoning_content: "reasoning only" } }],
+      }),
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const error = await captureError(chatCompletion(makeClient(0.7, {
+      service: "custom",
+      stream: false,
+      _piModel: { ...MOCK_PI_MODEL, baseUrl: "https://gateway.example/v1" },
+    }), "reasoning-model", [{ role: "user", content: "ping" }]));
+
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(error).toBeInstanceOf(LLMError);
+    expect((error as LLMError).errorClass).toBe("reasoning-without-final");
+    expect((error as LLMError).retryCounts).toEqual({ transport: 0, output: 1, quality: 0 });
+    vi.unstubAllGlobals();
+  });
+
+  it("classifies context, parse, policy, rate-limit, and transport failures without retaining raw secrets", () => {
+    expect(normalizeLLMError(new ContextWindowExceededError({
+      estimatedInputTokens: 100,
+      reservedOutputTokens: 20,
+      contextWindow: 80,
+      model: "model",
+    })).errorClass).toBe("context-limit");
+    expect(normalizeLLMError(new SyntaxError("Unexpected token in structured JSON output")).errorClass)
+      .toBe("output-parse");
+    expect(normalizeLLMError(new Error("content policy safety block")).errorClass).toBe("policy-block");
+    expect(normalizeLLMError(new Error("429 Too Many Requests")).errorClass).toBe("rate-limit");
+    expect(normalizeLLMError(new Error("fetch failed: ECONNRESET")).errorClass).toBe("transport");
+
+    const secret = normalizeLLMError(new Error("Authorization: Bearer sk-secret-should-not-leak"));
+    expect(secret.message).not.toContain("sk-secret-should-not-leak");
+  });
+
+  it("classifies malformed structured JSON from a provider as output-parse", async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => {
+        throw new SyntaxError("Unexpected token } in JSON at position 9");
+      },
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const error = await captureError(chatCompletion(makeClient(0.7, {
+      service: "custom",
+      stream: false,
+      _piModel: { ...MOCK_PI_MODEL, baseUrl: "https://gateway.example/v1" },
+    }), "structured-model", [{ role: "user", content: "return structured data" }], { retry: false }));
+
+    expect(error).toBeInstanceOf(LLMError);
+    expect((error as LLMError).errorClass).toBe("output-parse");
+    expect(error.message).not.toContain("Unexpected token");
+    vi.unstubAllGlobals();
+  });
+
+  it("normalizes Anthropic message metadata and request id", async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      headers: new Headers({ "request-id": "req-anthropic-1" }),
+      json: async () => ({
+        id: "msg-1",
+        stop_reason: "end_turn",
+        content: [{ type: "text", text: "anthropic metadata" }],
+        usage: {
+          input_tokens: 9,
+          output_tokens: 6,
+          cache_read_input_tokens: 2,
+          cache_creation_input_tokens: 1,
+        },
+      }),
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const result = await chatCompletion(makeClient(0.7, {
+      provider: "anthropic",
+      service: "custom",
+      stream: false,
+      _piModel: {
+        ...MOCK_PI_MODEL,
+        provider: "anthropic",
+        api: "anthropic-messages" as Api,
+        baseUrl: "https://gateway.example",
+      },
+    }), "claude-compatible", [{ role: "user", content: "ping" }]);
+
+    expect(result).toMatchObject({
+      finishReason: "end_turn",
+      responseId: "msg-1",
+      cachedInputTokens: 2,
+      providerRequestId: "req-anthropic-1",
+    });
+    expect(result).not.toHaveProperty("cache_creation_input_tokens");
+    vi.unstubAllGlobals();
+  });
+
+  it("does not return an Anthropic max-token response as successful prose", async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        id: "msg-partial",
+        stop_reason: "max_tokens",
+        content: [{ type: "text", text: "truncated" }],
+        usage: { input_tokens: 9, output_tokens: 6 },
+      }),
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const error = await captureError(chatCompletion(makeClient(0.7, {
+      provider: "anthropic",
+      service: "custom",
+      stream: false,
+      _piModel: {
+        ...MOCK_PI_MODEL,
+        provider: "anthropic",
+        api: "anthropic-messages" as Api,
+        baseUrl: "https://gateway.example",
+      },
+    }), "claude-compatible", [{ role: "user", content: "ping" }], { retry: false }));
+
+    expect(error).toBeInstanceOf(LLMError);
+    expect((error as LLMError).errorClass).toBe("output-limit");
+    expect(fetchMock).toHaveBeenCalledOnce();
+    vi.unstubAllGlobals();
+  });
+
+  it("does not return an incomplete OpenAI Responses output as successful prose", async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        id: "resp-partial",
+        status: "incomplete",
+        incomplete_details: { reason: "max_output_tokens" },
+        output: [{ content: [{ type: "output_text", text: "truncated" }] }],
+        usage: { input_tokens: 8, output_tokens: 5, total_tokens: 13 },
+      }),
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const error = await captureError(chatCompletion(makeClient(0.7, {
+      service: "custom",
+      apiFormat: "responses",
+      stream: false,
+      _piModel: { ...MOCK_PI_MODEL, api: "openai-responses" as Api, baseUrl: "https://gateway.example/v1" },
+    }), "responses-model", [{ role: "user", content: "ping" }], { retry: false }));
+
+    expect(error).toBeInstanceOf(LLMError);
+    expect((error as LLMError).errorClass).toBe("output-limit");
+    expect(fetchMock).toHaveBeenCalledOnce();
+    vi.unstubAllGlobals();
+  });
+
+  it("rejects an OpenAI Responses incomplete output even when the reason is not length", async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        id: "resp-filtered",
+        status: "incomplete",
+        incomplete_details: { reason: "content_filter" },
+        output: [{ content: [{ type: "output_text", text: "partial" }] }],
+        usage: { input_tokens: 8, output_tokens: 5, total_tokens: 13 },
+      }),
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const error = await captureError(chatCompletion(makeClient(0.7, {
+      service: "custom",
+      apiFormat: "responses",
+      stream: false,
+      _piModel: { ...MOCK_PI_MODEL, api: "openai-responses" as Api, baseUrl: "https://gateway.example/v1" },
+    }), "responses-model", [{ role: "user", content: "ping" }], { retry: false }));
+
+    expect(error).toBeInstanceOf(LLMError);
+    expect((error as LLMError).errorClass).toBe("transport");
+    expect(fetchMock).toHaveBeenCalledOnce();
+    vi.unstubAllGlobals();
+  });
+
+  it("normalizes metadata from the Google-compatible pi-ai assistant message", async () => {
+    mockCompleteSimple.mockResolvedValue({
+      ...makeAssistantMessage("google metadata"),
+      api: "google-generative-ai",
+      provider: "google",
+      responseId: "google-response-1",
+      usage: { ...MOCK_USAGE, cacheRead: 5 },
+    });
+
+    const result = await chatCompletion(makeClient(0.7, {
+      service: "google",
+      stream: false,
+      _piModel: {
+        ...MOCK_PI_MODEL,
+        api: "google-generative-ai" as Api,
+        provider: "google",
+      },
+    }), "gemini-compatible", [{ role: "user", content: "ping" }]);
+
+    expect(result).toMatchObject({
+      finishReason: "stop",
+      responseId: "google-response-1",
+      cachedInputTokens: 5,
+    });
   });
 
   it("uses native fetch transport for custom anthropic-compatible stream chat", async () => {

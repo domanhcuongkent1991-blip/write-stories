@@ -264,7 +264,77 @@ export interface LLMResponse {
     readonly completionTokens: number;
     readonly totalTokens: number;
   };
+  readonly finishReason?: string;
+  readonly responseId?: string;
+  readonly cachedInputTokens?: number;
+  readonly reasoningTokens?: number;
+  readonly providerRequestId?: string;
+  readonly retryCounts?: LLMRetryCounts;
 }
+
+export type LLMErrorClass =
+  | "transport"
+  | "rate-limit"
+  | "auth"
+  | "context-limit"
+  | "output-limit"
+  | "output-parse"
+  | "reasoning-without-final"
+  | "policy-block"
+  | "unknown";
+
+export interface LLMRetryCounts {
+  readonly transport: number;
+  readonly output: number;
+  readonly quality: number;
+}
+
+const EMPTY_RETRY_COUNTS: LLMRetryCounts = { transport: 0, output: 0, quality: 0 };
+
+function canonicalErrorCode(errorClass: LLMErrorClass): string {
+  return `LLM_${errorClass.toUpperCase().replaceAll("-", "_")}`;
+}
+
+function redactSensitiveErrorText(value: string): string {
+  return value
+    .replace(/(authorization|proxy-authorization|x-api-key|api[-_ ]?key)\s*[:=]\s*[^\s,;]+/giu, "$1: [redacted]")
+    .replace(/\bBearer\s+[A-Za-z0-9._~+/=-]+/giu, "Bearer [redacted]")
+    .replace(/\bsk-[A-Za-z0-9_-]{8,}\b/gu, "[redacted]");
+}
+
+export class LLMError extends Error {
+  readonly errorClass: LLMErrorClass;
+  readonly retryable: boolean;
+  readonly status?: number;
+  readonly code: string;
+  retryCounts: LLMRetryCounts;
+
+  constructor(
+    message: string,
+    errorClass: LLMErrorClass,
+    options?: {
+      readonly name?: string;
+      readonly code?: string;
+      readonly status?: number;
+      readonly retryable?: boolean;
+      readonly retryCounts?: LLMRetryCounts;
+    },
+  ) {
+    super(redactSensitiveErrorText(message));
+    this.name = options?.name ?? "LLMError";
+    this.errorClass = errorClass;
+    this.retryable = options?.retryable ?? (errorClass === "transport"
+      || errorClass === "rate-limit"
+      || errorClass === "output-limit"
+      || errorClass === "reasoning-without-final");
+    this.status = options?.status;
+    this.code = options?.code ?? canonicalErrorCode(errorClass);
+    this.retryCounts = options?.retryCounts ?? EMPTY_RETRY_COUNTS;
+  }
+}
+
+/** Backward-compatible name for embedders that call provider failures LLMProviderError. */
+export { LLMError as LLMProviderError };
 
 export interface LLMMessage {
   readonly role: "system" | "user" | "assistant";
@@ -415,7 +485,7 @@ function parseEnvHeaders(): Record<string, string> | undefined {
 // 重试耗尽后如实抛错。绝不把半截内容当成功返回（那会产出写到一半就
 // 结束的章节/设定文件）。partialContent 仅用于错误诊断。
 
-export class PartialResponseError extends Error {
+export class PartialResponseError extends LLMError {
   readonly partialContent: string;
   readonly reason: "output-limit" | "interrupted";
 
@@ -424,14 +494,17 @@ export class PartialResponseError extends Error {
     cause: unknown,
     reason: "output-limit" | "interrupted" = "interrupted",
   ) {
-    super(`Stream interrupted after ${partialContent.length} chars: ${String(cause)}`);
-    this.name = "PartialResponseError";
+    super(
+      `Stream interrupted after ${partialContent.length} chars: ${String(cause)}`,
+      reason === "output-limit" ? "output-limit" : "transport",
+      { name: "PartialResponseError" },
+    );
     this.partialContent = partialContent;
     this.reason = reason;
   }
 }
 
-export class ContextWindowExceededError extends Error {
+export class ContextWindowExceededError extends LLMError {
   readonly estimatedInputTokens: number;
   readonly reservedOutputTokens: number;
   readonly contextWindow: number;
@@ -447,8 +520,9 @@ export class ContextWindowExceededError extends Error {
       `reserved output ${params.reservedOutputTokens} tokens exceeds context window ${params.contextWindow} ` +
       `for model "${params.model}". Please compress the active book/session context before retrying; ` +
       `InkOS will not truncate semantic text automatically.`,
+      "context-limit",
+      { name: "ContextWindowExceededError" },
     );
-    this.name = "ContextWindowExceededError";
     this.estimatedInputTokens = params.estimatedInputTokens;
     this.reservedOutputTokens = params.reservedOutputTokens;
     this.contextWindow = params.contextWindow;
@@ -596,92 +670,180 @@ export function assertWithinContextWindow(params: {
 
 // === Error Wrapping ===
 
-function wrapLLMError(error: unknown, context?: { readonly baseUrl?: string; readonly model?: string; readonly service?: string }): Error {
-  const msg = String(error);
-  const ctxLine = context
-    ? `\n  (baseUrl: ${context.baseUrl}, model: ${context.model})`
-    : "";
+function errorStatus(error: unknown): number | undefined {
+  if (error && typeof error === "object") {
+    const status = (error as { readonly status?: unknown }).status;
+    if (typeof status === "number" && Number.isInteger(status)) return status;
+    const responseStatus = (error as { readonly response?: { readonly status?: unknown } }).response?.status;
+    if (typeof responseStatus === "number" && Number.isInteger(responseStatus)) return responseStatus;
+  }
+  const match = collectErrorText(error).match(/\b([1-5]\d{2})\b/u);
+  return match ? Number(match[1]) : undefined;
+}
 
+function errorCode(error: unknown): string | undefined {
+  if (!error || typeof error !== "object") return undefined;
+  const code = (error as { readonly code?: unknown }).code;
+  if (typeof code !== "string" && typeof code !== "number") return undefined;
+  const normalized = String(code);
+  return /^[A-Za-z0-9_.:-]{1,64}$/u.test(normalized) ? normalized : undefined;
+}
+
+function safeContextValue(value: string | undefined): string {
+  if (!value) return "unknown";
+  return redactSensitiveErrorText(value)
+    .replace(/([?&](?:api[-_]?key|token|secret)=)[^&\s]+/giu, "$1[redacted]");
+}
+
+export function classifyLLMError(error: unknown): LLMErrorClass {
+  if (error instanceof ContextWindowExceededError) return "context-limit";
+  if (error instanceof PartialResponseError) {
+    return error.reason === "output-limit" ? "output-limit" : "transport";
+  }
+  if (error instanceof LLMError) return error.errorClass;
+
+  const text = collectErrorText(error).toLowerCase();
+  const status = errorStatus(error);
+  if (
+    text.includes("reasoning without a final")
+    || text.includes("reasoning-only")
+    || text.includes("reasoning only")
+    || text.includes("thinking without")
+  ) return "reasoning-without-final";
+  if (
+    text.includes("context window")
+    || text.includes("context length")
+    || text.includes("context_length")
+    || text.includes("maximum context")
+    || text.includes("maximum_tokens")
+    || text.includes("too many tokens")
+    || text.includes("prompt is too long")
+  ) return "context-limit";
+  if (
+    text.includes("output limit")
+    || text.includes("max_tokens")
+    || text.includes("max output")
+    || text.includes("output_limit")
+    || text.includes("incomplete response")
+    || text.includes("partialresponseerror")
+  ) return "output-limit";
+  if (
+    text.includes("unexpected token")
+    || text.includes("unexpected end of json")
+    || text.includes("invalid json")
+    || text.includes("malformed json")
+    || text.includes("structured output")
+    || text.includes("schema validation")
+    || text.includes("tool call") && text.includes("invalid")
+  ) return "output-parse";
+  if (
+    text.includes("content policy")
+    || text.includes("policy block")
+    || text.includes("safety block")
+    || text.includes("moderation")
+    || text.includes("content filter")
+    || text.includes("blocked by policy")
+    || text.includes("blocked") && text.includes("safety")
+  ) return "policy-block";
+  if (status === 429 || text.includes("rate limit") || text.includes("too many requests")) return "rate-limit";
+  if (status === 401 || status === 403 || text.includes("unauthorized") || text.includes("forbidden")) return "auth";
+  if (status === 502 || status === 503 || status === 504) return "transport";
+  if (
+    text.includes("connection error")
+    || text.includes("econnrefused")
+    || text.includes("enotfound")
+    || text.includes("fetch failed")
+    || text.includes("terminated")
+    || text.includes("und_err_socket")
+    || text.includes("econnreset")
+    || text.includes("etimedout")
+    || text.includes("epipe")
+    || text.includes("socket hang up")
+    || text.includes("service unavailable")
+    || text.includes("bad gateway")
+    || text.includes("gateway timeout")
+    || text.includes("overloaded")
+    || text.includes("temporarily unavailable")
+    || text.includes("stream produced no event")
+    || text.includes("stream produced no new event")
+  ) return "transport";
+  return "unknown";
+}
+
+function friendlyLLMErrorMessage(
+  error: unknown,
+  errorClass: LLMErrorClass,
+  context?: { readonly baseUrl?: string; readonly model?: string; readonly service?: string },
+): string {
+  const msg = collectErrorText(error);
+  const ctxLine = context
+    ? `\n  (baseUrl: ${safeContextValue(context.baseUrl)}, model: ${safeContextValue(context.model)})`
+    : "";
+  if (error instanceof LLMStreamInactivityError) return error.message;
   if (msg.includes("400")) {
-    // 抽上游 error body 的 message / reason / code（和下方 5xx 一致），让真实错因浮到用户面前
     let detail = "";
     if (error && typeof error === "object") {
-      const err = error as { error?: unknown; body?: unknown; message?: string };
+      const err = error as { error?: unknown; body?: unknown };
       const bodyLike = err.error ?? err.body;
       if (bodyLike && typeof bodyLike === "object") {
-        const b = bodyLike as { reason?: string; message?: string; code?: number | string; type?: string };
+        const b = bodyLike as { reason?: string; message?: string; type?: string };
         if (b.message) detail = b.type ? `${b.type}: ${b.message}` : b.message;
         else if (b.reason) detail = b.reason;
       }
     }
-    return new Error(
-      `API 返回 400（请求参数错误）。${detail ? `上游详情：${detail}。\n` : ""}` +
+    return `API 返回 400（请求参数错误）。${detail ? `上游详情：${redactSensitiveErrorText(detail)}。\n` : ""}` +
       `常见原因：\n` +
       `  1. temperature / max_tokens 超出模型约束（如 Moonshot kimi-k2.X 强制 temperature=1）\n` +
       `  2. 模型名称不正确或未上架\n` +
-      `  3. 消息格式不兼容（部分服务不支持 system role 或 developer role）${ctxLine}`,
-    );
+      `  3. 消息格式不兼容（部分服务不支持 system role 或 developer role）${ctxLine}`;
   }
   if (msg.includes("403")) {
-    return new Error(
-      `API 返回 403 (请求被拒绝)。可能原因：\n` +
+    return `API 返回 403 (请求被拒绝)。可能原因：\n` +
       `  1. API Key 无效或过期\n` +
       `  2. API 提供方的内容审查拦截了请求（公益/免费 API 常见）\n` +
       `  3. 账户余额不足\n` +
-      `  建议：用 inkos doctor 测试 API 连通性，或换一个不限制内容的 API 提供方${ctxLine}`,
-    );
+      `  建议：用 inkos doctor 测试 API 连通性，或换一个不限制内容的 API 提供方${ctxLine}`;
   }
   if (msg.includes("401")) {
-    return new Error(
-      `API 返回 401 (未授权)。请检查 .env 中的 INKOS_LLM_API_KEY 是否正确。${ctxLine}`,
-    );
+    return `API 返回 401 (未授权)。请检查 .env 中的 INKOS_LLM_API_KEY 是否正确。${ctxLine}`;
   }
   if (msg.includes("429")) {
-    return new Error(
-      `API 返回 429 (请求过多)。请稍后重试，或检查 API 配额。${ctxLine}`,
-    );
+    return `API 返回 429 (请求过多)。请稍后重试，或检查 API 配额。${ctxLine}`;
   }
-  if (
-    msg.includes("Connection error")
-    || msg.includes("ECONNREFUSED")
-    || msg.includes("ENOTFOUND")
-    || msg.includes("fetch failed")
-    || msg.includes("terminated")
-    || msg.includes("UND_ERR_SOCKET")
-    || msg.includes("ECONNRESET")
-    || msg.includes("ETIMEDOUT")
-    || msg.includes("EPIPE")
-  ) {
-    return new Error(
-      `无法连接到 API 服务。可能原因：\n` +
-      `  1. baseUrl 地址不正确（当前：${context?.baseUrl ?? "未知"}）\n` +
+  if (errorClass === "transport") {
+    return `无法连接到 API 服务。可能原因：\n` +
+      `  1. baseUrl 地址不正确（当前：${safeContextValue(context?.baseUrl)}）\n` +
       `  2. 网络不通或被防火墙拦截\n` +
       `  3. API 服务暂时不可用\n` +
-      `  建议：检查 INKOS_LLM_BASE_URL 是否包含完整路径（如 /v1）`,
-    );
+      `  建议：检查 INKOS_LLM_BASE_URL 是否包含完整路径（如 /v1）`;
   }
-  // R4 Bug 2: 5xx "status code (no body)" — 尝试从 OpenAI SDK APIError 里抽 body 给用户看具体原因
-  // （如 PPIO 的 {"code":500,"reason":"MODEL_NOT_AVAILABLE","message":"model not available"}）
   if (msg.includes("status code") && msg.includes("no body")) {
-    let detail = "";
-    if (error && typeof error === "object") {
-      const err = error as { error?: unknown; body?: unknown; message?: string };
-      const bodyLike = err.error ?? err.body;
-      if (bodyLike && typeof bodyLike === "object") {
-        const b = bodyLike as { reason?: string; message?: string; code?: number | string };
-        if (b.reason) detail = `${b.reason}${b.message ? `: ${b.message}` : ""}`;
-        else if (b.message) detail = b.message;
-      }
-    }
-    return new Error(
-      `API 返回 5xx（上游服务异常）。${detail ? `上游详情：${detail}。` : ""}\n` +
-      `可能原因：\n` +
-      `  1. 模型在 /models 列表但 inference 未上架（如 PPIO 返回 MODEL_NOT_AVAILABLE）\n` +
-      `  2. 服务端临时故障，稍后重试\n` +
-      `  3. 当前 apikey 无权限调用该模型${ctxLine}`,
-    );
+    return `API 返回 5xx（上游服务异常）。\n` +
+      `可能原因：模型暂时不可用或服务端故障，请稍后重试${ctxLine}`;
   }
-  return error instanceof Error ? error : new Error(msg);
+  if (errorClass === "context-limit") return redactSensitiveErrorText(msg);
+  if (errorClass === "output-parse") return `LLM structured output could not be parsed.${ctxLine}`;
+  if (errorClass === "reasoning-without-final") return `LLM returned reasoning without a final answer.${ctxLine}`;
+  if (errorClass === "output-limit") return `LLM output reached its limit; partial content was discarded.${ctxLine}`;
+  if (errorClass === "policy-block") return `LLM request was blocked by provider policy.${ctxLine}`;
+  return redactSensitiveErrorText(error instanceof Error ? error.message : String(error));
+}
+
+export function normalizeLLMError(
+  error: unknown,
+  context?: { readonly baseUrl?: string; readonly model?: string; readonly service?: string },
+): LLMError {
+  if (error instanceof LLMError) return error;
+  const errorClass = classifyLLMError(error);
+  return new LLMError(friendlyLLMErrorMessage(error, errorClass, context), errorClass, {
+    code: errorCode(error) ?? canonicalErrorCode(errorClass),
+    status: errorStatus(error),
+    name: error instanceof Error && error.name !== "Error" ? error.name : "LLMError",
+  });
+}
+
+function wrapLLMError(error: unknown, context?: { readonly baseUrl?: string; readonly model?: string; readonly service?: string }): LLMError {
+  return normalizeLLMError(error, context);
 }
 
 function collectErrorText(error: unknown, depth = 0): string {
@@ -752,38 +914,84 @@ function isIncompleteLLMResponseError(error: unknown): boolean {
 }
 
 function isRetryableLLMError(error: unknown): boolean {
-  // PartialResponseError = 流在生成中途被掐断（网关切长连接等）。重试会完整
-  // 重新生成一次，比把半截内容当成功交付（截断的章节/设定文件）要正确。
-  return error instanceof PartialResponseError
-    || isIncompleteLLMResponseError(error)
+  const errorClass = classifyLLMError(error);
+  return errorClass === "transport"
+    || errorClass === "rate-limit"
+    || errorClass === "output-limit"
+    || errorClass === "reasoning-without-final"
     || isTransientLLMTransportError(error)
     || isTransientLLMHttpError(error);
+}
+
+const RETRY_COUNTS_SYMBOL = Symbol("inkosRetryCounts");
+
+function attachRetryCounts(error: unknown, retryCounts: LLMRetryCounts): void {
+  if (!error || (typeof error !== "object" && typeof error !== "function")) return;
+  Object.defineProperty(error, RETRY_COUNTS_SYMBOL, {
+    configurable: true,
+    value: retryCounts,
+  });
+}
+
+function readRetryCounts(error: unknown): LLMRetryCounts | undefined {
+  if (!error || (typeof error !== "object" && typeof error !== "function")) return undefined;
+  const value = (error as Record<PropertyKey, unknown>)[RETRY_COUNTS_SYMBOL];
+  return value && typeof value === "object" ? value as LLMRetryCounts : undefined;
+}
+
+function addRetryCounts(response: LLMResponse, retryCounts: LLMRetryCounts): LLMResponse {
+  return { ...response, retryCounts };
 }
 
 async function withTransientLLMRetry<T>(
   run: (attempt: number) => Promise<T>,
   options?: { readonly enabled?: boolean; readonly signal?: AbortSignal },
-): Promise<T> {
+): Promise<{ readonly value: T; readonly retryCounts: LLMRetryCounts }> {
   const enabled = options?.enabled ?? true;
   let lastError: unknown;
+  let transportRetries = 0;
+  let outputRetries = 0;
+  let reasoningRetries = 0;
+  const retryCounts = (): LLMRetryCounts => ({
+    transport: transportRetries,
+    output: outputRetries,
+    quality: 0,
+  });
   for (let attempt = 0; attempt <= TRANSIENT_LLM_RETRIES; attempt++) {
     options?.signal?.throwIfAborted();
     try {
-      return await run(attempt + 1);
+      return { value: await run(attempt + 1), retryCounts: retryCounts() };
     } catch (error) {
       lastError = error;
+      const errorClass = classifyLLMError(error);
+      const reasoningOnly = errorClass === "reasoning-without-final";
+      const retriesForClass = reasoningOnly
+        ? reasoningRetries
+        : transportRetries + outputRetries;
+      const maxRetriesForClass = reasoningOnly ? 1 : TRANSIENT_LLM_RETRIES;
       if (
         !enabled
         || attempt >= TRANSIENT_LLM_RETRIES
+        || retriesForClass >= maxRetriesForClass
         || !isRetryableLLMError(error)
       ) {
+        attachRetryCounts(error, retryCounts());
         throw error;
+      }
+      if (reasoningOnly) {
+        reasoningRetries += 1;
+        outputRetries += 1;
+      } else if (errorClass === "output-limit") {
+        outputRetries += 1;
+      } else {
+        transportRetries += 1;
       }
       // Back off before retrying — immediate re-fire on a 429/503 just makes it
       // worse. Linear is enough for a 2-retry budget (~0.8s, ~1.6s).
       await abortableDelay(800 * (attempt + 1), options?.signal);
     }
   }
+  attachRetryCounts(lastError, retryCounts());
   throw lastError;
 }
 
@@ -1025,11 +1233,156 @@ function extractResponsesContent(json: any): string {
     .join("");
 }
 
+function extractResponsesReasoningContent(json: any): string {
+  const output = Array.isArray(json?.output) ? json.output : [];
+  return output
+    .filter((item: any) => item?.type === "reasoning")
+    .flatMap((item: any) => Array.isArray(item?.summary) ? item.summary : [])
+    .map((part: any) => typeof part?.text === "string" ? part.text : "")
+    .join("");
+}
+
 function extractAnthropicContent(json: any): string {
   const content = Array.isArray(json?.content) ? json.content : [];
   return content
     .map((part: any) => typeof part?.text === "string" ? part.text : "")
     .join("");
+}
+
+function extractAnthropicReasoningContent(json: any): string {
+  const content = Array.isArray(json?.content) ? json.content : [];
+  return content
+    .filter((part: any) => part?.type === "thinking")
+    .map((part: any) => typeof part?.thinking === "string" ? part.thinking : "")
+    .join("");
+}
+
+function nonNegativeInteger(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isFinite(value) && value >= 0
+    ? Math.floor(value)
+    : undefined;
+}
+
+function nonEmptyString(value: unknown): string | undefined {
+  return typeof value === "string" && value.trim().length > 0 ? value.trim() : undefined;
+}
+
+function responseHeader(response: Response, names: ReadonlyArray<string>): string | undefined {
+  const headers = response.headers as Headers | Record<string, unknown> | undefined;
+  for (const name of names) {
+    const value = typeof (headers as Headers | undefined)?.get === "function"
+      ? (headers as Headers).get(name)
+      : headers && typeof headers === "object"
+        ? Object.entries(headers).find(([key]) => key.toLowerCase() === name.toLowerCase())?.[1]
+        : undefined;
+    if (value) return nonEmptyString(value);
+  }
+  return undefined;
+}
+
+function createLLMResponse(
+  content: string,
+  usage: {
+    readonly promptTokens?: unknown;
+    readonly completionTokens?: unknown;
+    readonly totalTokens?: unknown;
+  },
+  metadata: {
+    readonly finishReason?: unknown;
+    readonly responseId?: unknown;
+    readonly cachedInputTokens?: unknown;
+    readonly reasoningTokens?: unknown;
+    readonly providerRequestId?: unknown;
+    readonly retryCounts?: LLMRetryCounts;
+  } = {},
+): LLMResponse {
+  const promptTokens = nonNegativeInteger(usage.promptTokens) ?? 0;
+  const completionTokens = nonNegativeInteger(usage.completionTokens) ?? 0;
+  const totalTokens = nonNegativeInteger(usage.totalTokens) ?? promptTokens + completionTokens;
+  const cachedInputTokens = nonNegativeInteger(metadata.cachedInputTokens);
+  const reasoningTokens = nonNegativeInteger(metadata.reasoningTokens);
+  return {
+    content,
+    usage: { promptTokens, completionTokens, totalTokens },
+    ...(nonEmptyString(metadata.finishReason) ? { finishReason: nonEmptyString(metadata.finishReason) } : {}),
+    ...(nonEmptyString(metadata.responseId) ? { responseId: nonEmptyString(metadata.responseId) } : {}),
+    ...(cachedInputTokens !== undefined ? { cachedInputTokens } : {}),
+    ...(reasoningTokens !== undefined ? { reasoningTokens } : {}),
+    ...(nonEmptyString(metadata.providerRequestId)
+      ? { providerRequestId: nonEmptyString(metadata.providerRequestId) }
+      : {}),
+    ...(metadata.retryCounts ? { retryCounts: metadata.retryCounts } : {}),
+  };
+}
+
+function rawUsageMetadata(usage: any): {
+  readonly cachedInputTokens?: number;
+  readonly reasoningTokens?: number;
+} {
+  return {
+    ...(nonNegativeInteger(
+      usage?.prompt_tokens_details?.cached_tokens
+      ?? usage?.input_tokens_details?.cached_tokens
+      ?? usage?.cached_tokens
+      ?? usage?.cache_read_input_tokens,
+    ) !== undefined
+      ? {
+          cachedInputTokens: nonNegativeInteger(
+            usage?.prompt_tokens_details?.cached_tokens
+            ?? usage?.input_tokens_details?.cached_tokens
+            ?? usage?.cached_tokens
+            ?? usage?.cache_read_input_tokens,
+          ),
+        }
+      : {}),
+    ...(nonNegativeInteger(
+      usage?.completion_tokens_details?.reasoning_tokens
+      ?? usage?.output_tokens_details?.reasoning_tokens
+      ?? usage?.reasoning_tokens,
+    ) !== undefined
+      ? {
+          reasoningTokens: nonNegativeInteger(
+            usage?.completion_tokens_details?.reasoning_tokens
+            ?? usage?.output_tokens_details?.reasoning_tokens
+            ?? usage?.reasoning_tokens,
+          ),
+        }
+      : {}),
+  };
+}
+
+function isOutputLimitReason(value: unknown): boolean {
+  const reason = nonEmptyString(value)?.toLowerCase();
+  return reason === "length"
+    || reason === "max_tokens"
+    || reason === "max_output_tokens"
+    || reason === "max_output";
+}
+
+function assistantResponseMetadata(response: AssistantMessage): {
+  readonly finishReason?: string;
+  readonly responseId?: string;
+  readonly cachedInputTokens?: number;
+  readonly reasoningTokens?: number;
+  readonly providerRequestId?: string;
+} {
+  const raw = response as AssistantMessage & {
+    readonly providerRequestId?: unknown;
+    readonly usage?: AssistantMessage["usage"] & { readonly reasoningTokens?: unknown };
+  };
+  const reasoningFromUsage = nonNegativeInteger(raw.usage?.reasoningTokens);
+  const reasoningFromBlocks = response.content
+    .filter((block): block is Extract<AssistantMessage["content"][number], { type: "thinking" }> => block.type === "thinking")
+    .reduce((total, block) => total + (nonNegativeInteger((block as unknown as { readonly tokens?: unknown }).tokens) ?? 0), 0);
+  return {
+    ...(nonEmptyString(response.stopReason) ? { finishReason: response.stopReason } : {}),
+    ...(nonEmptyString(response.responseId) ? { responseId: response.responseId } : {}),
+    ...(nonNegativeInteger(response.usage.cacheRead) !== undefined
+      ? { cachedInputTokens: nonNegativeInteger(response.usage.cacheRead) } : {}),
+    ...((reasoningFromUsage ?? (reasoningFromBlocks > 0 ? reasoningFromBlocks : undefined)) !== undefined
+      ? { reasoningTokens: reasoningFromUsage ?? reasoningFromBlocks } : {}),
+    ...(nonEmptyString(raw.providerRequestId) ? { providerRequestId: nonEmptyString(raw.providerRequestId) } : {}),
+  };
 }
 
 async function chatCompletionViaCustomAnthropicCompatible(
@@ -1081,16 +1434,29 @@ async function chatCompletionViaCustomAnthropicCompatible(
     const json = await response.json() as any;
     const content = extractAnthropicContent(json);
     if (!content) {
+      if (extractAnthropicReasoningContent(json)) {
+        throw normalizeLLMError(new Error("LLM returned reasoning without a final answer"));
+      }
       throw wrapLLMError(new Error("LLM returned empty response"), errorCtx);
     }
-    return {
-      content,
-      usage: {
-        promptTokens: json?.usage?.input_tokens ?? 0,
-        completionTokens: json?.usage?.output_tokens ?? 0,
-        totalTokens: (json?.usage?.input_tokens ?? 0) + (json?.usage?.output_tokens ?? 0),
-      },
-    };
+    if (isOutputLimitReason(json?.stop_reason)) {
+      throw new PartialResponseError(
+        content,
+        new Error(`model reached the output limit (${json.stop_reason})`),
+        "output-limit",
+      );
+    }
+    return createLLMResponse(content, {
+      promptTokens: json?.usage?.input_tokens,
+      completionTokens: json?.usage?.output_tokens,
+      totalTokens: (json?.usage?.input_tokens ?? 0) + (json?.usage?.output_tokens ?? 0),
+    }, {
+      finishReason: json?.stop_reason,
+      responseId: json?.id,
+      ...rawUsageMetadata(json?.usage),
+      providerRequestId: responseHeader(response, ["request-id", "x-request-id", "anthropic-request-id"])
+        ?? nonEmptyString(json?.request_id ?? json?.requestId),
+    });
   }
 
   const reader = response.body?.getReader();
@@ -1098,7 +1464,12 @@ async function chatCompletionViaCustomAnthropicCompatible(
   const decoder = new TextDecoder();
   let buffer = "";
   let content = "";
+  let reasoningContent = "";
   let usage = { promptTokens: 0, completionTokens: 0, totalTokens: 0 };
+  let responseId: string | undefined;
+  let finishReason: string | undefined;
+  let cachedInputTokens: number | undefined;
+  let reasoningTokens: number | undefined;
   let sawMessageStop = false;
   const monitor = createStreamMonitor(onStreamProgress);
 
@@ -1113,16 +1484,31 @@ async function chatCompletionViaCustomAnthropicCompatible(
       for (const event of parsed.events) {
         if (!event.data) continue;
         const json = JSON.parse(event.data);
+        responseId ??= nonEmptyString(json.message?.id ?? json.id);
         if (json.type === "message_start" && json.message?.usage) {
           usage.promptTokens = json.message.usage.input_tokens ?? usage.promptTokens;
+          cachedInputTokens ??= rawUsageMetadata(json.message.usage).cachedInputTokens;
+          reasoningTokens ??= rawUsageMetadata(json.message.usage).reasoningTokens;
         }
         if (json.type === "content_block_delta" && json.delta?.type === "text_delta" && typeof json.delta.text === "string") {
           content += json.delta.text;
           monitor.onChunk(json.delta.text);
           onTextDelta?.(json.delta.text);
         }
+        if (json.type === "content_block_delta" && json.delta?.type === "thinking_delta" && typeof json.delta.thinking === "string") {
+          reasoningContent += json.delta.thinking;
+          monitor.onChunk(json.delta.thinking);
+        }
         if (json.type === "message_delta" && json.usage) {
           usage.completionTokens = json.usage.output_tokens ?? usage.completionTokens;
+          cachedInputTokens ??= rawUsageMetadata(json.usage).cachedInputTokens;
+          reasoningTokens ??= rawUsageMetadata(json.usage).reasoningTokens;
+        }
+        if (json.type === "message_delta" && json.delta?.stop_reason) {
+          finishReason = nonEmptyString(json.delta.stop_reason);
+        }
+        if (json.type === "message_stop") {
+          finishReason ??= nonEmptyString(json.stop_reason ?? json.message?.stop_reason);
         }
         if (json.type === "message_stop") {
           sawMessageStop = true;
@@ -1135,16 +1521,32 @@ async function chatCompletionViaCustomAnthropicCompatible(
   }
 
   if (!content) {
+    if (reasoningContent) {
+      throw normalizeLLMError(new Error("LLM returned reasoning without a final answer"));
+    }
     throw wrapLLMError(new Error("LLM returned empty response from stream"), errorCtx);
   }
   if (!sawMessageStop) {
     // Anthropic 协议的正常结束必须有 message_stop；没有就是流被中途掐断
     throw new PartialResponseError(content, new Error("stream closed without message_stop"));
   }
+  if (isOutputLimitReason(finishReason)) {
+    throw new PartialResponseError(
+      content,
+      new Error(`model reached the output limit (${finishReason})`),
+      "output-limit",
+    );
+  }
   if (!usage.totalTokens) {
     usage.totalTokens = usage.promptTokens + usage.completionTokens;
   }
-  return { content, usage };
+  return createLLMResponse(content, usage, {
+    finishReason,
+    responseId,
+    cachedInputTokens,
+    reasoningTokens,
+    providerRequestId: responseHeader(response, ["request-id", "x-request-id", "anthropic-request-id"]),
+  });
 }
 
 async function chatCompletionViaCustomOpenAICompatible(
@@ -1204,16 +1606,30 @@ async function chatCompletionViaCustomOpenAICompatible(
       const json = await response.json() as any;
       const content = extractResponsesContent(json);
       if (!content) {
+        if (extractResponsesReasoningContent(json)) {
+          throw normalizeLLMError(new Error("LLM returned reasoning without a final answer"));
+        }
         throw wrapLLMError(new Error("LLM returned empty response"), errorCtx);
       }
-      return {
-        content,
-        usage: {
-          promptTokens: json?.usage?.input_tokens ?? 0,
-          completionTokens: json?.usage?.output_tokens ?? 0,
-          totalTokens: json?.usage?.total_tokens ?? 0,
-        },
-      };
+      if (json?.status === "incomplete") {
+        const reason = nonEmptyString(json?.incomplete_details?.reason) ?? "incomplete";
+        throw new PartialResponseError(
+          content,
+          new Error(`model returned an incomplete response (${reason})`),
+          isOutputLimitReason(reason) ? "output-limit" : "interrupted",
+        );
+      }
+      return createLLMResponse(content, {
+        promptTokens: json?.usage?.input_tokens,
+        completionTokens: json?.usage?.output_tokens,
+        totalTokens: json?.usage?.total_tokens,
+      }, {
+        finishReason: json?.status ?? json?.incomplete_details?.reason,
+        responseId: json?.id,
+        ...rawUsageMetadata(json?.usage),
+      providerRequestId: responseHeader(response, ["request-id", "x-request-id"])
+        ?? nonEmptyString(json?.request_id ?? json?.requestId),
+      });
     }
 
     const reader = response.body?.getReader();
@@ -1222,6 +1638,11 @@ async function chatCompletionViaCustomOpenAICompatible(
     let buffer = "";
     let content = "";
     let usage = { promptTokens: 0, completionTokens: 0, totalTokens: 0 };
+    let responseId: string | undefined;
+    let finishReason: string | undefined;
+    let cachedInputTokens: number | undefined;
+    let reasoningTokens: number | undefined;
+    let reasoningContent = "";
     let sawResponseTerminal = false;
     let sawResponseIncomplete = false;
     const monitor = createStreamMonitor(onStreamProgress);
@@ -1237,6 +1658,7 @@ async function chatCompletionViaCustomOpenAICompatible(
         for (const event of parsed.events) {
           if (!event.data) continue;
           const json = JSON.parse(event.data);
+          responseId ??= nonEmptyString(json.id ?? json.response?.id);
           if (json.type === "response.output_text.delta" && typeof json.delta === "string") {
             content += json.delta;
             monitor.onChunk(json.delta);
@@ -1250,6 +1672,15 @@ async function chatCompletionViaCustomOpenAICompatible(
               completionTokens: json.response?.usage?.output_tokens ?? 0,
               totalTokens: json.response?.usage?.total_tokens ?? 0,
             };
+            const metadata = rawUsageMetadata(json.response?.usage);
+            cachedInputTokens ??= metadata.cachedInputTokens;
+            reasoningTokens ??= metadata.reasoningTokens;
+            finishReason ??= nonEmptyString(
+              json.type === "response.incomplete"
+                ? (json.response?.incomplete_details?.reason ?? json.response?.status)
+                : json.response?.status,
+            );
+            reasoningContent += extractResponsesReasoningContent(json.response);
             if (!content) {
               content = extractResponsesContent(json.response);
             }
@@ -1261,6 +1692,9 @@ async function chatCompletionViaCustomOpenAICompatible(
     }
 
     if (!content) {
+      if (reasoningContent) {
+        throw normalizeLLMError(new Error("LLM returned reasoning without a final answer"));
+      }
       throw wrapLLMError(new Error("LLM returned empty response from stream"), errorCtx);
     }
     if (!sawResponseTerminal) {
@@ -1268,9 +1702,19 @@ async function chatCompletionViaCustomOpenAICompatible(
       throw new PartialResponseError(content, new Error("stream closed without response.completed"));
     }
     if (sawResponseIncomplete) {
-      throw new PartialResponseError(content, new Error("response ended before the final answer was complete"));
+      throw new PartialResponseError(
+        content,
+        new Error(`response ended before the final answer was complete${finishReason ? ` (${finishReason})` : ""}`),
+        isOutputLimitReason(finishReason) ? "output-limit" : "interrupted",
+      );
     }
-    return { content, usage };
+    return createLLMResponse(content, usage, {
+      finishReason,
+      responseId,
+      cachedInputTokens,
+      reasoningTokens,
+      providerRequestId: responseHeader(response, ["request-id", "x-request-id"]),
+    });
   }
 
   const payload: Record<string, unknown> = {
@@ -1335,14 +1779,17 @@ async function chatCompletionViaCustomOpenAICompatible(
       }
       throw wrapLLMError(new Error("LLM returned empty response"), errorCtx);
     }
-    return {
-      content,
-      usage: {
-        promptTokens: json?.usage?.prompt_tokens ?? 0,
-        completionTokens: json?.usage?.completion_tokens ?? 0,
-        totalTokens: json?.usage?.total_tokens ?? 0,
-      },
-    };
+    return createLLMResponse(content, {
+      promptTokens: json?.usage?.prompt_tokens,
+      completionTokens: json?.usage?.completion_tokens,
+      totalTokens: json?.usage?.total_tokens,
+    }, {
+      finishReason,
+      responseId: json?.id,
+      ...rawUsageMetadata(json?.usage),
+      providerRequestId: responseHeader(response, ["request-id", "x-request-id"])
+        ?? nonEmptyString(json?.request_id ?? json?.requestId),
+    });
   }
 
   const reader = response.body?.getReader();
@@ -1356,6 +1803,9 @@ async function chatCompletionViaCustomOpenAICompatible(
   // 网关掐断长连接时流会"干净地"关闭但没有任何终止信号——那是截断，不是完成。
   let sawTerminal = false;
   let terminalFinishReason: string | undefined;
+  let responseId: string | undefined;
+  let cachedInputTokens: number | undefined;
+  let reasoningTokens: number | undefined;
   const monitor = createStreamMonitor(onStreamProgress);
   // 内联 <think>...</think> 的模型（如 MiniMax M2.x）：剥掉响应起始处的完整
   // think 块，思考内容既不并入正文也不通过 onTextDelta 发给 UI（issue #329）。
@@ -1376,6 +1826,7 @@ async function chatCompletionViaCustomOpenAICompatible(
           continue;
         }
         const json = JSON.parse(event.data);
+        responseId ??= nonEmptyString(json.id ?? json.response?.id);
         if (json?.choices?.[0]?.finish_reason) {
           sawTerminal = true;
           terminalFinishReason = String(json.choices[0].finish_reason);
@@ -1401,6 +1852,9 @@ async function chatCompletionViaCustomOpenAICompatible(
             completionTokens: json.usage.completion_tokens ?? usage.completionTokens,
             totalTokens: json.usage.total_tokens ?? usage.totalTokens,
           };
+          const metadata = rawUsageMetadata(json.usage);
+          cachedInputTokens ??= metadata.cachedInputTokens;
+          reasoningTokens ??= metadata.reasoningTokens;
         }
       }
     }
@@ -1426,7 +1880,13 @@ async function chatCompletionViaCustomOpenAICompatible(
   if (!sawTerminal) {
     throw new PartialResponseError(content, new Error("stream closed without [DONE]/finish_reason"));
   }
-  return { content, usage };
+  return createLLMResponse(content, usage, {
+    finishReason: terminalFinishReason,
+    responseId,
+    cachedInputTokens,
+    reasoningTokens,
+    providerRequestId: responseHeader(response, ["request-id", "x-request-id"]),
+  });
 }
 
 // === Simple Chat (used by all agents via BaseAgent.chat()) ===
@@ -1449,7 +1909,9 @@ export async function chatCompletion(
     readonly retry?: boolean;
   },
 ): Promise<LLMResponse> {
-  if (isLlmStubEnabled()) return Promise.resolve(stubChatCompletion(messages, model));
+  if (isLlmStubEnabled()) {
+    return Promise.resolve(addRetryCounts(stubChatCompletion(messages, model), EMPTY_RETRY_COUNTS));
+  }
   // C1 (v2.0.0)：删除 maxTokensCap 机制。per-call 显式传的 maxTokens 永远不被裁剪。
   const resolved = {
     temperature: clampTemperatureForModel(
@@ -1467,7 +1929,7 @@ export async function chatCompletion(
   const modelCall = beginAgentModelCall();
 
   try {
-    return await withTransientLLMRetry(
+    const retried = await withTransientLLMRetry(
       async (attempt) => {
         signal?.throwIfAborted();
         const traceHeaders = agentTrajectoryHeaders(client._piModel?.baseUrl, modelCall, attempt, {
@@ -1533,11 +1995,15 @@ export async function chatCompletion(
       // text; callers can also opt out (e.g. fast-fail diagnostics).
       { enabled: (options?.retry ?? true) && !onTextDelta, signal },
     );
+    return addRetryCounts(retried.value, retried.retryCounts);
   } catch (error) {
     // 注意：中断的流（PartialResponseError）不再"打捞"半截内容当成功返回——
     // 那会产出写到一半就结束的章节/设定文件。重试由 withTransientLLMRetry
     // 负责（完整重新生成）；重试耗尽后如实抛错。
-    throw wrapLLMError(error, errorCtx);
+    const normalized = wrapLLMError(error, errorCtx);
+    const retryCounts = readRetryCounts(error);
+    if (retryCounts) normalized.retryCounts = retryCounts;
+    throw normalized;
   }
 }
 
@@ -1603,13 +2069,19 @@ async function chatCompletionViaPiAi(
 
   if (!client.stream) {
     const response = await piCompleteSimple(piModel, context, streamOpts);
-    if (response.stopReason === "error" && response.errorMessage) {
-      throw new Error(response.errorMessage);
-    }
     const content = response.content
       .filter((block): block is { type: "text"; text: string } => block.type === "text")
       .map((block) => block.text)
       .join("");
+    if (response.stopReason === "error") {
+      if (content) {
+        throw new PartialResponseError(
+          content,
+          new Error(response.errorMessage ?? "provider returned an error"),
+        );
+      }
+      throw new Error(response.errorMessage ?? "provider returned an error");
+    }
     if (response.stopReason === "length") {
       throw new PartialResponseError(
         content,
@@ -1620,16 +2092,16 @@ async function chatCompletionViaPiAi(
     if (!content) {
       const diag = `usage=${response.usage.input}+${response.usage.output}`;
       console.warn(`[inkos] LLM 非流式响应无文本内容 (${diag})`);
+      if (response.content.some((block) => block.type === "thinking")) {
+        throw normalizeLLMError(new Error("LLM returned reasoning without a final answer"));
+      }
       throw new Error(`LLM returned empty response (${diag})`);
     }
-    return {
-      content,
-      usage: {
-        promptTokens: response.usage.input,
-        completionTokens: response.usage.output,
-        totalTokens: response.usage.totalTokens,
-      },
-    };
+    return createLLMResponse(content, {
+      promptTokens: response.usage.input,
+      completionTokens: response.usage.output,
+      totalTokens: response.usage.totalTokens,
+    }, assistantResponseMetadata(response));
   }
 
   const eventStream = piStreamSimple(piModel, context, streamOpts);
@@ -1639,6 +2111,7 @@ async function chatCompletionViaPiAi(
   let outputTokens = 0;
   let sawDone = false;
   let stoppedAtOutputLimit = false;
+  let finalAssistantMessage: AssistantMessage | undefined;
 
   try {
     const iterator = eventStream[Symbol.asyncIterator]();
@@ -1656,6 +2129,7 @@ async function chatCompletionViaPiAi(
       }
       if (event.type === "done" || event.type === "error") {
         const msg = event.type === "done" ? event.message : event.error;
+        finalAssistantMessage = msg;
         inputTokens = msg.usage.input;
         outputTokens = msg.usage.output;
         if (event.type === "done") {
@@ -1695,6 +2169,9 @@ async function chatCompletionViaPiAi(
   if (!content) {
     const diag = `usage=${inputTokens}+${outputTokens}`;
     console.warn(`[inkos] LLM 流式响应无文本内容 (${diag})`);
+    if (finalAssistantMessage?.content.some((block) => block.type === "thinking")) {
+      throw normalizeLLMError(new Error("LLM returned reasoning without a final answer"));
+    }
     throw new Error(`LLM returned empty response from stream (${diag})`);
   }
   if (!sawDone) {
@@ -1702,12 +2179,12 @@ async function chatCompletionViaPiAi(
     throw new PartialResponseError(content, new Error("stream ended without done event"));
   }
 
-  return {
-    content,
-    usage: {
-      promptTokens: inputTokens,
-      completionTokens: outputTokens,
-      totalTokens: inputTokens + outputTokens,
-    },
-  };
+  const metadata = finalAssistantMessage
+    ? assistantResponseMetadata(finalAssistantMessage)
+    : { finishReason: "stop" };
+  return createLLMResponse(content, {
+    promptTokens: inputTokens,
+    completionTokens: outputTokens,
+    totalTokens: inputTokens + outputTokens,
+  }, metadata);
 }
