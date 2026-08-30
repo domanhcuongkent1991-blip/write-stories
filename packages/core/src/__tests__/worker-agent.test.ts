@@ -175,6 +175,34 @@ describe("Pi worker harness", () => {
     });
   });
 
+  it("preserves provider provenance and retry counters through the worker facade", async () => {
+    chatCompletionMock.mockResolvedValue({
+      content: "完成",
+      usage: { promptTokens: 12, completionTokens: 3, totalTokens: 15 },
+      finishReason: "stop",
+      responseId: "response-1",
+      cachedInputTokens: 4,
+      reasoningTokens: 2,
+      providerRequestId: "request-1",
+      retryCounts: { transport: 1, output: 0, quality: 0 },
+    });
+
+    const result = await runWorkerAgent(client(), "deepseek-v4-pro", [
+      { role: "user", content: "检查第一章" },
+    ]);
+
+    expect(result).toEqual({
+      content: "完成",
+      usage: { promptTokens: 12, completionTokens: 3, totalTokens: 15 },
+      finishReason: "stop",
+      responseId: "response-1",
+      cachedInputTokens: 4,
+      reasoningTokens: 2,
+      providerRequestId: "request-1",
+      retryCounts: { transport: 1, output: 0, quality: 0 },
+    });
+  });
+
   it("preserves provider failures instead of turning them into successful prose", async () => {
     chatCompletionMock.mockRejectedValue(new Error("upstream unavailable"));
 

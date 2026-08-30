@@ -722,6 +722,8 @@ export function classifyLLMError(error: unknown): LLMErrorClass {
   if (
     text.includes("output limit")
     || text.includes("max_tokens")
+    || text.includes("max_output_tokens")
+    || text.includes("max_output")
     || text.includes("max output")
     || text.includes("output_limit")
     || text.includes("incomplete response")
@@ -738,8 +740,11 @@ export function classifyLLMError(error: unknown): LLMErrorClass {
   ) return "output-parse";
   if (
     text.includes("content policy")
+    || text.includes("content_filter")
+    || text.includes("content-filter")
     || text.includes("policy block")
     || text.includes("safety block")
+    || text.includes("safety_filter")
     || text.includes("moderation")
     || text.includes("content filter")
     || text.includes("blocked by policy")
@@ -1351,12 +1356,46 @@ function rawUsageMetadata(usage: any): {
   };
 }
 
-function isOutputLimitReason(value: unknown): boolean {
-  const reason = nonEmptyString(value)?.toLowerCase();
-  return reason === "length"
-    || reason === "max_tokens"
-    || reason === "max_output_tokens"
-    || reason === "max_output";
+type ProviderFinishReasonClass = "output-limit" | "policy-block";
+
+/**
+ * Provider finish reasons are not interchangeable with successful text. Keep
+ * this mapping at the transport boundary so every compatible protocol has the
+ * same fail-closed behavior and retry policy.
+ */
+function classifyProviderFinishReason(value: unknown): ProviderFinishReasonClass | undefined {
+  const reason = nonEmptyString(value)?.toLowerCase().replaceAll("-", "_");
+  if (!reason) return undefined;
+  if (reason === "length" || reason === "max_tokens" || reason === "max_output_tokens" || reason === "max_output") {
+    return "output-limit";
+  }
+  if (reason === "content_filter" || reason === "contentfilter" || reason === "safety_filter" || reason === "safety") {
+    return "policy-block";
+  }
+  return undefined;
+}
+
+function providerFinishReasonError(
+  reason: unknown,
+  content: string,
+): LLMError | undefined {
+  const classification = classifyProviderFinishReason(reason);
+  if (classification === "policy-block") {
+    return new LLMError(
+      "LLM response was blocked by provider content policy.",
+      "policy-block",
+      { retryable: false },
+    );
+  }
+  if (classification === "output-limit") {
+    const normalizedReason = nonEmptyString(reason) ?? "output limit";
+    return new PartialResponseError(
+      content,
+      new Error(`model reached the output limit (${normalizedReason})`),
+      "output-limit",
+    );
+  }
+  return undefined;
 }
 
 function assistantResponseMetadata(response: AssistantMessage): {
@@ -1439,13 +1478,8 @@ async function chatCompletionViaCustomAnthropicCompatible(
       }
       throw wrapLLMError(new Error("LLM returned empty response"), errorCtx);
     }
-    if (isOutputLimitReason(json?.stop_reason)) {
-      throw new PartialResponseError(
-        content,
-        new Error(`model reached the output limit (${json.stop_reason})`),
-        "output-limit",
-      );
-    }
+    const finishReasonError = providerFinishReasonError(json?.stop_reason, content);
+    if (finishReasonError) throw finishReasonError;
     return createLLMResponse(content, {
       promptTokens: json?.usage?.input_tokens,
       completionTokens: json?.usage?.output_tokens,
@@ -1530,13 +1564,8 @@ async function chatCompletionViaCustomAnthropicCompatible(
     // Anthropic 协议的正常结束必须有 message_stop；没有就是流被中途掐断
     throw new PartialResponseError(content, new Error("stream closed without message_stop"));
   }
-  if (isOutputLimitReason(finishReason)) {
-    throw new PartialResponseError(
-      content,
-      new Error(`model reached the output limit (${finishReason})`),
-      "output-limit",
-    );
-  }
+  const finishReasonError = providerFinishReasonError(finishReason, content);
+  if (finishReasonError) throw finishReasonError;
   if (!usage.totalTokens) {
     usage.totalTokens = usage.promptTokens + usage.completionTokens;
   }
@@ -1605,6 +1634,10 @@ async function chatCompletionViaCustomOpenAICompatible(
     if (!client.stream) {
       const json = await response.json() as any;
       const content = extractResponsesContent(json);
+      const incompleteReason = json?.incomplete_details?.reason
+        ?? (json?.status === "incomplete" ? json?.status : undefined);
+      const finishReasonError = providerFinishReasonError(incompleteReason, content);
+      if (finishReasonError) throw finishReasonError;
       if (!content) {
         if (extractResponsesReasoningContent(json)) {
           throw normalizeLLMError(new Error("LLM returned reasoning without a final answer"));
@@ -1612,11 +1645,11 @@ async function chatCompletionViaCustomOpenAICompatible(
         throw wrapLLMError(new Error("LLM returned empty response"), errorCtx);
       }
       if (json?.status === "incomplete") {
-        const reason = nonEmptyString(json?.incomplete_details?.reason) ?? "incomplete";
+        const reason = nonEmptyString(incompleteReason) ?? "incomplete";
         throw new PartialResponseError(
           content,
           new Error(`model returned an incomplete response (${reason})`),
-          isOutputLimitReason(reason) ? "output-limit" : "interrupted",
+          "interrupted",
         );
       }
       return createLLMResponse(content, {
@@ -1677,7 +1710,10 @@ async function chatCompletionViaCustomOpenAICompatible(
             reasoningTokens ??= metadata.reasoningTokens;
             finishReason ??= nonEmptyString(
               json.type === "response.incomplete"
-                ? (json.response?.incomplete_details?.reason ?? json.response?.status)
+                ? (json.response?.incomplete_details?.reason
+                  ?? json.incomplete_details?.reason
+                  ?? json.reason
+                  ?? json.response?.status)
                 : json.response?.status,
             );
             reasoningContent += extractResponsesReasoningContent(json.response);
@@ -1691,6 +1727,10 @@ async function chatCompletionViaCustomOpenAICompatible(
       monitor.stop();
     }
 
+    if (sawResponseIncomplete) {
+      const finishReasonError = providerFinishReasonError(finishReason, content);
+      if (finishReasonError) throw finishReasonError;
+    }
     if (!content) {
       if (reasoningContent) {
         throw normalizeLLMError(new Error("LLM returned reasoning without a final answer"));
@@ -1705,7 +1745,7 @@ async function chatCompletionViaCustomOpenAICompatible(
       throw new PartialResponseError(
         content,
         new Error(`response ended before the final answer was complete${finishReason ? ` (${finishReason})` : ""}`),
-        isOutputLimitReason(finishReason) ? "output-limit" : "interrupted",
+        "interrupted",
       );
     }
     return createLLMResponse(content, usage, {
@@ -1766,13 +1806,11 @@ async function chatCompletionViaCustomOpenAICompatible(
     // 剥掉起始处的完整 think 块，防止思考内容混进章节/对话正文（issue #329）。
     const content = stripLeadingThinkBlock(extractChatContent(json));
     const finishReason = json?.choices?.[0]?.finish_reason;
-    if (finishReason === "length" || finishReason === "max_tokens") {
-      throw new PartialResponseError(
-        content || extractChatReasoningContent(json),
-        new Error(`model reached the output limit (${finishReason})`),
-        "output-limit",
-      );
-    }
+    const finishReasonError = providerFinishReasonError(
+      finishReason,
+      content || extractChatReasoningContent(json),
+    );
+    if (finishReasonError) throw finishReasonError;
     if (!content) {
       if (extractChatReasoningContent(json)) {
         throw wrapLLMError(new Error("LLM returned reasoning without a final answer"), errorCtx);
@@ -1864,13 +1902,11 @@ async function chatCompletionViaCustomOpenAICompatible(
 
   // 流结束仍缓冲在剥离器里的文本（未闭合的 think 块等）原样并回，避免数据丢失。
   content += thinkStripper.flush();
-  if (terminalFinishReason === "length" || terminalFinishReason === "max_tokens") {
-    throw new PartialResponseError(
-      content || reasoningContent,
-      new Error(`model reached the output limit (${terminalFinishReason})`),
-      "output-limit",
-    );
-  }
+  const finishReasonError = providerFinishReasonError(
+    terminalFinishReason,
+    content || reasoningContent,
+  );
+  if (finishReasonError) throw finishReasonError;
   if (!content) {
     if (reasoningContent) {
       throw wrapLLMError(new Error("LLM returned reasoning without a final answer"), errorCtx);

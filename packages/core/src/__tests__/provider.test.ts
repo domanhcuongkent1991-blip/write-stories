@@ -6,6 +6,7 @@ import {
   ContextWindowExceededError,
   LLMError,
   normalizeLLMError,
+  PartialResponseError,
   type LLMClient,
 } from "../llm/provider.js";
 import { runWithAgentTrajectory } from "../llm/agent-trajectory.js";
@@ -442,6 +443,56 @@ describe("chatCompletion via pi-ai", () => {
     vi.unstubAllGlobals();
   });
 
+  it("maps custom OpenAI chat content_filter to a non-retryable policy error", async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        id: "chat-filtered",
+        choices: [{ message: { content: "provider-filtered partial" }, finish_reason: "content_filter" }],
+        usage: { prompt_tokens: 4, completion_tokens: 2, total_tokens: 6 },
+      }),
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const error = await captureError(chatCompletion(makeClient(0.7, {
+      service: "custom",
+      stream: false,
+      _piModel: { ...MOCK_PI_MODEL, baseUrl: "https://gateway.example/v1" },
+    }), "filtered-model", [{ role: "user", content: "ping" }]));
+
+    expect(error).toBeInstanceOf(LLMError);
+    expect(error).not.toBeInstanceOf(PartialResponseError);
+    expect((error as LLMError).errorClass).toBe("policy-block");
+    expect((error as LLMError).retryable).toBe(false);
+    expect(fetchMock).toHaveBeenCalledOnce();
+    vi.unstubAllGlobals();
+  });
+
+  it.each(["max_tokens", "max_output_tokens", "max_output"] as const)(
+    "maps custom OpenAI chat finish_reason %s to output-limit",
+    async (finishReason) => {
+      const fetchMock = vi.fn().mockResolvedValue({
+        ok: true,
+        json: async () => ({
+          choices: [{ message: { content: "truncated" }, finish_reason: finishReason }],
+          usage: { prompt_tokens: 4, completion_tokens: 2, total_tokens: 6 },
+        }),
+      });
+      vi.stubGlobal("fetch", fetchMock);
+
+      const error = await captureError(chatCompletion(makeClient(0.7, {
+        service: "custom",
+        stream: false,
+        _piModel: { ...MOCK_PI_MODEL, baseUrl: "https://gateway.example/v1" },
+      }), "limited-model", [{ role: "user", content: "ping" }], { retry: false }));
+
+      expect(error).toBeInstanceOf(LLMError);
+      expect((error as LLMError).errorClass).toBe("output-limit");
+      expect(fetchMock).toHaveBeenCalledOnce();
+      vi.unstubAllGlobals();
+    },
+  );
+
   it("normalizes OpenAI Responses metadata and tolerates missing metadata", async () => {
     const fetchMock = vi.fn()
       .mockResolvedValueOnce({
@@ -486,6 +537,34 @@ describe("chatCompletion via pi-ai", () => {
     });
     expect(second).not.toHaveProperty("finishReason");
     expect(second).not.toHaveProperty("responseId");
+    vi.unstubAllGlobals();
+  });
+
+  it("maps OpenAI Responses content_filter incomplete output to a non-retryable policy error", async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        id: "response-filtered",
+        status: "incomplete",
+        incomplete_details: { reason: "content_filter" },
+        output: [{ content: [{ type: "output_text", text: "filtered partial" }] }],
+        usage: { input_tokens: 4, output_tokens: 2, total_tokens: 6 },
+      }),
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const error = await captureError(chatCompletion(makeClient(0.7, {
+      service: "custom",
+      apiFormat: "responses",
+      stream: false,
+      _piModel: { ...MOCK_PI_MODEL, api: "openai-responses" as Api, baseUrl: "https://gateway.example/v1" },
+    }), "responses-model", [{ role: "user", content: "ping" }]));
+
+    expect(error).toBeInstanceOf(LLMError);
+    expect(error).not.toBeInstanceOf(PartialResponseError);
+    expect((error as LLMError).errorClass).toBe("policy-block");
+    expect((error as LLMError).retryable).toBe(false);
+    expect(fetchMock).toHaveBeenCalledOnce();
     vi.unstubAllGlobals();
   });
 
@@ -1020,6 +1099,8 @@ describe("chatCompletion via pi-ai", () => {
     expect(normalizeLLMError(new SyntaxError("Unexpected token in structured JSON output")).errorClass)
       .toBe("output-parse");
     expect(normalizeLLMError(new Error("content policy safety block")).errorClass).toBe("policy-block");
+    expect(normalizeLLMError(new Error("content_filter")).errorClass).toBe("policy-block");
+    expect(normalizeLLMError(new Error("max_output_tokens reached")).errorClass).toBe("output-limit");
     expect(normalizeLLMError(new Error("429 Too Many Requests")).errorClass).toBe("rate-limit");
     expect(normalizeLLMError(new Error("fetch failed: ECONNRESET")).errorClass).toBe("transport");
 
@@ -1165,7 +1246,7 @@ describe("chatCompletion via pi-ai", () => {
     }), "responses-model", [{ role: "user", content: "ping" }], { retry: false }));
 
     expect(error).toBeInstanceOf(LLMError);
-    expect((error as LLMError).errorClass).toBe("transport");
+    expect((error as LLMError).errorClass).toBe("policy-block");
     expect(fetchMock).toHaveBeenCalledOnce();
     vi.unstubAllGlobals();
   });
@@ -1557,6 +1638,70 @@ describe("stream interruption detection", () => {
     await expect(chatCompletion(nativeStreamClient(), "glm-compat", [{ role: "user", content: "写正文" }]))
       .rejects.toThrow(/output limit|length|Stream interrupted/i);
     expect(fetchMock).toHaveBeenCalledTimes(3);
+    vi.unstubAllGlobals();
+  });
+
+  it("maps custom OpenAI chat stream content_filter to a non-retryable policy error", async () => {
+    const sse = [
+      "data: {\"choices\":[{\"delta\":{\"content\":\"filtered partial\"}}]}\n\n",
+      "data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"content_filter\"}]}\n\n",
+      "data: [DONE]\n\n",
+    ].join("");
+    const fetchMock = vi.fn().mockResolvedValue(sseResponse(sse));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const error = await captureError(chatCompletion(nativeStreamClient(), "filtered-model", [
+      { role: "user", content: "write" },
+    ]));
+
+    expect(error).toBeInstanceOf(LLMError);
+    expect((error as LLMError).errorClass).toBe("policy-block");
+    expect((error as LLMError).retryable).toBe(false);
+    expect(fetchMock).toHaveBeenCalledOnce();
+    vi.unstubAllGlobals();
+  });
+
+  it.each(["max_tokens", "max_output_tokens", "max_output"] as const)(
+    "maps custom OpenAI chat stream finish_reason %s to output-limit",
+    async (finishReason) => {
+      const sse = [
+        "data: {\"choices\":[{\"delta\":{\"content\":\"truncated\"}}]}\n\n",
+        `data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"${finishReason}\"}]}\n\n`,
+        "data: [DONE]\n\n",
+      ].join("");
+      const fetchMock = vi.fn().mockResolvedValue(sseResponse(sse));
+      vi.stubGlobal("fetch", fetchMock);
+
+      const error = await captureError(chatCompletion(nativeStreamClient(), "limited-model", [
+        { role: "user", content: "write" },
+      ], { retry: false }));
+
+      expect(error).toBeInstanceOf(LLMError);
+      expect((error as LLMError).errorClass).toBe("output-limit");
+      expect(fetchMock).toHaveBeenCalledOnce();
+      vi.unstubAllGlobals();
+    },
+  );
+
+  it("maps OpenAI Responses stream content_filter to a non-retryable policy error", async () => {
+    const sse = [
+      "data: {\"type\":\"response.output_text.delta\",\"delta\":\"filtered partial\"}\n\n",
+      "data: {\"type\":\"response.incomplete\",\"response\":{\"id\":\"response-filtered-stream\",\"status\":\"incomplete\",\"incomplete_details\":{\"reason\":\"content_filter\"},\"usage\":{\"input_tokens\":4,\"output_tokens\":2,\"total_tokens\":6}}}\n\n",
+    ].join("");
+    const fetchMock = vi.fn().mockResolvedValue(sseResponse(sse));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const error = await captureError(chatCompletion(makeClient(0.7, {
+      service: "custom",
+      apiFormat: "responses",
+      stream: true,
+      _piModel: { ...MOCK_PI_MODEL, api: "openai-responses" as Api, baseUrl: "https://gateway.example/v1" },
+    }), "responses-model", [{ role: "user", content: "write" }]));
+
+    expect(error).toBeInstanceOf(LLMError);
+    expect((error as LLMError).errorClass).toBe("policy-block");
+    expect((error as LLMError).retryable).toBe(false);
+    expect(fetchMock).toHaveBeenCalledOnce();
     vi.unstubAllGlobals();
   });
 

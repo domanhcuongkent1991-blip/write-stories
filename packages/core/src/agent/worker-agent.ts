@@ -40,6 +40,22 @@ export interface WorkerResultTool<TParameters extends TSchema> {
 
 const EMPTY_COST = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 };
 
+/**
+ * Pi's AssistantMessage intentionally has a small provider-neutral surface.
+ * Keep the normalized InkOS provenance fields additive and explicit rather
+ * than copying provider payloads into the agent state.
+ */
+type WorkerAssistantMetadata = {
+  readonly finishReason?: string;
+  readonly responseId?: string;
+  readonly cachedInputTokens?: number;
+  readonly reasoningTokens?: number;
+  readonly providerRequestId?: string;
+  readonly retryCounts?: NonNullable<LLMResponse["retryCounts"]>;
+};
+
+type WorkerAssistantMessage = AssistantMessage & WorkerAssistantMetadata;
+
 function workerModel(client: LLMClient, modelId: string, maxTokens?: number): Model<Api> {
   const base = client._piModel;
   if (base) {
@@ -80,7 +96,7 @@ function assistantMessage(
   response: LLMResponse | undefined,
   stopReason: AssistantMessage["stopReason"],
   errorMessage?: string,
-): AssistantMessage {
+): WorkerAssistantMessage {
   return {
     role: "assistant",
     content: content ? [{ type: "text", text: content }] : [],
@@ -91,15 +107,42 @@ function assistantMessage(
       ? {
           input: response.usage.promptTokens,
           output: response.usage.completionTokens,
-          cacheRead: 0,
+          cacheRead: response.cachedInputTokens ?? 0,
           cacheWrite: 0,
           totalTokens: response.usage.totalTokens,
           cost: { ...EMPTY_COST, total: 0 },
         }
       : emptyUsage(),
     stopReason,
+    ...(response?.finishReason !== undefined ? { finishReason: response.finishReason } : {}),
+    ...(response?.responseId !== undefined ? { responseId: response.responseId } : {}),
+    ...(response?.cachedInputTokens !== undefined ? { cachedInputTokens: response.cachedInputTokens } : {}),
+    ...(response?.reasoningTokens !== undefined ? { reasoningTokens: response.reasoningTokens } : {}),
+    ...(response?.providerRequestId !== undefined ? { providerRequestId: response.providerRequestId } : {}),
+    ...(response?.retryCounts !== undefined ? { retryCounts: response.retryCounts } : {}),
     ...(errorMessage ? { errorMessage } : {}),
     timestamp: Date.now(),
+  };
+}
+
+function llmResponseFromAssistantMessage(message: AssistantMessage): LLMResponse {
+  const normalized = message as WorkerAssistantMessage;
+  return {
+    content: normalized.content
+      .filter((part): part is Extract<(typeof normalized.content)[number], { type: "text" }> => part.type === "text")
+      .map((part) => part.text)
+      .join(""),
+    usage: {
+      promptTokens: normalized.usage.input,
+      completionTokens: normalized.usage.output,
+      totalTokens: normalized.usage.totalTokens,
+    },
+    ...(normalized.finishReason !== undefined ? { finishReason: normalized.finishReason } : {}),
+    ...(normalized.responseId !== undefined ? { responseId: normalized.responseId } : {}),
+    ...(normalized.cachedInputTokens !== undefined ? { cachedInputTokens: normalized.cachedInputTokens } : {}),
+    ...(normalized.reasoningTokens !== undefined ? { reasoningTokens: normalized.reasoningTokens } : {}),
+    ...(normalized.providerRequestId !== undefined ? { providerRequestId: normalized.providerRequestId } : {}),
+    ...(normalized.retryCounts !== undefined ? { retryCounts: normalized.retryCounts } : {}),
   };
 }
 
@@ -280,17 +323,7 @@ export async function runWorkerAgent(
     if (final.stopReason === "error" || final.stopReason === "aborted") {
       throw new Error(final.errorMessage ?? `Worker Agent stopped: ${final.stopReason}`);
     }
-    return {
-      content: final.content
-        .filter((part): part is Extract<(typeof final.content)[number], { type: "text" }> => part.type === "text")
-        .map((part) => part.text)
-        .join(""),
-      usage: {
-        promptTokens: final.usage.input,
-        completionTokens: final.usage.output,
-        totalTokens: final.usage.totalTokens,
-      },
-    };
+    return llmResponseFromAssistantMessage(final);
   } finally {
     options.signal?.removeEventListener("abort", abortAgent);
   }
