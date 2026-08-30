@@ -166,9 +166,15 @@ export function createAuditRun(input: {
 }
 
 export function assertAuditRunWriteOnce(existing: AuditRunV1, incoming: AuditRunV1): "idempotent" | "new" {
-  if (existing.attemptId !== incoming.attemptId || existing.phase !== incoming.phase) return "new";
-  if (existing.contentHash === incoming.contentHash && createAuditRunIdentity(existing) === createAuditRunIdentity(incoming)) return "idempotent";
-  const error = Object.assign(new Error("Audit run identity conflicts with an existing content hash"), { code: "STATE_PREFLIGHT_FAILED" });
+  if (
+    existing.chapterNumber !== incoming.chapterNumber
+    || existing.attemptId !== incoming.attemptId
+    || existing.phase !== incoming.phase
+  ) {
+    return "new";
+  }
+  if (serializeAuditRun(existing) === serializeAuditRun(incoming)) return "idempotent";
+  const error = Object.assign(new Error("Audit run identity conflicts with existing immutable evidence"), { code: "STATE_PREFLIGHT_FAILED" });
   throw error;
 }
 

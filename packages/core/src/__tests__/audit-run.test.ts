@@ -72,12 +72,21 @@ describe("AuditRunV1", () => {
     expect(write.relativePath).not.toContain(value.bookId);
   });
 
-  it("treats the same attempt, phase and hash as idempotent and rejects a hash conflict", () => {
+  it("requires the complete normalized semantic payload to match for idempotency", () => {
     const value = run();
     expect(assertAuditRunWriteOnce(value, { ...value })).toBe("idempotent");
-    expect(() => assertAuditRunWriteOnce(value, { ...value, contentHash: "b".repeat(64) })).toThrowError(
-      expect.objectContaining({ code: "STATE_PREFLIGHT_FAILED" }),
-    );
+    const conflicts = [
+      { ...value, contentHash: "b".repeat(64) },
+      { ...value, bookId: "copied-book" },
+      { ...value, decision: "fail" as const, passed: false },
+      { ...value, completedAt: "2026-08-29T00:00:02.000Z" },
+      { ...value, revision: { ...value.revision, attempted: true, rejectionReason: "state-invalid" } },
+    ];
+    for (const conflict of conflicts) {
+      expect(() => assertAuditRunWriteOnce(value, conflict)).toThrowError(
+        expect.objectContaining({ code: "STATE_PREFLIGHT_FAILED" }),
+      );
+    }
   });
 
   it("marks the initial run superseded when a post-revision run exists", () => {

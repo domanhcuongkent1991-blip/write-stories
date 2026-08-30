@@ -176,6 +176,19 @@ describe("StateManager", () => {
       const bookDir = manager.bookDir("rebuild-book");
       const chapterContent = "# Chương 1: Mưa đêm\n\nMưa rơi trên mái hiên.";
       const contentHash = computeChapterContentHash(chapterContent);
+      const canonicalCount = countChapterLength(chapterContent, "vi_wordlike_tokens_v1");
+      await manager.saveBookConfig("rebuild-book", {
+        id: "rebuild-book",
+        title: "Truyện thử",
+        platform: "other",
+        genre: "other",
+        language: "vi",
+        status: "active",
+        targetChapters: 10,
+        chapterWordCount: 2000,
+        createdAt: "2026-08-29T00:00:00.000Z",
+        updatedAt: "2026-08-29T00:00:00.000Z",
+      });
       await mkdir(join(bookDir, "chapters"), { recursive: true });
       await writeFile(join(bookDir, "chapters", "0001_Mưa đêm.md"), chapterContent, "utf-8");
 
@@ -204,7 +217,7 @@ describe("StateManager", () => {
         completedAt: "2026-08-29T00:00:03.000Z",
         canonicalCommitOutcome: "unchanged",
         length: {
-          count: 6,
+          count: canonicalCount,
           countingMode: "vi_wordlike_tokens_v1",
           target: 6,
           softMin: 5,
@@ -332,12 +345,26 @@ describe("StateManager", () => {
       const bookDir = manager.bookDir("rebuild-book");
       const chapterContent = "# Chương 1: Mưa đêm\n\nBằng chứng canonical.";
       const contentHash = computeChapterContentHash(chapterContent);
+      const canonicalCount = countChapterLength(chapterContent, "vi_wordlike_tokens_v1");
+      await manager.saveBookConfig("rebuild-book", {
+        id: "rebuild-book",
+        title: "Truyện thử",
+        platform: "other",
+        genre: "other",
+        language: "vi",
+        status: "active",
+        targetChapters: 10,
+        chapterWordCount: 2000,
+        createdAt: "2026-08-29T00:00:00.000Z",
+        updatedAt: "2026-08-29T00:00:00.000Z",
+      });
       await mkdir(join(bookDir, "chapters"), { recursive: true });
       await writeFile(join(bookDir, "chapters", "0001_Mưa đêm.md"), chapterContent, "utf-8");
 
       const valid = canonicalAuditRun({
         contentHash,
         completedAt: "2026-08-29T00:00:01.000Z",
+        length: { ...canonicalAuditRun().length, count: canonicalCount },
       });
       await writeAuditRun(bookDir, valid);
       await writeAuditRun(bookDir, canonicalAuditRun({
@@ -389,6 +416,91 @@ describe("StateManager", () => {
         auditAttemptId: valid.attemptId,
         auditRunPaths: [auditRunRelativePath(valid)],
       });
+    });
+
+    it.each([
+      ["missing", undefined],
+      ["malformed", "{not-json"],
+      ["schema-invalid", JSON.stringify({ id: "rebuild-book", language: "vi" })],
+      ["wrong-id", JSON.stringify({
+        id: "copied-book",
+        title: "Copied",
+        platform: "other",
+        genre: "other",
+        language: "vi",
+        status: "active",
+        targetChapters: 10,
+        chapterWordCount: 2000,
+        createdAt: "2026-08-29T00:00:00.000Z",
+        updatedAt: "2026-08-29T00:00:00.000Z",
+      })],
+      ["missing-language", JSON.stringify({
+        id: "rebuild-book",
+        title: "Legacy",
+        platform: "other",
+        genre: "other",
+        status: "active",
+        targetChapters: 10,
+        chapterWordCount: 2000,
+        createdAt: "2026-08-29T00:00:00.000Z",
+        updatedAt: "2026-08-29T00:00:00.000Z",
+      })],
+    ])("keeps recovery conservative when canonical book identity/language is %s", async (_label, bookJson) => {
+      const bookDir = manager.bookDir("rebuild-book");
+      const chapterContent = "# Chapter 1\n\nNeutral recovery text.";
+      const contentHash = computeChapterContentHash(chapterContent);
+      await mkdir(join(bookDir, "chapters"), { recursive: true });
+      await writeFile(join(bookDir, "chapters", "0001_.md"), chapterContent, "utf-8");
+      if (bookJson !== undefined) await writeFile(join(bookDir, "book.json"), bookJson, "utf-8");
+      await writeAuditRun(bookDir, canonicalAuditRun({
+        contentHash,
+        length: {
+          ...canonicalAuditRun().length,
+          count: countChapterLength(chapterContent, "vi_wordlike_tokens_v1"),
+        },
+      }));
+
+      const [recovered] = await manager.loadChapterIndex("rebuild-book");
+
+      expect(recovered).toMatchObject({
+        title: "Chapter 1",
+        status: "audit-failed",
+        auditDecision: "inconclusive",
+      });
+      expect(recovered?.lengthTelemetry).toBeUndefined();
+      expect(recovered?.auditAttemptId).toBeUndefined();
+    });
+
+    it("rejects otherwise valid audit evidence whose length count does not match canonical content", async () => {
+      const bookDir = manager.bookDir("rebuild-book");
+      const chapterContent = "# Chương 1\n\nMột hai ba bốn.";
+      const contentHash = computeChapterContentHash(chapterContent);
+      await manager.saveBookConfig("rebuild-book", {
+        id: "rebuild-book",
+        title: "Truyện thử",
+        platform: "other",
+        genre: "other",
+        language: "vi",
+        status: "active",
+        targetChapters: 10,
+        chapterWordCount: 2000,
+        createdAt: "2026-08-29T00:00:00.000Z",
+        updatedAt: "2026-08-29T00:00:00.000Z",
+      });
+      await mkdir(join(bookDir, "chapters"), { recursive: true });
+      await writeFile(join(bookDir, "chapters", "0001_.md"), chapterContent, "utf-8");
+      await writeAuditRun(bookDir, canonicalAuditRun({
+        contentHash,
+        length: {
+          ...canonicalAuditRun().length,
+          count: countChapterLength(chapterContent, "vi_wordlike_tokens_v1") + 1,
+        },
+      }));
+
+      const [recovered] = await manager.loadChapterIndex("rebuild-book");
+
+      expect(recovered).toMatchObject({ status: "audit-failed", auditDecision: "inconclusive" });
+      expect(recovered?.lengthTelemetry).toBeUndefined();
     });
 
     it("does not save an empty chapter index over existing chapter files", async () => {

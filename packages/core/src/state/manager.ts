@@ -552,7 +552,7 @@ export class StateManager {
       return [];
     }
     const canonicalBook = await this.loadCanonicalBookAt(bookDir, expectedBookId);
-    const recoveryBookId = expectedBookId ?? canonicalBook?.id;
+    const recoveryBookId = canonicalBook?.language ? canonicalBook.id : undefined;
     const bookLanguage = canonicalBook?.language;
 
     const rows = await Promise.all(files.sort().flatMap(async (file) => {
@@ -568,13 +568,17 @@ export class StateManager {
       const timestamp = (metadata?.mtime ?? new Date()).toISOString();
       const rawTitle = match[2]?.replace(/^_+/, "").replace(/_/g, " ").trim();
       const contentHash = computeChapterContentHash(content);
-      const canonicalRun = recoveryBookId
+      const canonicalCount = bookLanguage
+        ? countChapterLength(content, resolveLengthCountingMode(bookLanguage))
+        : undefined;
+      const canonicalRun = recoveryBookId && bookLanguage && canonicalCount !== undefined
         ? await this.loadLatestCanonicalAuditRun({
             bookDir,
             bookId: recoveryBookId,
             chapterNumber: number,
             contentHash,
             bookLanguage,
+            canonicalCount,
           })
         : undefined;
       const meta = canonicalRun
@@ -682,7 +686,8 @@ export class StateManager {
     readonly bookId: string;
     readonly chapterNumber: number;
     readonly contentHash: string;
-    readonly bookLanguage?: WritingLanguage;
+    readonly bookLanguage: WritingLanguage;
+    readonly canonicalCount: number;
   }): Promise<{ readonly run: AuditRunV1; readonly relativePath: string } | undefined> {
     const chapter = String(input.chapterNumber).padStart(4, "0");
     const runsDir = join(input.bookDir, "story", "audit", "runs", `chapter-${chapter}`);
@@ -704,7 +709,8 @@ export class StateManager {
         run.bookId !== input.bookId
         || run.chapterNumber !== input.chapterNumber
         || run.contentHash !== input.contentHash
-        || (input.bookLanguage !== undefined && run.length.countingMode !== resolveLengthCountingMode(input.bookLanguage))
+        || run.length.countingMode !== resolveLengthCountingMode(input.bookLanguage)
+        || run.length.count !== input.canonicalCount
         || (run.canonicalCommitOutcome !== "terminal-commit" && run.canonicalCommitOutcome !== "unchanged")
       ) {
         return undefined;
@@ -743,7 +749,8 @@ export class StateManager {
   ): string {
     if (bookLanguage === "vi") return `Chương ${chapterNumber}`;
     if (bookLanguage === "en") return `Chapter ${chapterNumber}`;
-    return `第${chapterNumber}章`;
+    if (bookLanguage === "zh") return `第${chapterNumber}章`;
+    return `Chapter ${chapterNumber}`;
   }
 
   async saveChapterIndex(

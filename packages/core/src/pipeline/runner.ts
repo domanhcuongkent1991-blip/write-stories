@@ -765,24 +765,54 @@ export class PipelineRunner {
     expectedBookId: string,
   ): Promise<ResumableProductionRun | undefined> {
     const runtimeDir = join(bookDir, "story", "runtime");
-    const files = await readdir(runtimeDir).catch(() => [] as string[]);
+    const files = await readdir(runtimeDir).catch((error: NodeJS.ErrnoException) => {
+      if (error.code === "ENOENT") return [] as string[];
+      throw error;
+    });
     const candidates = (await Promise.all(files.sort().map(async (file) => {
       const fileMatch = /^chapter-(\d{4})\.run\.json$/u.exec(file);
       if (!fileMatch) return undefined;
-      const raw = await readFile(join(runtimeDir, file), "utf-8").catch(() => undefined);
+      const raw = await readFile(join(runtimeDir, file), "utf-8").catch((error: NodeJS.ErrnoException) => {
+        if (error.code === "ENOENT") return undefined;
+        throw error;
+      });
       if (raw === undefined) return undefined;
       let parsed: unknown;
       try {
         parsed = JSON.parse(raw);
       } catch {
-        return undefined;
+        throw this.statePreflightError(`Production resume snapshot ${file} is malformed.`);
       }
-      if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) return undefined;
+      if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
+        throw this.statePreflightError(`Production resume snapshot ${file} has an invalid shape.`);
+      }
       const value = parsed as Record<string, unknown>;
+      const chapterNumber = Number(fileMatch[1]);
+      const expectedRunId = `${expectedBookId}:chapter-${fileMatch[1]}`;
+      if (value.id !== expectedRunId) {
+        throw this.statePreflightError(`Production resume snapshot ${file} does not belong to book ${expectedBookId}.`);
+      }
       if (
         value.version !== 1
         || value.kind !== "long-fiction"
-        || (value.status !== "running" && value.status !== "failed")
+        || value.resumeCursor !== String(chapterNumber)
+        || value.stage !== `chapter-${chapterNumber}`
+      ) {
+        throw this.statePreflightError(`Production resume snapshot ${file} has invalid canonical identity.`);
+      }
+      if (value.status === "complete" || value.status === "needs-review" || value.status === "cancelled") {
+        if (
+          (value.operationId !== undefined && (typeof value.operationId !== "string" || !UUID_PATTERN.test(value.operationId)))
+          || (value.attemptId !== undefined && (typeof value.attemptId !== "string" || !UUID_PATTERN.test(value.attemptId)))
+          || (value.phase !== undefined && value.phase !== "initial" && value.phase !== "post-revision" && value.phase !== "manual")
+          || (value.contentHash !== undefined && (typeof value.contentHash !== "string" || !SHA256_PATTERN.test(value.contentHash)))
+        ) {
+          throw this.statePreflightError(`Production terminal snapshot ${file} has invalid audit identity.`);
+        }
+        return undefined;
+      }
+      if (
+        (value.status !== "pending" && value.status !== "running" && value.status !== "failed")
         || typeof value.operationId !== "string"
         || !UUID_PATTERN.test(value.operationId)
         || typeof value.attemptId !== "string"
@@ -790,14 +820,8 @@ export class PipelineRunner {
         || (value.phase !== "initial" && value.phase !== "post-revision" && value.phase !== "manual")
         || (value.contentHash !== undefined && (typeof value.contentHash !== "string" || !SHA256_PATTERN.test(value.contentHash)))
       ) {
-        return undefined;
+        throw this.statePreflightError(`Production resume snapshot ${file} has invalid resumable identity.`);
       }
-      const chapterNumber = Number(fileMatch[1]);
-      const expectedRunId = `${expectedBookId}:chapter-${fileMatch[1]}`;
-      if (value.id !== expectedRunId) {
-        throw this.statePreflightError(`Production resume snapshot ${file} does not belong to book ${expectedBookId}.`);
-      }
-      if (value.resumeCursor !== String(chapterNumber) || value.stage !== `chapter-${chapterNumber}`) return undefined;
       return {
         chapterNumber,
         runPath: join("story", "runtime", file),
@@ -812,8 +836,9 @@ export class PipelineRunner {
 
   private async assertResumableAuditIdentity(
     bookDir: string,
+    expectedBookId: string,
     resume: ResumableProductionRun,
-  ): Promise<void> {
+  ): Promise<AuditRunV1 | undefined> {
     const relativePath = auditRunRelativePath({
       chapterNumber: resume.chapterNumber,
       attemptId: resume.attemptId,
@@ -823,7 +848,14 @@ export class PipelineRunner {
       if (error.code === "ENOENT") return undefined;
       throw error;
     });
-    if (raw === undefined) return;
+    if (raw === undefined) {
+      if (resume.contentHash !== undefined) {
+        throw this.statePreflightError(
+          "Hashed production resume has no immutable audit artifact for its attempt and phase.",
+        );
+      }
+      return undefined;
+    }
     let parsedJson: unknown;
     try {
       parsedJson = JSON.parse(raw);
@@ -834,11 +866,57 @@ export class PipelineRunner {
     if (!parsed.success) {
       throw this.statePreflightError(`Existing audit run ${relativePath} has an invalid schema.`);
     }
-    if (parsed.data.operationId !== resume.operationId) {
-      throw this.statePreflightError("Production resume operationId conflicts with immutable audit evidence.");
+    if (
+      parsed.data.bookId !== expectedBookId
+      || parsed.data.chapterNumber !== resume.chapterNumber
+      || parsed.data.operationId !== resume.operationId
+      || parsed.data.attemptId !== resume.attemptId
+      || parsed.data.phase !== resume.phase
+      || auditRunRelativePath(parsed.data) !== relativePath
+      || (resume.contentHash !== undefined && parsed.data.contentHash !== resume.contentHash)
+    ) {
+      throw this.statePreflightError("Production resume identity conflicts with immutable audit evidence.");
     }
-    if (resume.contentHash !== undefined && parsed.data.contentHash !== resume.contentHash) {
-      assertAuditRunWriteOnce(parsed.data, { ...parsed.data, contentHash: resume.contentHash });
+    return parsed.data;
+  }
+
+  private assertTerminalAuditBoundToResume(input: {
+    readonly bookId: string;
+    readonly resume: ResumableProductionRun;
+    readonly resumeRun?: AuditRunV1;
+    readonly terminalRun: AuditRunV1;
+    readonly canonicalContentHash: string;
+  }): void {
+    const { resume, resumeRun, terminalRun } = input;
+    if (
+      terminalRun.bookId !== input.bookId
+      || terminalRun.chapterNumber !== resume.chapterNumber
+      || terminalRun.operationId !== resume.operationId
+      || terminalRun.attemptId !== resume.attemptId
+      || terminalRun.contentHash !== input.canonicalContentHash
+    ) {
+      throw this.statePreflightError("Canonical terminal audit evidence conflicts with the production resume identity.");
+    }
+
+    if (terminalRun.phase === resume.phase) {
+      if (resumeRun === undefined) {
+        throw this.statePreflightError("Production resume has no canonical audit artifact for terminal recovery.");
+      }
+      assertAuditRunWriteOnce(resumeRun, terminalRun);
+      return;
+    }
+
+    const linkedAcceptedRevision = resume.phase === "initial"
+      && terminalRun.phase === "post-revision"
+      && resumeRun?.phase === "initial"
+      && resumeRun.canonicalCommitOutcome === "superseded"
+      && resumeRun.revision.accepted
+      && resumeRun.revision.candidateProduced
+      && resumeRun.revision.candidateContentHash === terminalRun.contentHash
+      && terminalRun.canonicalCommitOutcome === "terminal-commit"
+      && terminalRun.revision.accepted;
+    if (!linkedAcceptedRevision) {
+      throw this.statePreflightError("Terminal audit phase is not linked to the resumable production phase.");
     }
   }
 
@@ -2917,19 +2995,36 @@ export class PipelineRunner {
     const chapterNumber = await this.state.getNextChapterNumber(bookId);
     const resume = await this.loadResumableProductionRun(bookDir, bookId);
     if (resume) {
-      await this.assertResumableAuditIdentity(bookDir, resume);
+      const resumeRun = await this.assertResumableAuditIdentity(bookDir, bookId, resume);
       const projection = await this.state.loadCanonicalChapterProjection(bookId, resume.chapterNumber);
       if (
         projection?.auditRun
         && projection.auditRun.operationId === resume.operationId
         && projection.auditRun.attemptId === resume.attemptId
       ) {
+        this.assertTerminalAuditBoundToResume({
+          bookId,
+          resume,
+          resumeRun,
+          terminalRun: projection.auditRun,
+          canonicalContentHash: projection.contentHash,
+        });
         return this.completeRecoveredProductionRun({
           book,
           profile,
           resume,
           projection: { ...projection, auditRun: projection.auditRun },
         });
+      }
+      if (projection?.auditRun) {
+        throw this.statePreflightError(
+          `Interrupted chapter ${resume.chapterNumber} conflicts with canonical terminal audit evidence.`,
+        );
+      }
+      if (resumeRun) {
+        throw this.statePreflightError(
+          `Interrupted chapter ${resume.chapterNumber} has immutable audit evidence without a canonical chapter.`,
+        );
       }
       if (resume.chapterNumber !== chapterNumber) {
         throw this.statePreflightError(

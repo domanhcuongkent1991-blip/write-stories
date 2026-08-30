@@ -28,6 +28,7 @@ import { countChapterLength } from "../utils/length-metrics.js";
 import { computeChapterContentHash } from "../audit/chapter-audit-evaluator.js";
 import {
   auditRunRelativePath,
+  createAuditRunWrite,
   serializeAuditRun,
   type AuditRunV1,
 } from "../audit/audit-run.js";
@@ -41,6 +42,7 @@ import {
   type WritingLanguageProfile,
 } from "../utils/language.js";
 import * as atomicFileSetModule from "../utils/atomic-file-set.js";
+import type { AtomicFileWrite } from "../utils/atomic-file-set.js";
 import * as hookPromotionModule from "../utils/hook-promotion.js";
 
 const require = createRequire(import.meta.url);
@@ -407,7 +409,7 @@ async function writeProductionResumeSnapshot(input: {
   readonly snapshotId?: string;
   readonly phase?: AuditRunV1["phase"];
   readonly contentHash?: string;
-  readonly status?: "running" | "failed";
+  readonly status?: "running" | "failed" | "complete" | "needs-review" | "cancelled";
 }): Promise<string> {
   const padded = String(input.chapterNumber).padStart(4, "0");
   const runPath = join(input.bookDir, "story", "runtime", `chapter-${padded}.run.json`);
@@ -429,6 +431,18 @@ async function writeProductionResumeSnapshot(input: {
     ...(input.contentHash ? { contentHash: input.contentHash } : {}),
     updatedAt: "2026-08-29T00:00:00.000Z",
   }, null, 2), "utf-8");
+  return runPath;
+}
+
+async function writeRawProductionSnapshot(
+  bookDir: string,
+  chapterNumber: number,
+  content: string,
+): Promise<string> {
+  const padded = String(chapterNumber).padStart(4, "0");
+  const runPath = join(bookDir, "story", "runtime", `chapter-${padded}.run.json`);
+  await mkdir(dirname(runPath), { recursive: true });
+  await writeFile(runPath, content, "utf-8");
   return runPath;
 }
 
@@ -2726,6 +2740,7 @@ describe("PipelineRunner", () => {
 
   it("resumes a terminal canonical chapter by rebuilding projections without model calls or chapter rewrites", async () => {
     const { root, runner, state, bookId } = await createRunnerFixture();
+    await state.saveBookConfig(bookId, { ...await state.loadBookConfig(bookId), language: "zh" });
     const bookDir = state.bookDir(bookId);
     const chapterContent = `# 第1章 终局证据\n\n${"稳".repeat(220)}`;
     const contentHash = computeChapterContentHash(chapterContent);
@@ -2799,6 +2814,7 @@ describe("PipelineRunner", () => {
 
   it("preserves parse-failure provenance when resuming canonical audit evidence", async () => {
     const { root, runner, state, bookId } = await createRunnerFixture();
+    await state.saveBookConfig(bookId, { ...await state.loadBookConfig(bookId), language: "zh" });
     const bookDir = state.bookDir(bookId);
     const chapterContent = `# 第1章 解析失败\n\n${"证".repeat(220)}`;
     const contentHash = computeChapterContentHash(chapterContent);
@@ -2920,6 +2936,165 @@ describe("PipelineRunner", () => {
     }
   });
 
+  it.each(["missing-audit-artifact", "audit-without-canonical-chapter"])(
+    "fails before model work when a hashed resume has %s",
+    async (scenario) => {
+      const { root, runner, state, bookId } = await createRunnerFixture();
+      const bookDir = state.bookDir(bookId);
+      const operationId = randomUUID();
+      const attemptId = randomUUID();
+      const contentHash = "a".repeat(64);
+      const runPath = await writeProductionResumeSnapshot({
+        bookDir,
+        chapterNumber: 1,
+        operationId,
+        attemptId,
+        contentHash,
+      });
+      if (scenario === "audit-without-canonical-chapter") {
+        await writeProductionAuditRun(bookDir, productionAuditRun({
+          bookId,
+          chapterNumber: 1,
+          operationId,
+          attemptId,
+          contentHash,
+        }));
+      }
+      const snapshotBefore = await readFile(runPath, "utf-8");
+      const planner = vi.spyOn(PlannerAgent.prototype, "planChapter");
+      const writer = vi.spyOn(WriterAgent.prototype, "writeChapter");
+      const auditor = vi.spyOn(ContinuityAuditor.prototype, "auditChapter");
+
+      try {
+        await expect(runner.writeNextChapter(bookId, 220)).rejects.toMatchObject({
+          code: "STATE_PREFLIGHT_FAILED",
+        });
+        expect(planner).not.toHaveBeenCalled();
+        expect(writer).not.toHaveBeenCalled();
+        expect(auditor).not.toHaveBeenCalled();
+        expect(await readFile(runPath, "utf-8")).toBe(snapshotBefore);
+      } finally {
+        await rm(root, { recursive: true, force: true });
+      }
+    },
+  );
+
+  it.each([
+    ["book", (run: AuditRunV1) => ({ ...run, bookId: "copied-book" })],
+    ["chapter", (run: AuditRunV1) => ({ ...run, chapterNumber: 2 })],
+    ["operation", (run: AuditRunV1) => ({ ...run, operationId: randomUUID() })],
+    ["attempt", (run: AuditRunV1) => ({ ...run, attemptId: randomUUID() })],
+    ["phase/path", (run: AuditRunV1) => ({ ...run, phase: "manual" as const })],
+  ])("binds resumed %s identity to the canonical audit path before model work", async (_label, mutate) => {
+    const { root, runner, state, bookId } = await createRunnerFixture();
+    const bookDir = state.bookDir(bookId);
+    const operationId = randomUUID();
+    const attemptId = randomUUID();
+    const contentHash = "a".repeat(64);
+    const runPath = await writeProductionResumeSnapshot({
+      bookDir,
+      chapterNumber: 1,
+      operationId,
+      attemptId,
+      contentHash,
+    });
+    const expectedAuditPath = auditRunRelativePath({ chapterNumber: 1, attemptId, phase: "initial" });
+    await mkdir(dirname(join(bookDir, expectedAuditPath)), { recursive: true });
+    const conflicting = mutate(productionAuditRun({
+      bookId,
+      chapterNumber: 1,
+      operationId,
+      attemptId,
+      contentHash,
+    }));
+    await writeFile(join(bookDir, expectedAuditPath), serializeAuditRun(conflicting), "utf-8");
+    const snapshotBefore = await readFile(runPath, "utf-8");
+    const planner = vi.spyOn(PlannerAgent.prototype, "planChapter");
+    const writer = vi.spyOn(WriterAgent.prototype, "writeChapter");
+    const auditor = vi.spyOn(ContinuityAuditor.prototype, "auditChapter");
+
+    try {
+      await expect(runner.writeNextChapter(bookId, 220)).rejects.toMatchObject({
+        code: "STATE_PREFLIGHT_FAILED",
+      });
+      expect(planner).not.toHaveBeenCalled();
+      expect(writer).not.toHaveBeenCalled();
+      expect(auditor).not.toHaveBeenCalled();
+      expect(await readFile(runPath, "utf-8")).toBe(snapshotBefore);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("recovers a linked accepted post-revision run from an initial resumable identity", async () => {
+    const { root, runner, state, bookId } = await createRunnerFixture();
+    await state.saveBookConfig(bookId, { ...await state.loadBookConfig(bookId), language: "zh" });
+    const bookDir = state.bookDir(bookId);
+    const chapterContent = `# 第1章 修订终局\n\n${"新".repeat(220)}`;
+    const canonicalHash = computeChapterContentHash(chapterContent);
+    const initialHash = "a".repeat(64);
+    const operationId = randomUUID();
+    const attemptId = randomUUID();
+    await writeFile(join(bookDir, "chapters", "0001_修订终局.md"), chapterContent, "utf-8");
+    const initialRun = {
+      ...productionAuditRun({
+        bookId,
+        chapterNumber: 1,
+        contentHash: initialHash,
+        operationId,
+        attemptId,
+      }),
+      canonicalCommitOutcome: "superseded" as const,
+      revision: {
+        attempted: true,
+        candidateProduced: true,
+        candidateContentHash: canonicalHash,
+        candidateWordCount: 220,
+        accepted: true,
+      },
+    };
+    const postRun = {
+      ...productionAuditRun({
+        bookId,
+        chapterNumber: 1,
+        contentHash: canonicalHash,
+        operationId,
+        attemptId,
+        phase: "post-revision",
+      }),
+      canonicalCommitOutcome: "terminal-commit" as const,
+      revision: {
+        attempted: true,
+        candidateProduced: true,
+        candidateContentHash: canonicalHash,
+        candidateWordCount: 220,
+        accepted: true,
+      },
+    };
+    await writeProductionAuditRun(bookDir, initialRun);
+    await writeProductionAuditRun(bookDir, postRun);
+    await writeProductionResumeSnapshot({
+      bookDir,
+      chapterNumber: 1,
+      operationId,
+      attemptId,
+      phase: "initial",
+      contentHash: initialHash,
+    });
+    const writer = vi.spyOn(WriterAgent.prototype, "writeChapter");
+
+    try {
+      await expect(runner.writeNextChapter(bookId, 220)).resolves.toMatchObject({
+        chapterNumber: 1,
+        revised: true,
+        auditResult: { decision: "pass", contentHash: canonicalHash },
+      });
+      expect(writer).not.toHaveBeenCalled();
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
   it("fails safe instead of accepting resume identity from a copied production snapshot", async () => {
     const { root, runner, state, bookId } = await createRunnerFixture();
     const bookDir = state.bookDir(bookId);
@@ -2955,9 +3130,201 @@ describe("PipelineRunner", () => {
     }
   });
 
+  it.each([
+    ["malformed JSON", "{not-json"],
+    ["invalid version", JSON.stringify({
+      version: 2,
+      kind: "long-fiction",
+      id: "test-book:chapter-0001",
+      status: "running",
+      stage: "chapter-1",
+      resumeCursor: "1",
+      operationId: randomUUID(),
+      attemptId: randomUUID(),
+      phase: "initial",
+    })],
+    ["invalid kind", JSON.stringify({
+      version: 1,
+      kind: "short-fiction",
+      id: "test-book:chapter-0001",
+      status: "running",
+      stage: "chapter-1",
+      resumeCursor: "1",
+      operationId: randomUUID(),
+      attemptId: randomUUID(),
+      phase: "initial",
+    })],
+    ["invalid resumable status", JSON.stringify({
+      version: 1,
+      kind: "long-fiction",
+      id: "test-book:chapter-0001",
+      status: "paused",
+      stage: "chapter-1",
+      resumeCursor: "1",
+      operationId: randomUUID(),
+      attemptId: randomUUID(),
+      phase: "initial",
+    })],
+    ["invalid terminal identity", JSON.stringify({
+      version: 1,
+      kind: "long-fiction",
+      id: "test-book:chapter-0001",
+      status: "complete",
+      stage: "chapter-1",
+      resumeCursor: "1",
+      operationId: "invalid",
+      attemptId: randomUUID(),
+      phase: "initial",
+      contentHash: "not-a-hash",
+    })],
+    ["invalid UUID", JSON.stringify({
+      version: 1,
+      kind: "long-fiction",
+      id: "test-book:chapter-0001",
+      status: "running",
+      stage: "chapter-1",
+      artifacts: [],
+      observations: [],
+      resumeCursor: "1",
+      operationId: "not-a-uuid",
+      attemptId: randomUUID(),
+      phase: "initial",
+    })],
+    ["invalid phase and hash", JSON.stringify({
+      version: 1,
+      kind: "long-fiction",
+      id: "test-book:chapter-0001",
+      status: "failed",
+      stage: "chapter-1",
+      artifacts: [],
+      observations: [],
+      resumeCursor: "1",
+      operationId: randomUUID(),
+      attemptId: randomUUID(),
+      phase: "afterwards",
+      contentHash: "not-a-hash",
+    })],
+    ["stage/cursor conflict", JSON.stringify({
+      version: 1,
+      kind: "long-fiction",
+      id: "test-book:chapter-0001",
+      status: "running",
+      stage: "chapter-2",
+      artifacts: [],
+      observations: [],
+      resumeCursor: "2",
+      operationId: randomUUID(),
+      attemptId: randomUUID(),
+      phase: "initial",
+    })],
+    ["wrong book plus invalid identity", JSON.stringify({
+      version: 1,
+      kind: "long-fiction",
+      id: "copied-book:chapter-0001",
+      status: "failed",
+      stage: "chapter-1",
+      artifacts: [],
+      observations: [],
+      resumeCursor: "1",
+      operationId: "invalid",
+      attemptId: "invalid",
+      phase: "initial",
+    })],
+  ])("fails closed before model work and preserves a potentially resumable snapshot with %s", async (_label, raw) => {
+    const { root, runner, state, bookId } = await createRunnerFixture();
+    const runPath = await writeRawProductionSnapshot(state.bookDir(bookId), 1, raw);
+    const snapshotBefore = await readFile(runPath, "utf-8");
+    const planner = vi.spyOn(PlannerAgent.prototype, "planChapter");
+    const writer = vi.spyOn(WriterAgent.prototype, "writeChapter");
+    const auditor = vi.spyOn(ContinuityAuditor.prototype, "auditChapter");
+
+    try {
+      await expect(runner.writeNextChapter(bookId, 220)).rejects.toMatchObject({
+        code: "STATE_PREFLIGHT_FAILED",
+      });
+      expect(planner).not.toHaveBeenCalled();
+      expect(writer).not.toHaveBeenCalled();
+      expect(auditor).not.toHaveBeenCalled();
+      expect(await readFile(runPath, "utf-8")).toBe(snapshotBefore);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it.each(["complete", "needs-review", "cancelled"] as const)(
+    "treats a valid %s production snapshot as terminal rather than resumable",
+    async (status) => {
+      const { root, runner, state, bookId } = await createRunnerFixture();
+      const bookDir = state.bookDir(bookId);
+      await writeProductionResumeSnapshot({
+        bookDir,
+        chapterNumber: 1,
+        operationId: randomUUID(),
+        attemptId: randomUUID(),
+        status,
+      });
+
+      try {
+        const loaded = await (runner as unknown as {
+          loadResumableProductionRun(path: string, expectedBookId: string): Promise<unknown>;
+        }).loadResumableProductionRun(bookDir, bookId);
+        expect(loaded).toBeUndefined();
+      } finally {
+        await rm(root, { recursive: true, force: true });
+      }
+    },
+  );
+
+  it("rejects semantic audit-run conflicts before index commit and allows an exact duplicate", async () => {
+    const { root, runner, state, bookId } = await createRunnerFixture();
+    const bookDir = state.bookDir(bookId);
+    const existing = productionAuditRun({
+      bookId,
+      chapterNumber: 1,
+      contentHash: "a".repeat(64),
+    });
+    const auditPath = await writeProductionAuditRun(bookDir, existing);
+    const indexPath = join(bookDir, "chapters", "index.json");
+    await writeFile(indexPath, "[]", "utf-8");
+    const indexBefore = await readFile(indexPath, "utf-8");
+    const commit = (runner as unknown as {
+      commitCanonicalChapterFileSet(
+        path: string,
+        fileSet: { writes: ReadonlyArray<AtomicFileWrite>; deletes: ReadonlyArray<string> },
+        index: ReadonlyArray<ChapterMeta>,
+      ): Promise<void>;
+    }).commitCanonicalChapterFileSet.bind(runner);
+    const updatedIndex: ChapterMeta[] = [{
+      number: 1,
+      title: "Conflict",
+      status: "audit-failed",
+      wordCount: 220,
+      createdAt: "2026-08-29T00:00:00.000Z",
+      updatedAt: "2026-08-29T00:00:00.000Z",
+      auditIssues: [],
+      lengthWarnings: [],
+    }];
+
+    try {
+      const conflict = { ...existing, decision: "fail" as const, passed: false };
+      await expect(commit(bookDir, { writes: [createAuditRunWrite(conflict)], deletes: [] }, updatedIndex))
+        .rejects.toMatchObject({ code: "STATE_PREFLIGHT_FAILED" });
+      expect(await readFile(indexPath, "utf-8")).toBe(indexBefore);
+      expect(await readFile(join(bookDir, auditPath), "utf-8")).toBe(serializeAuditRun(existing));
+
+      await expect(commit(bookDir, { writes: [createAuditRunWrite(existing)], deletes: [] }, updatedIndex))
+        .resolves.toBeUndefined();
+      expect(JSON.parse(await readFile(indexPath, "utf-8"))).toEqual(updatedIndex);
+      expect(await readFile(join(bookDir, auditPath), "utf-8")).toBe(serializeAuditRun(existing));
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
   it("warns when resume projection persistence fails after canonical commit", async () => {
     const { logger, warnings } = createCaptureLogger();
     const { root, runner, state, bookId } = await createRunnerFixture({ logger });
+    await state.saveBookConfig(bookId, { ...await state.loadBookConfig(bookId), language: "zh" });
     const bookDir = state.bookDir(bookId);
     const chapterContent = `# 第1章 已提交\n\n${"真".repeat(220)}`;
     const contentHash = computeChapterContentHash(chapterContent);
