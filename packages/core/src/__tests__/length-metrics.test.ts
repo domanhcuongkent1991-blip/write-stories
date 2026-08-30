@@ -97,11 +97,22 @@ describe("length metrics", () => {
   });
 
   it("builds VI defaults without changing zh/en", () => {
-    expect(defaultChapterLength("vi")).toBe(2000);
+    expect(defaultChapterLength("vi")).toBe(1150);
     expect(resolveLengthCountingMode("vi")).toBe("vi_wordlike_tokens_v1");
     expect(buildLengthSpec(2200, "vi").countingMode).toBe("vi_wordlike_tokens_v1");
     expect(defaultChapterLength("zh")).toBe(3000);
     expect(defaultChapterLength("en")).toBe(2000);
+  });
+
+  it("builds the approved Vietnamese short-chapter policy", () => {
+    expect(buildLengthSpec(1150, "vi")).toEqual({
+      target: 1150,
+      softMin: 1000,
+      softMax: 1300,
+      hardMin: 1000,
+      hardMax: 1500,
+      countingMode: "vi_wordlike_tokens_v1",
+    });
   });
 
   it("formats Vietnamese length counts in words", () => {

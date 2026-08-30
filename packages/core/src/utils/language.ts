@@ -38,7 +38,7 @@ const WRITING_LANGUAGE_PROFILES: Readonly<
     promptStrategy: "en-scaffold-vi-contract",
     scaffoldLanguage: "en",
     countingMode: "vi_wordlike_tokens_v1",
-    defaultChapterLength: 2000,
+    defaultChapterLength: 1150,
     supportsLongFiction: true,
   },
 };

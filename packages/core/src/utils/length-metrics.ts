@@ -58,6 +58,17 @@ export function buildLengthSpec(
   target: number,
   language: WritingLanguage = "zh",
 ): LengthSpec {
+  if (language === "vi" && target === 1150) {
+    return {
+      target,
+      softMin: 1000,
+      softMax: 1300,
+      hardMin: 1000,
+      hardMax: 1500,
+      countingMode: "vi_wordlike_tokens_v1",
+    };
+  }
+
   const softDelta = scaleRangeDelta(target, SOFT_RANGE_DELTA);
   const hardDelta = Math.max(softDelta, scaleRangeDelta(target, HARD_RANGE_DELTA));
   const softMin = Math.max(1, target - softDelta);
