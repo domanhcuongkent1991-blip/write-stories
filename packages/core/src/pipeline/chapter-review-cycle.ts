@@ -1,9 +1,14 @@
+import { randomUUID } from "node:crypto";
 import type { AuditIssue, AuditResult } from "../agents/continuity.js";
 import type { ReviseMode, ReviseOutput } from "../agents/reviser.js";
 import type { WriteChapterOutput } from "../agents/writer.js";
 import type { ChapterIntent, ChapterMemo, ContextPackage, RuleStack } from "../models/input-governance.js";
 import type { LengthSpec } from "../models/length-governance.js";
 import { countChapterLength, isOutsideHardRange } from "../utils/length-metrics.js";
+import { computeChapterContentHash } from "../audit/chapter-audit-evaluator.js";
+import type { ChapterAuditEvaluation } from "../audit/chapter-audit-evaluator.js";
+import { decideAudit, evaluateRevisionCandidate } from "../audit/audit-policy.js";
+import { createAuditRun, type AuditRunV1 } from "../audit/audit-run.js";
 
 export interface ChapterReviewCycleUsage {
   readonly promptTokens: number;
@@ -28,11 +33,26 @@ export interface ChapterReviewCycleResult {
   readonly totalUsage: ChapterReviewCycleUsage;
   readonly postReviseCount: number;
   readonly repairApplied: boolean;
+  readonly revisionAttempts?: number;
+  readonly auditRuns?: ReadonlyArray<AuditRunV1>;
 }
 
 const DEFAULT_MAX_REVIEW_ITERATIONS = 1;
 const PASS_SCORE_THRESHOLD = 85;
-const NET_IMPROVEMENT_EPSILON = 3;
+
+function asEvaluation(result: AuditResult, content: string): ChapterAuditEvaluation {
+  const decision = result.decision ?? (result.passed ? "pass" : "fail");
+  return {
+    decision,
+    passed: decision === "pass",
+    findings: result.issues,
+    parseFailed: result.parseFailed === true,
+    overallScore: result.overallScore,
+    contentHash: result.contentHash ?? computeChapterContentHash(content),
+    tokenUsage: result.tokenUsage,
+    provenance: result.provenance,
+  };
+}
 
 interface ReviewSnapshot {
   readonly content: string;
@@ -45,6 +65,7 @@ interface ReviewSnapshot {
 export async function runChapterReviewCycle(params: {
   readonly book: Pick<{ genre: string }, "genre">;
   readonly bookDir: string;
+  readonly bookId?: string;
   readonly chapterNumber: number;
   readonly initialOutput: Pick<WriteChapterOutput, "content" | "wordCount" | "postWriteErrors">;
   readonly reducedControlInput?: ChapterReviewCycleControlInput;
@@ -97,6 +118,8 @@ export async function runChapterReviewCycle(params: {
   /** Re-run deterministic post-write checks (chapter-ref, paragraph shape, etc.) on any content. */
   readonly runPostWriteChecks?: (content: string) => ReadonlyArray<AuditIssue>;
   readonly maxReviewIterations?: number;
+  readonly autoRevisionAllowed?: boolean;
+  readonly stateSettlementValid?: (output: ReviseOutput) => boolean | Promise<boolean>;
   readonly logWarn: (message: { zh: string; en: string }) => void;
   readonly logStage: (message: { zh: string; en: string }) => void;
 }): Promise<ChapterReviewCycleResult> {
@@ -105,6 +128,10 @@ export async function runChapterReviewCycle(params: {
     ?? params.initialOutput.content;
   let finalWordCount = countChapterLength(finalContent, params.lengthSpec.countingMode);
   const preAuditWordCount = finalWordCount;
+  let assessmentCount = 0;
+  const auditRunOperationId = randomUUID();
+  const auditRunAttemptId = randomUUID();
+  const auditAssessments: Array<{ content: string; auditResult: AuditResult }> = [];
 
   // Convert initial postWriteErrors into AuditIssues as fallback when runPostWriteChecks isn't provided.
   const initialPostWriteIssues: ReadonlyArray<AuditIssue> = params.initialOutput.postWriteErrors.map((violation) => ({
@@ -143,6 +170,9 @@ export async function runChapterReviewCycle(params: {
       category: "length-budget",
       description: `Chapter length ${wordCount} is outside the required range ${params.lengthSpec.hardMin}-${params.lengthSpec.hardMax}.`,
       suggestion: `Repair only the scenes that are underdeveloped or redundant, then land near ${params.lengthSpec.target} without changing established facts.`,
+      ruleId: "length.hard-range",
+      repairScope: "structural",
+      repairTarget: "prose",
     }];
 
     // Deterministic post-write checks: run every round, not just the first.
@@ -151,36 +181,56 @@ export async function runChapterReviewCycle(params: {
       ? params.runPostWriteChecks(content)
       : initialPostWriteIssues;
 
-    const allIssues: AuditIssue[] = [
-      ...llmAudit.issues,
-      ...aiTellsResult.issues,
-      ...sensitiveResult.issues,
-      ...postWriteIssues,
-      ...lengthIssues,
-    ];
-
-    const hasPostWriteCritical = postWriteIssues.some((i) => i.severity === "critical");
+    const deterministicFindings = [...aiTellsResult.issues, ...sensitiveResult.issues, ...postWriteIssues, ...lengthIssues]
+      .map((issue) => issue.repairTarget ? issue : { ...issue, repairTarget: "prose" as const });
+    const evaluation = decideAudit({
+      content,
+      lengthSpec: params.lengthSpec,
+      llmAudit,
+      deterministicFindings,
+      stateFindings: [],
+      operation: assessmentCount === 0 ? "audit" : "re-audit",
+      revisionAttempts: Math.max(0, assessmentCount),
+      maxRevisionAttempts: 1,
+      autoRevisionAllowed: params.autoRevisionAllowed ?? true,
+    }, {
+      operation: assessmentCount === 0 ? "audit" : "re-audit",
+      autoRevisionAllowed: params.autoRevisionAllowed ?? true,
+      revisionAttempts: Math.max(0, assessmentCount),
+      maxRevisionAttempts: 1,
+    });
+    assessmentCount += 1;
     const auditResult: AuditResult = {
-      passed: (hasBlockedWords || hasPostWriteCritical || !lengthInRange) ? false : llmAudit.passed,
-      issues: allIssues,
+      ...llmAudit,
+      passed: evaluation.passed,
+      issues: evaluation.findings,
       summary: llmAudit.summary,
       parseFailed: llmAudit.parseFailed,
-      overallScore: llmAudit.overallScore,
+      overallScore: evaluation.overallScore,
+      tokenUsage: llmAudit.tokenUsage,
+      decision: evaluation.decision,
+      contentHash: evaluation.contentHash,
     };
+    auditAssessments.push({ content, auditResult });
 
-    const score = llmAudit.overallScore ?? 0;
+    const score = evaluation.overallScore ?? 0;
 
     return { auditResult, score, lengthInRange };
   };
 
   const isPassed = (assessment: { auditResult: AuditResult; score: number; lengthInRange: boolean }): boolean =>
-    assessment.auditResult.passed && assessment.score >= PASS_SCORE_THRESHOLD && assessment.lengthInRange;
+    assessment.auditResult.decision === "pass"
+    && assessment.auditResult.passed
+    && assessment.score >= PASS_SCORE_THRESHOLD
+    && assessment.lengthInRange;
 
   // ---------------------------------------------------------------------------
-  // Scoring loop: assess → revise → assess. Default is one automatic repair pass;
-  // projects can raise it when they accept slower but more persistent repair.
+  // Scoring loop: assess → revise → assess. Quality repair is hard-bounded to
+  // one automatic attempt; legacy retry configuration is parse-only input.
   // ---------------------------------------------------------------------------
-  const maxReviewIterations = Math.max(0, Math.floor(params.maxReviewIterations ?? DEFAULT_MAX_REVIEW_ITERATIONS));
+  const maxReviewIterations = params.autoRevisionAllowed === false
+    ? 0
+    : Math.min(DEFAULT_MAX_REVIEW_ITERATIONS, Math.max(0, Math.floor(params.maxReviewIterations ?? DEFAULT_MAX_REVIEW_ITERATIONS)));
   params.logStage({ zh: "审计草稿", en: "auditing draft" });
   const initial = await assess(finalContent);
 
@@ -194,6 +244,80 @@ export async function runChapterReviewCycle(params: {
 
   let currentAudit = initial;
   let postReviseCount = 0;
+
+  const buildAuditRuns = (): ReadonlyArray<AuditRunV1> => {
+    if (!params.bookId || auditAssessments.length === 0) return [];
+    const now = new Date().toISOString();
+    const runs: AuditRunV1[] = [];
+    const initial = auditAssessments[0]!;
+    const initialEvaluation = asEvaluation(initial.auditResult, initial.content);
+    const candidate = auditAssessments[1];
+    runs.push(createAuditRun({
+      bookId: params.bookId,
+      chapterNumber: params.chapterNumber,
+      operation: "write",
+      phase: "initial",
+      contentHash: initialEvaluation.contentHash,
+      evaluation: initialEvaluation,
+      length: {
+        count: countChapterLength(initial.content, params.lengthSpec.countingMode),
+        countingMode: params.lengthSpec.countingMode,
+        target: params.lengthSpec.target,
+        softMin: params.lengthSpec.softMin,
+        softMax: params.lengthSpec.softMax,
+        hardMin: params.lengthSpec.hardMin,
+        hardMax: params.lengthSpec.hardMax,
+      },
+      startedAt: now,
+      completedAt: now,
+      durationMs: 0,
+      operationId: auditRunOperationId,
+      attemptId: auditRunAttemptId,
+      canonicalCommitOutcome: candidate && finalContent !== initial.content ? "superseded" : "terminal-commit",
+      revision: {
+        attempted: Boolean(candidate),
+        candidateProduced: Boolean(candidate),
+        ...(candidate ? { candidateContentHash: asEvaluation(candidate.auditResult, candidate.content).contentHash } : {}),
+        accepted: Boolean(candidate && finalContent === candidate.content),
+        ...(candidate && finalContent !== candidate.content ? { rejectionReason: "candidate rejected by shared acceptance gate" } : {}),
+      },
+    }));
+    if (candidate) {
+      const candidateEvaluation = asEvaluation(candidate.auditResult, candidate.content);
+      runs.push(createAuditRun({
+        bookId: params.bookId,
+        chapterNumber: params.chapterNumber,
+        operation: "revise",
+        phase: "post-revision",
+        contentHash: candidateEvaluation.contentHash,
+        evaluation: candidateEvaluation,
+        length: {
+          count: countChapterLength(candidate.content, params.lengthSpec.countingMode),
+          countingMode: params.lengthSpec.countingMode,
+          target: params.lengthSpec.target,
+          softMin: params.lengthSpec.softMin,
+          softMax: params.lengthSpec.softMax,
+          hardMin: params.lengthSpec.hardMin,
+          hardMax: params.lengthSpec.hardMax,
+        },
+        startedAt: now,
+        completedAt: now,
+        durationMs: 0,
+        operationId: auditRunOperationId,
+        attemptId: auditRunAttemptId,
+        canonicalCommitOutcome: finalContent === candidate.content ? "terminal-commit" : "rejected",
+        revision: {
+          attempted: true,
+          candidateProduced: true,
+          candidateContentHash: candidateEvaluation.contentHash,
+          candidateWordCount: countChapterLength(candidate.content, params.lengthSpec.countingMode),
+          accepted: finalContent === candidate.content,
+          ...(finalContent !== candidate.content ? { rejectionReason: "candidate rejected by shared acceptance gate" } : {}),
+        },
+      }));
+    }
+    return runs;
+  };
 
   if (initial.auditResult.parseFailed) {
     params.logWarn({
@@ -209,10 +333,11 @@ export async function runChapterReviewCycle(params: {
       totalUsage,
       postReviseCount,
       repairApplied: false,
+      auditRuns: buildAuditRuns(),
     };
   }
 
-  if (!isPassed(initial)) {
+  if (initial.auditResult.decision === "repair-required") {
     for (let iteration = 0; iteration < maxReviewIterations; iteration++) {
       params.logStage({
         zh: `修复轮次 ${iteration + 1}/${maxReviewIterations}（当前 ${currentAudit.score} 分）`,
@@ -240,6 +365,13 @@ export async function runChapterReviewCycle(params: {
       }
 
       params.assertChapterContentNotEmpty(reviseOutput.revisedContent, `repair iteration ${iteration + 1}`);
+      if (params.stateSettlementValid && !await params.stateSettlementValid(reviseOutput)) {
+        params.logWarn({
+          zh: "修复候选的状态结算无效，保留原章节",
+          en: "Revision candidate state settlement is invalid; retaining the canonical chapter.",
+        });
+        break;
+      }
       const revisedContent = params.normalizePostWriteSurface?.(reviseOutput.revisedContent) ?? reviseOutput.revisedContent;
       const revisedWordCount = countChapterLength(revisedContent, params.lengthSpec.countingMode);
 
@@ -256,8 +388,16 @@ export async function runChapterReviewCycle(params: {
         lengthInRange: nextAssessment.lengthInRange,
       });
 
-      // Check if passed
-      if (isPassed(nextAssessment)) {
+      const revisionAcceptance = evaluateRevisionCandidate({
+        before: asEvaluation(currentAudit.auditResult, finalContent),
+        after: asEvaluation(nextAssessment.auditResult, revisedContent),
+        beforeContentHash: computeChapterContentHash(finalContent),
+        afterContentHash: computeChapterContentHash(revisedContent),
+        stateSettlementValid: true,
+      });
+
+      // Candidate is canonical only after the shared acceptance gate passes.
+      if (isPassed(nextAssessment) && revisionAcceptance.accepted) {
         params.logStage({
           zh: `修复后达到通过线（${nextAssessment.score} 分），退出循环`,
           en: `repair reached pass threshold (${nextAssessment.score}), exiting loop`,
@@ -269,51 +409,12 @@ export async function runChapterReviewCycle(params: {
         break;
       }
 
-      // Check net improvement
-      if (nextAssessment.score >= currentAudit.score + NET_IMPROVEMENT_EPSILON) {
-        finalContent = revisedContent;
-        finalWordCount = revisedWordCount;
-        postReviseCount = revisedWordCount;
-        currentAudit = nextAssessment;
-        // Continue to next iteration
-      } else {
-        params.logWarn({
-          zh: `修复轮次 ${iteration + 1} 未净提升（${currentAudit.score} → ${nextAssessment.score}），退出循环`,
-          en: `repair iteration ${iteration + 1} no net improvement (${currentAudit.score} → ${nextAssessment.score}), exiting loop`,
-        });
-        break;
-      }
+      params.logWarn({
+        zh: `修复候选未通过验收（${revisionAcceptance.rejectionReason ?? "未达到通过线"}），保留原章节`,
+        en: `revision candidate rejected (${revisionAcceptance.rejectionReason ?? "acceptance gate not met"}); retaining the canonical chapter`,
+      });
+      break;
     }
-  }
-
-  // ---------------------------------------------------------------------------
-  // Pick the best scoring snapshot for final output
-  // ---------------------------------------------------------------------------
-  const bestSnapshot = snapshots.reduce((best, snap) => {
-    if (snap.lengthInRange !== best.lengthInRange) {
-      return snap.lengthInRange ? snap : best;
-    }
-    return snap.score >= best.score + NET_IMPROVEMENT_EPSILON ? snap : best;
-  });
-
-  // If best snapshot differs from current content (repair made things worse
-  // but an earlier version was better), roll back to the best version.
-  const shouldRestoreBestSnapshot = bestSnapshot.content !== finalContent && (
-    (bestSnapshot.lengthInRange && !currentAudit.lengthInRange)
-    || bestSnapshot.score >= currentAudit.score + NET_IMPROVEMENT_EPSILON
-  );
-  if (shouldRestoreBestSnapshot) {
-    params.logWarn({
-      zh: `回退到最高分版本（${bestSnapshot.score} 分 vs 当前 ${currentAudit.score} 分）`,
-      en: `rolling back to highest-scoring version (${bestSnapshot.score} vs current ${currentAudit.score})`,
-    });
-    finalContent = bestSnapshot.content;
-    finalWordCount = bestSnapshot.wordCount;
-    currentAudit = {
-      auditResult: bestSnapshot.auditResult,
-      score: bestSnapshot.score,
-      lengthInRange: bestSnapshot.lengthInRange,
-    };
   }
 
   return {
@@ -325,5 +426,7 @@ export async function runChapterReviewCycle(params: {
     totalUsage,
     postReviseCount,
     repairApplied: snapshots.length > 1 && finalContent !== params.initialOutput.content,
+    revisionAttempts: Math.min(1, snapshots.length - 1),
+    auditRuns: buildAuditRuns(),
   };
 }

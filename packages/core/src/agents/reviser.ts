@@ -47,6 +47,17 @@ export interface ReviseOutput {
 
 type AutoOutputMode = "patch-only" | "rewrite-only" | "allow-full";
 
+function lengthUnit(countingMode: LengthSpec["countingMode"]): { en: string; zh: string } {
+  switch (countingMode) {
+    case "zh_chars":
+      return { en: "Chinese characters", zh: "字" };
+    case "en_words":
+      return { en: "words", zh: "词" };
+    case "vi_wordlike_tokens_v1":
+      return { en: "Vietnamese word-like tokens", zh: "từ" };
+  }
+}
+
 function buildTieredIssueList(
   issues: ReadonlyArray<AuditIssue>,
   isEnglish: boolean,
@@ -264,7 +275,7 @@ export class ReviserAgent extends BaseAgent {
       : "";
     // Length guardrail only in legacy modes — auto mode delegates length to normalize.
     const lengthGuidanceBlock = mode !== "auto" && options?.lengthSpec
-      ? `\n## 字数护栏\n目标字数：${options.lengthSpec.target}\n允许区间：${options.lengthSpec.softMin}-${options.lengthSpec.softMax}\n极限区间：${options.lengthSpec.hardMin}-${options.lengthSpec.hardMax}\n如果修正后超出允许区间，请优先压缩冗余解释、重复动作和弱信息句，不得新增支线或删掉核心事实。\n`
+      ? `\n## 字数护栏\n计数单位：${lengthUnit(options.lengthSpec.countingMode).zh}\n目标：${options.lengthSpec.target}\n硬性区间：${options.lengthSpec.hardMin}-${options.lengthSpec.hardMax}\n这是结构性修复约束；必须通过调整正文落入硬性区间，不得新增支线或删掉核心事实。\n`
       : "";
     const styleGuideBlock = reducedControlBlock.length === 0
       ? `\n## 文风指南\n${styleGuide}`
@@ -401,8 +412,8 @@ ${chapterContent}`;
     const en = resolvedLanguage === "en";
     const rewriteLengthConstraint = lengthSpec
       ? (en
-          ? `\n  HARD CONSTRAINT: The revised chapter must stay within ${lengthSpec.softMin}-${lengthSpec.softMax} characters (target: ${lengthSpec.target}, ±25%). This is non-negotiable — do not exceed this range.`
-          : `\n  硬性约束：重写后的章节必须控制在 ${lengthSpec.softMin}-${lengthSpec.softMax} 字以内（目标 ${lengthSpec.target} 字，±25%）。这是不可突破的底线。`)
+          ? `\n  HARD STRUCTURAL REPAIR: The revised chapter must stay within the hard range ${lengthSpec.hardMin}-${lengthSpec.hardMax} ${lengthUnit(lengthSpec.countingMode).en} (target: ${lengthSpec.target}). This is non-negotiable — repair structure/prose to fit the range; do not exceed it.`
+          : `\n  硬性结构修复：重写后的章节必须控制在硬性区间 ${lengthSpec.hardMin}-${lengthSpec.hardMax}${lengthUnit(lengthSpec.countingMode).zh} 内（目标 ${lengthSpec.target}）。这是不可突破的底线；请通过结构/正文修复落入区间。`)
       : "";
 
     const routingDirectiveEn = autoOutputMode === "rewrite-only"

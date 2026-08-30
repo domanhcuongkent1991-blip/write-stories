@@ -24,6 +24,57 @@ describe("ReviserAgent", () => {
     vi.restoreAllMocks();
   });
 
+  it("uses counting-mode units and hard structural range in auto revision prompts", async () => {
+    const root = await mkdtemp(join(tmpdir(), "inkos-reviser-length-prompt-"));
+    const bookDir = join(root, "book");
+    await mkdir(join(bookDir, "story"), { recursive: true });
+    await writeFile(join(bookDir, "book.json"), JSON.stringify({
+      id: "english-book",
+      title: "English Book",
+      genre: "xuanhuan",
+      platform: "royalroad",
+      chapterWordCount: 100,
+      targetChapters: 10,
+      status: "active",
+      language: "en",
+      createdAt: "2026-03-23T00:00:00.000Z",
+      updatedAt: "2026-03-23T00:00:00.000Z",
+    }), "utf-8");
+    const agent = new ReviserAgent({
+      client: {
+        provider: "openai",
+        apiFormat: "chat",
+        stream: false,
+        defaults: { temperature: 0.7, maxTokens: 4096, thinkingBudget: 0, extra: {} },
+      },
+      model: "test-model",
+      projectRoot: root,
+    });
+    const chatSpy = vi.spyOn(ReviserAgent.prototype as never, "chat" as never).mockResolvedValue({
+      content: "=== FIXED_ISSUES ===\n\n=== REVISED_CONTENT ===\nRevised content.",
+      usage: ZERO_USAGE,
+    });
+
+    try {
+      await agent.reviseChapter(
+        bookDir,
+        "Original content.",
+        1,
+        [CRITICAL_ISSUE],
+        "auto",
+        "xuanhuan",
+        { lengthSpec: buildLengthSpec(100, "en") },
+      );
+      const systemPrompt = ((chatSpy.mock.calls[0]?.[0] ?? []) as ReadonlyArray<{ content: string }>)[0]?.content ?? "";
+      expect(systemPrompt).toContain("hard range");
+      expect(systemPrompt).toContain("words");
+      expect(systemPrompt).toContain("STRUCTURAL REPAIR");
+      expect(systemPrompt).not.toContain("softMin");
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
   it("prefers book language override when building revision prompts", async () => {
     const root = await mkdtemp(join(tmpdir(), "inkos-reviser-lang-test-"));
     const bookDir = join(root, "book");
@@ -223,8 +274,8 @@ describe("ReviserAgent", () => {
       expect(systemPrompt).toContain("保持章节字数在目标区间内");
       expect(systemPrompt).toContain("=== PATCHES ===");
       expect(systemPrompt).not.toContain("=== REVISED_CONTENT ===");
-      expect(userPrompt).toContain("目标字数：220");
-      expect(userPrompt).toContain("允许区间：190-250");
+      expect(userPrompt).toContain("目标：220");
+      expect(userPrompt).toContain("硬性区间：160-280");
     } finally {
       await rm(root, { recursive: true, force: true });
     }

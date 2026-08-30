@@ -207,6 +207,42 @@ describe("WriterAgent.prepareChapterFileSet", () => {
 });
 
 describe("persistChapterArtifacts", () => {
+  it("includes audit-run writes in the same canonical file set", async () => {
+    const prepareCanonicalFiles = vi.fn().mockResolvedValue({
+      ...EMPTY_FILE_SET,
+      writes: [{ relativePath: join("chapters", "0003_Chapter_Title.md"), content: "chapter" }],
+    });
+    const commitCanonicalFiles = vi.fn().mockResolvedValue(undefined);
+    const auditRunWrite = {
+      relativePath: join("story", "audit", "runs", "chapter-0003", "run.initial.audit-run-v1.json"),
+      content: "{\"kind\":\"audit-run-v1\"}\n",
+    };
+
+    await persistChapterArtifacts({
+      chapterNumber: 3,
+      chapterTitle: "Chapter Title",
+      status: "audit-failed",
+      auditResult: createAuditResult({ passed: false }),
+      auditRunWrites: [auditRunWrite],
+      finalWordCount: 888,
+      lengthWarnings: [],
+      degradedIssues: [],
+      loadChapterIndex: async () => [],
+      prepareCanonicalFiles,
+      commitCanonicalFiles,
+      markBookActiveIfNeeded: vi.fn().mockResolvedValue(undefined),
+      persistAuditDriftGuidance: vi.fn().mockResolvedValue(undefined),
+      snapshotState: vi.fn().mockResolvedValue(undefined),
+      syncCurrentStateFactHistory: vi.fn().mockResolvedValue(undefined),
+      logSnapshotStage: vi.fn(),
+    });
+
+    expect(commitCanonicalFiles.mock.calls[0]?.[0].writes).toEqual([
+      expect.objectContaining({ relativePath: join("chapters", "0003_Chapter_Title.md") }),
+      auditRunWrite,
+    ]);
+  });
+
   it("prepares and commits the canonical file set exactly once with the updated index", async () => {
     const prepareCanonicalFiles = vi.fn().mockResolvedValue(EMPTY_FILE_SET);
     const commitCanonicalFiles = vi.fn().mockResolvedValue(undefined);

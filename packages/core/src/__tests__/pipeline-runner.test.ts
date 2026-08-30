@@ -2991,14 +2991,14 @@ describe("PipelineRunner", () => {
       );
     vi.spyOn(ReviserAgent.prototype, "reviseChapter").mockResolvedValue(
       createReviseOutput({
-        revisedContent: "Governed revised body.",
-        wordCount: "Governed revised body.".length,
+        revisedContent: "治理后的修订正文。".repeat(24),
+        wordCount: "治理后的修订正文。".repeat(24).length,
       }),
     );
     const analyzeChapter = vi.spyOn(ChapterAnalyzerAgent.prototype, "analyzeChapter").mockResolvedValue(
       createAnalyzedOutput({
-        content: "Governed revised body.",
-        wordCount: "Governed revised body.".length,
+        content: "治理后的修订正文。".repeat(24),
+        wordCount: "治理后的修订正文。".repeat(24).length,
       }),
     );
 
@@ -3257,6 +3257,7 @@ describe("PipelineRunner", () => {
           passed: false,
           issues: [CRITICAL_ISSUE],
           summary: "needs revision",
+          overallScore: 40,
         }),
       )
       .mockResolvedValueOnce(
@@ -3264,6 +3265,7 @@ describe("PipelineRunner", () => {
           passed: false,
           issues: [],
           summary: "",
+          overallScore: 40,
         }),
       );
     vi.spyOn(ReviserAgent.prototype, "reviseChapter").mockResolvedValue(
@@ -3286,7 +3288,9 @@ describe("PipelineRunner", () => {
 
       expect(result.status).toBe("audit-failed");
       expect(result.auditResult.summary).toBe("needs revision");
-      expect(result.auditResult.issues).toEqual([CRITICAL_ISSUE]);
+      expect(result.auditResult.issues).toEqual([
+        expect.objectContaining(CRITICAL_ISSUE),
+      ]);
       expect(savedIndex[0]?.auditIssues).toEqual([
         `[critical] ${CRITICAL_ISSUE.description}`,
       ]);
@@ -3350,8 +3354,8 @@ describe("PipelineRunner", () => {
 
   it("runs at most one automatic repair iteration during writeNextChapter", async () => {
     const { root, runner, bookId } = await createRunnerFixture();
-    const draftBody = "甲".repeat(220);
-    const revisedBody = "乙".repeat(220);
+    const draftBody = "甲".repeat(300);
+    const revisedBody = "乙".repeat(300);
 
     vi.spyOn(WriterAgent.prototype, "writeChapter").mockResolvedValue(
       createWriterOutput({
@@ -3397,6 +3401,30 @@ describe("PipelineRunner", () => {
       expect(result.status).toBe("audit-failed");
       expect(auditChapter).toHaveBeenCalledTimes(2);
       expect(reviseChapter).toHaveBeenCalledTimes(1);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("still performs the initial audit in manual chapter mode without auto revision", async () => {
+    const { root, runner, bookId } = await createRunnerFixture({ chapterReviewMode: "manual" });
+    const draftBody = "手动模式仍需先审计。".repeat(24);
+
+    vi.spyOn(WriterAgent.prototype, "writeChapter").mockResolvedValue(
+      createWriterOutput({ content: draftBody, wordCount: draftBody.length }),
+    );
+    const auditChapter = vi.spyOn(ContinuityAuditor.prototype, "auditChapter").mockResolvedValue(
+      createAuditResult({ passed: false, overallScore: 40, issues: [CRITICAL_ISSUE] }),
+    );
+    const reviseChapter = vi.spyOn(ReviserAgent.prototype, "reviseChapter");
+
+    try {
+      const result = await runner.writeNextChapter(bookId, 220);
+
+      expect(auditChapter).toHaveBeenCalledTimes(1);
+      expect(reviseChapter).not.toHaveBeenCalled();
+      expect(result.status).toBe("audit-failed");
+      expect(result.auditResult.decision).toBe("fail");
     } finally {
       await rm(root, { recursive: true, force: true });
     }
@@ -3472,14 +3500,14 @@ describe("PipelineRunner", () => {
       }));
     vi.spyOn(ReviserAgent.prototype, "reviseChapter").mockResolvedValue(
       createReviseOutput({
-        revisedContent: "Final revised body.",
-        wordCount: "Final revised body.".length,
+        revisedContent: "最终修订正文。".repeat(24),
+        wordCount: "最终修订正文。".repeat(24).length,
       }),
     );
     vi.spyOn(ChapterAnalyzerAgent.prototype, "analyzeChapter").mockResolvedValue(
       createAnalyzedOutput({
-        content: "Final revised body.",
-        wordCount: "Final revised body.".length,
+        content: "最终修订正文。".repeat(24),
+        wordCount: "最终修订正文。".repeat(24).length,
         updatedState: "final analyzed state",
         updatedLedger: "final analyzed ledger",
         updatedHooks: "final analyzed hooks",
@@ -3490,7 +3518,7 @@ describe("PipelineRunner", () => {
       }),
     );
 
-    await runner.writeNextChapter(bookId);
+    await runner.writeNextChapter(bookId, 220);
 
     const storyDir = join(state.bookDir(bookId), "story");
     await expect(readFile(join(storyDir, "current_state.md"), "utf-8"))
@@ -5454,12 +5482,12 @@ describe("PipelineRunner", () => {
     const storyDir = join(state.bookDir(bookId), "story");
     const draftBody = "林越先把门推开一条缝，再侧耳去听墙后的动静。屋里的灯没有亮，但桌角还有没散的热气，说明人刚离开不久。";
     const revisedBody = [
-      "门开了。",
-      "他没进去。",
-      "先听了一下。",
-      "里面没有声响。",
-      "他这才抬脚。",
-      "屋里很冷。",
+      "门开了，冷风从缝隙里钻进来，吹得门轴发出细响。",
+      "他没进去，只把手掌贴在门框上确认灰尘没有被人擦过。",
+      "先听了一下，墙后传来水滴落在铜盆里的回声。",
+      "里面没有声响，可桌角的热气说明离开的人还没走远。",
+      "他这才抬脚，鞋底避开地上的碎瓷片，慢慢跨过门槛。",
+      "屋里很冷，窗纸后压着一枚新鲜的脚印和半截蓝线。",
     ].join("\n\n");
 
     await Promise.all([
@@ -5927,6 +5955,7 @@ describe("PipelineRunner", () => {
             suggestion: "压缩一行解释。",
           }],
           summary: "still weak",
+          overallScore: 80,
         }),
       );
     const reviseChapter = vi.spyOn(ReviserAgent.prototype, "reviseChapter").mockResolvedValue(
@@ -6254,10 +6283,12 @@ describe("PipelineRunner", () => {
 
       expect(result.applied).toBe(true);
       expect(commitAtomicFileSet).toHaveBeenCalledTimes(1);
-      expect(committedWrites.map((write) => write.relativePath)).toEqual([
+      expect(committedWrites.map((write) => write.relativePath)).toEqual(expect.arrayContaining([
         join("chapters", "0001_Mưa.md"),
         join("chapters", "index.json"),
-      ]);
+        expect.stringContaining(".initial.audit-run-v1.json"),
+        expect.stringContaining(".post-revision.audit-run-v1.json"),
+      ]));
       expect(savedChapter.startsWith("# Chương 1: Mưa\n\n")).toBe(true);
       expect(prepareChapterFileSet).not.toHaveBeenCalled();
       expect(saveChapter).not.toHaveBeenCalled();
@@ -6341,6 +6372,7 @@ describe("PipelineRunner", () => {
         passed: false,
         issues: [GATE_WARNING_ISSUE, CRITICAL_ISSUE],
         summary: "worse",
+        overallScore: 80,
       }));
 
     try {
@@ -6357,7 +6389,7 @@ describe("PipelineRunner", () => {
     }
   }, SLOW_PIPELINE_TEST_TIMEOUT_MS);
 
-  it("always applies manual revisions when revisionGate is always, even when the audit worsens", async () => {
+  it("does not let legacy always revisionGate bypass shared acceptance", async () => {
     const { root, runner, state, bookId, chaptersDir, revisedBody } = await createRevisionGateFixture("always");
 
     vi.spyOn(ContinuityAuditor.prototype, "auditChapter")
@@ -6366,6 +6398,7 @@ describe("PipelineRunner", () => {
         passed: false,
         issues: [GATE_WARNING_ISSUE, CRITICAL_ISSUE],
         summary: "worse",
+        overallScore: 80,
       }));
 
     try {
@@ -6373,16 +6406,17 @@ describe("PipelineRunner", () => {
       const savedChapter = await readFile(join(chaptersDir, "0001_Test_Chapter.md"), "utf-8");
       const savedIndex = await state.loadChapterIndex(bookId);
 
-      expect(result.applied).toBe(true);
-      expect(savedChapter).toContain(revisedBody);
+      expect(result.applied).toBe(false);
+      expect(savedChapter).not.toContain(revisedBody);
       const versions = await listChapterVersions(state.bookDir(bookId), 1);
-      expect(versions).toHaveLength(1);
-      await expect(readChapterVersion(state.bookDir(bookId), 1, versions[0]!.id))
-        .resolves.toContain("林越推门进去");
-      // Audit metrics are still recorded — the failing audit lands in the index
-      // instead of blocking the user's explicit revision.
+      expect(versions).toHaveLength(0);
+      const auditRunFiles = await readdir(join(state.bookDir(bookId), "story", "audit", "runs", "chapter-0001"));
+      expect(auditRunFiles).toEqual(expect.arrayContaining([
+        expect.stringContaining(".initial.audit-run-v1.json"),
+        expect.stringContaining(".post-revision.audit-run-v1.json"),
+      ]));
       expect(savedIndex[0]?.status).toBe("audit-failed");
-      expect(savedIndex[0]?.auditIssues).toContain("[critical] Fix the chapter state");
+      expect(savedIndex[0]?.auditIssues).toEqual([]);
     } finally {
       await rm(root, { recursive: true, force: true });
     }

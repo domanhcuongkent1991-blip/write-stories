@@ -1,4 +1,5 @@
 import { AsyncLocalStorage } from "node:async_hooks";
+import { randomUUID } from "node:crypto";
 import type { LLMClient, OnStreamProgress } from "../llm/provider.js";
 import { createLLMClient } from "../llm/provider.js";
 import { runWorkerAgent } from "../agent/worker-agent.js";
@@ -36,6 +37,21 @@ import { dispatchNotification, dispatchWebhookEvent } from "../notify/dispatcher
 import type { WebhookEvent } from "../notify/webhook.js";
 import { appendActivatedSkillGuidance, type AgentContext } from "../agents/base.js";
 import type { AuditResult, AuditIssue } from "../agents/continuity.js";
+import {
+  computeChapterContentHash,
+  type ChapterAuditEvaluation,
+} from "../audit/chapter-audit-evaluator.js";
+import {
+  decideAudit,
+  evaluateRevisionCandidate,
+  normalizeLegacyRevisionGate,
+} from "../audit/audit-policy.js";
+import {
+  auditRunRelativePath,
+  createAuditRun,
+  createAuditRunWrite,
+  type AuditRunV1,
+} from "../audit/audit-run.js";
 import type { RadarResult } from "../agents/radar.js";
 import type { LengthSpec, LengthTelemetry } from "../models/length-governance.js";
 import {
@@ -74,7 +90,7 @@ import { validateChapterTruthPersistence } from "./chapter-truth-validation.js";
 import { loadPersistedPlan, relativeToBookDir, savePersistedPlan } from "./persisted-governed-plan.js";
 import { selectBookReferenceContext } from "../references/reference-context.js";
 import type { ActivatedSkillGuidance } from "../agent/skill-tool.js";
-import { commitAtomicFileSet } from "../utils/atomic-file-set.js";
+import { commitAtomicFileSet, type AtomicFileWrite } from "../utils/atomic-file-set.js";
 import { chapterHeading } from "../utils/writing-surface.js";
 import { toPosixPath } from "../utils/posix-path.js";
 import {
@@ -253,7 +269,7 @@ export function buildImportFoundationSource(
 const REVISION_GATE_STANDARDS: Record<RevisionGate, string> = {
   strict: "A revision is applied only when blocking, critical, and AI-tell counts do not worsen, and at least blocking or AI-tell issues improve.",
   lenient: "A revision is applied whenever blocking, critical, and AI-tell counts do not worsen; no improvement is required (lenient gate).",
-  always: "Manual revisions are always applied; audit counts are recorded for reference only (always gate).",
+  always: "Legacy always gate is normalized to strict acceptance; audit counts must still pass the shared candidate gate.",
 };
 
 export interface PipelineConfig {
@@ -265,8 +281,8 @@ export interface PipelineConfig {
   readonly writingReviewRetries?: number;
   /**
    * "auto" (default): writeNextChapter runs the audit→revise loop inline.
-   * "manual": stop right after the draft (no auto audit/revise) so review/revise
-   * become explicit, user-driven checkpoint actions — chapter write stays fast.
+   * "manual": run the initial audit but disable automatic revision; explicit
+   * review/revise actions remain user-driven checkpoints.
    */
   readonly chapterReviewMode?: "auto" | "manual";
   /**
@@ -274,7 +290,7 @@ export interface PipelineConfig {
    * - "strict": apply only when blocking/critical/AI-tell counts do not worsen
    *   AND at least one of blocking or AI-tell improves.
    * - "lenient": apply whenever the counts do not worsen (no improvement required).
-   * - "always": always apply; audit counts are recorded but never block.
+   * - "always": legacy value normalized to the strict shared acceptance gate.
    */
   readonly revisionGate?: RevisionGate;
   readonly notifyChannels?: ReadonlyArray<NotifyChannel>;
@@ -415,6 +431,23 @@ interface MergedAuditEvaluation {
   readonly blockingCount: number;
   readonly criticalCount: number;
   readonly revisionBlockingIssues: ReadonlyArray<AuditIssue>;
+}
+
+function toChapterAuditEvaluation(
+  result: AuditResult,
+  content: string,
+): ChapterAuditEvaluation {
+  const decision = result.decision ?? (result.passed ? "pass" : "fail");
+  return {
+    decision,
+    passed: decision === "pass",
+    findings: result.issues,
+    parseFailed: result.parseFailed === true,
+    overallScore: result.overallScore,
+    contentHash: result.contentHash ?? computeChapterContentHash(content),
+    tokenUsage: result.tokenUsage,
+    provenance: result.provenance,
+  };
 }
 
 interface FrozenChapterTarget {
@@ -1691,6 +1724,9 @@ export class PipelineRunner {
       const { profile: gp } = await this.loadGenreProfile(book.genre);
       const language = profile.scaffoldLanguage;
       const countingMode = resolveLengthCountingMode(profile.language);
+      const chapterLengthTarget = chapterMeta.lengthTelemetry?.target ?? book.chapterWordCount;
+      const lengthLanguage = chapterMeta.lengthTelemetry?.language ?? profile.language;
+      const lengthSpec = buildLengthSpec(chapterLengthTarget, lengthLanguage);
       const persistedChapterBrief = await readChapterUserBrief(bookDir, targetChapter);
       const effectiveExternalContext = mergeChapterRevisionInstructions(
         persistedChapterBrief,
@@ -1710,6 +1746,7 @@ export class PipelineRunner {
         chapterContent: content,
         chapterNumber: targetChapter,
         language,
+        operation: "re-audit",
         auditOptions: reviseControlInput
           ? {
               chapterIntent: reviseControlInput.plan.intentMarkdown,
@@ -1738,12 +1775,6 @@ export class PipelineRunner {
         };
       }
 
-      const chapterLengthTarget = chapterMeta.lengthTelemetry?.target ?? book.chapterWordCount;
-      const lengthLanguage = chapterMeta.lengthTelemetry?.language ?? profile.language;
-      const lengthSpec = buildLengthSpec(
-        chapterLengthTarget,
-        lengthLanguage,
-      );
       const baselineChapter = targetChapter - 1;
       const baselineStoryDir = join(bookDir, "story", "snapshots", String(baselineChapter));
       const [baselineState, baselineHooks] = await Promise.all([
@@ -1866,6 +1897,7 @@ export class PipelineRunner {
         chapterContent: revisedContent,
         chapterNumber: targetChapter,
         language,
+        operation: "re-audit",
         auditOptions: reviseControlInput
           ? {
               temperature: 0,
@@ -1916,11 +1948,84 @@ export class PipelineRunner {
       const aiDidNotWorsen = effectivePostRevision.aiTellCount <= preRevision.aiTellCount;
       const didNotWorsen = blockingDidNotWorsen && criticalDidNotWorsen && aiDidNotWorsen;
       const revisionGate = this.config.revisionGate ?? "strict";
-      const shouldApplyRevision = revisionGate === "always"
-        ? true
-        : revisionGate === "lenient"
-          ? didNotWorsen
-          : didNotWorsen && (improvedBlocking || improvedAITells);
+      const normalizedGate = normalizeLegacyRevisionGate(revisionGate);
+      const beforeEvaluation = toChapterAuditEvaluation(preRevision.auditResult, content);
+      const afterEvaluation = toChapterAuditEvaluation(effectivePostRevision.auditResult, revisedContent);
+      const candidateAcceptance = evaluateRevisionCandidate({
+        before: beforeEvaluation,
+        after: afterEvaluation,
+        beforeContentHash: computeChapterContentHash(content),
+        afterContentHash: computeChapterContentHash(revisedContent),
+        stateSettlementValid: stateValidation.passed && !stateValidation.repairRequired,
+      });
+      // Legacy revisionGate values are diagnostics only. In particular,
+      // `always` must never bypass the shared candidate acceptance gate.
+      const shouldApplyRevision = candidateAcceptance.accepted;
+      const auditNow = new Date().toISOString();
+      const auditOperationId = randomUUID();
+      const auditAttemptId = randomUUID();
+      const auditLength = (count: number) => ({
+        count,
+        countingMode: lengthSpec.countingMode,
+        target: lengthSpec.target,
+        softMin: lengthSpec.softMin,
+        softMax: lengthSpec.softMax,
+        hardMin: lengthSpec.hardMin,
+        hardMax: lengthSpec.hardMax,
+      });
+      const revisionAuditRuns: ReadonlyArray<AuditRunV1> = [
+        createAuditRun({
+          bookId,
+          chapterNumber: targetChapter,
+          operation: "revise",
+          phase: "initial",
+          contentHash: beforeEvaluation.contentHash,
+          evaluation: beforeEvaluation,
+          length: auditLength(revisionBaseCount),
+          startedAt: auditNow,
+          completedAt: auditNow,
+          durationMs: 0,
+          operationId: auditOperationId,
+          attemptId: auditAttemptId,
+          canonicalCommitOutcome: shouldApplyRevision ? "superseded" : "unchanged",
+          revision: {
+            attempted: true,
+            candidateProduced: true,
+            candidateContentHash: afterEvaluation.contentHash,
+            candidateWordCount: revisedCount,
+            accepted: shouldApplyRevision,
+            ...(!shouldApplyRevision && candidateAcceptance.rejectionReason
+              ? { rejectionReason: candidateAcceptance.rejectionReason }
+              : {}),
+          },
+        }),
+        createAuditRun({
+          bookId,
+          chapterNumber: targetChapter,
+          operation: "re-audit",
+          phase: "post-revision",
+          contentHash: afterEvaluation.contentHash,
+          evaluation: afterEvaluation,
+          length: auditLength(revisedCount),
+          startedAt: auditNow,
+          completedAt: auditNow,
+          durationMs: 0,
+          operationId: auditOperationId,
+          attemptId: auditAttemptId,
+          canonicalCommitOutcome: shouldApplyRevision ? "terminal-commit" : "rejected",
+          revision: {
+            attempted: true,
+            candidateProduced: true,
+            candidateContentHash: afterEvaluation.contentHash,
+            candidateWordCount: revisedCount,
+            accepted: shouldApplyRevision,
+            ...(!shouldApplyRevision && candidateAcceptance.rejectionReason
+              ? { rejectionReason: candidateAcceptance.rejectionReason }
+              : {}),
+          },
+        }),
+      ];
+      const revisionAuditRunWrites = revisionAuditRuns.map(createAuditRunWrite);
       const remainingIssues = effectivePostRevision.revisionBlockingIssues
         .filter((issue) => issue.severity === "warning" || issue.severity === "critical")
         .slice(0, 6)
@@ -1931,7 +2036,8 @@ export class PipelineRunner {
           ...(issue.suggestion ? { suggestion: issue.suggestion } : {}),
         }));
       const revisionDiagnostics = {
-        standard: REVISION_GATE_STANDARDS[revisionGate],
+        standard: REVISION_GATE_STANDARDS[revisionGate]
+          + (normalizedGate !== revisionGate ? " (normalized by shared audit policy)" : ""),
         before: {
           blockingCount: preRevision.blockingCount,
           criticalCount: preRevision.criticalCount,
@@ -1946,13 +2052,14 @@ export class PipelineRunner {
       };
 
       if (!shouldApplyRevision) {
+        await commitAtomicFileSet({ rootDir: bookDir, writes: revisionAuditRunWrites });
         return {
           chapterNumber: targetChapter,
           wordCount: revisionBaseCount,
           fixedIssues: [],
           applied: false,
           status: "unchanged",
-          skippedReason: `Manual revision kept original chapter: before blocking=${preRevision.blockingCount}, critical=${preRevision.criticalCount}, aiTell=${preRevision.aiTellCount}; after blocking=${effectivePostRevision.blockingCount}, critical=${effectivePostRevision.criticalCount}, aiTell=${effectivePostRevision.aiTellCount}.`,
+          skippedReason: `Manual revision kept original chapter: ${candidateAcceptance.rejectionReason ?? `before blocking=${preRevision.blockingCount}, critical=${preRevision.criticalCount}, aiTell=${preRevision.aiTellCount}; after blocking=${effectivePostRevision.blockingCount}, critical=${effectivePostRevision.criticalCount}, aiTell=${effectivePostRevision.aiTellCount}.`}`,
           auditPassed: effectivePostRevision.auditResult.passed,
           auditIssues: remainingIssues,
           revisionDiagnostics,
@@ -1986,6 +2093,15 @@ export class PipelineRunner {
               auditIssues: effectivePostRevision.auditResult.issues.map((i) => `[${i.severity}] ${i.description}`),
               lengthWarnings,
               lengthTelemetry,
+              auditDecision: effectivePostRevision.auditResult.decision,
+              auditAttemptId,
+              auditRunPaths: revisionAuditRuns.map(auditRunRelativePath),
+              verifiedBlockerCount: effectivePostRevision.auditResult.issues.filter(
+                (issue) => issue.severity === "critical" && issue.verification === "verified",
+              ).length,
+              revisionAttempts: 1,
+              revisionOutcome: "accepted" as const,
+              auditProvenance: effectivePostRevision.auditResult.provenance,
             };
         }
         if (ch.number > targetChapter) {
@@ -2019,7 +2135,10 @@ export class PipelineRunner {
             }],
             deletes: [],
           };
-      await this.commitCanonicalChapterFileSet(bookDir, fileSet, updatedIndex);
+      await this.commitCanonicalChapterFileSet(bookDir, {
+        ...fileSet,
+        writes: [...fileSet.writes, ...revisionAuditRunWrites],
+      }, updatedIndex);
 
       await this.runDerivedStep(stageLanguage, "archive previous chapter version", () =>
         archiveChapterVersion(bookDir, targetChapter, content, "revision").then(() => undefined));
@@ -2453,30 +2572,17 @@ export class PipelineRunner {
     let auditResult: AuditResult;
     let postReviseCount: number;
     let repairApplied: boolean;
+    let auditRunWrites: ReadonlyArray<AtomicFileWrite> = [];
+    let auditRuns: ReadonlyArray<AuditRunV1> = [];
+    let settledRevisionCandidate: WriteChapterOutput | undefined;
 
-    if ((this.config.chapterReviewMode ?? "auto") === "manual") {
-      // C4a: write-only checkpoint. Stop right after the draft — skip the
-      // automatic audit→revise loop (which silently doubled chapter time when it
-      // fired). The user drives review / revise / accept afterwards.
-      this.logStage(stageLanguage, { zh: "写完即停（手动审查模式）", en: "draft written — stopping for manual review" });
-      finalContent = normalizePostWriteSurface(output.content, pipelineLang);
-      this.assertChapterContentNotEmpty(finalContent, chapterNumber, "manual write");
-      finalWordCount = countChapterLength(finalContent, lengthSpec.countingMode);
-      revised = false;
-      postReviseCount = 0;
-      repairApplied = false;
-      auditResult = {
-        passed: false,
-        issues: [],
-        summary: pipelineLang === "en"
-          ? "Not reviewed yet (manual mode: stopped after writing — run review when ready)."
-          : "尚未审查（手动模式：写完即停，需要时点“审查”）。",
-      };
-    } else {
+    {
+      const manualReview = (this.config.chapterReviewMode ?? "auto") === "manual";
       const auditor = new ContinuityAuditor(this.agentCtxFor("auditor", bookId));
       const reviewResult = await runChapterReviewCycle({
         book: { genre: book.genre },
         bookDir,
+        bookId,
         chapterNumber,
         initialOutput: output,
         reducedControlInput,
@@ -2507,7 +2613,32 @@ export class PipelineRunner {
             : [];
           return [...baseIssues, ...ledgerIssues];
         },
-        maxReviewIterations: this.config.writingReviewRetries,
+        // Manual mode still performs the initial audit, but never auto-revises.
+        maxReviewIterations: manualReview ? 0 : this.config.writingReviewRetries,
+        autoRevisionAllowed: !manualReview,
+        stateSettlementValid: async (candidate) => {
+          try {
+            const settled = await this.buildPersistenceOutput(
+              bookId,
+              book,
+              bookDir,
+              chapterNumber,
+              output,
+              candidate.revisedContent,
+              lengthSpec.countingMode,
+              reducedControlInput,
+            );
+            const valid = settled.content === candidate.revisedContent
+              && settled.updatedState.trim().length > 0
+              && settled.updatedHooks.trim().length > 0;
+            settledRevisionCandidate = valid ? settled : undefined;
+            return valid;
+          } catch (error) {
+            this.config.logger?.warn(`Revision candidate settlement failed: ${String(error)}`);
+            settledRevisionCandidate = undefined;
+            return false;
+          }
+        },
         logWarn: (message) => this.logWarn(pipelineLang, message),
         logStage: (message) => this.logStage(stageLanguage, message),
       });
@@ -2518,6 +2649,8 @@ export class PipelineRunner {
       auditResult = reviewResult.auditResult;
       postReviseCount = reviewResult.postReviseCount;
       repairApplied = reviewResult.repairApplied;
+      auditRuns = reviewResult.auditRuns ?? [];
+      auditRunWrites = auditRuns.map(createAuditRunWrite);
     }
 
     this.throwIfOperationAborted();
@@ -2533,18 +2666,20 @@ export class PipelineRunner {
       pipelineLang,
       { content: finalContent },
     );
-    let persistenceOutput = await this.buildPersistenceOutput(
-      bookId,
-      book,
-      bookDir,
-      chapterNumber,
-      initialTitleResolution.title === output.title
-        ? output
-        : { ...output, title: initialTitleResolution.title },
-      finalContent,
-      lengthSpec.countingMode,
-      reducedControlInput,
-    );
+    let persistenceOutput = settledRevisionCandidate?.content === finalContent
+      ? settledRevisionCandidate
+      : await this.buildPersistenceOutput(
+          bookId,
+          book,
+          bookDir,
+          chapterNumber,
+          initialTitleResolution.title === output.title
+            ? output
+            : { ...output, title: initialTitleResolution.title },
+          finalContent,
+          lengthSpec.countingMode,
+          reducedControlInput,
+        );
     const finalTitleResolution = resolveDuplicateTitle(
       persistenceOutput.title,
       chapterIndexBeforePersist.map((chapter) => chapter.title),
@@ -2711,6 +2846,8 @@ export class PipelineRunner {
       chapterTitle: persistenceOutput.title,
       status: resolvedStatus,
       auditResult,
+      auditRunWrites,
+      auditRuns,
       finalWordCount,
       lengthWarnings,
       lengthTelemetry,
@@ -4141,6 +4278,10 @@ ${matrix}`,
     chapterContent: string;
     chapterNumber: number;
     language: LengthLanguage;
+    lengthSpec?: LengthSpec;
+    operation?: "audit" | "re-audit" | "revise";
+    autoRevisionAllowed?: boolean;
+    revisionAttempts?: number;
     auditOptions?: {
       temperature?: number;
       chapterIntent?: string;
@@ -4170,12 +4311,29 @@ ${matrix}`,
       language: params.language,
     });
     const hasBlockedWords = sensitiveResult.found.some((f) => f.severity === "block");
-    const issues: ReadonlyArray<AuditIssue> = [
-      ...llmAudit.issues,
+    const deterministicFindings: ReadonlyArray<AuditIssue> = [
       ...aiTells.issues,
       ...sensitiveResult.issues,
       ...longSpanFatigue.issues,
     ];
+    const evaluation = decideAudit({
+      content: params.chapterContent,
+      ...(params.lengthSpec ? { lengthSpec: params.lengthSpec } : {}),
+      llmAudit,
+      deterministicFindings,
+      stateFindings: [],
+      operation: params.operation ?? "audit",
+      revisionAttempts: params.revisionAttempts ?? 0,
+      maxRevisionAttempts: 1,
+      autoRevisionAllowed: params.autoRevisionAllowed ?? false,
+    }, {
+      operation: params.operation ?? "audit",
+      autoRevisionAllowed: params.autoRevisionAllowed ?? false,
+      revisionAttempts: params.revisionAttempts ?? 0,
+      maxRevisionAttempts: 1,
+      legacyRevisionGate: normalizeLegacyRevisionGate(this.config.revisionGate),
+    });
+    const issues: ReadonlyArray<AuditIssue> = evaluation.findings;
     // revisionBlockingIssues excludes long-span-fatigue issues by
     // construction (not by category name) so that an LLM-reported issue
     // sharing a category label with a long-span issue is still counted.
@@ -4187,10 +4345,15 @@ ${matrix}`,
 
     return {
       auditResult: {
-        passed: hasBlockedWords ? false : llmAudit.passed,
+        passed: hasBlockedWords ? false : evaluation.passed,
         issues,
         summary: llmAudit.summary,
+        parseFailed: llmAudit.parseFailed,
+        overallScore: evaluation.overallScore,
         tokenUsage: llmAudit.tokenUsage,
+        decision: hasBlockedWords ? "fail" : evaluation.decision,
+        contentHash: evaluation.contentHash,
+        provenance: evaluation.provenance,
       },
       aiTellCount: aiTells.issues.length,
       blockingCount: revisionBlockingIssues.filter((issue) => issue.severity === "warning" || issue.severity === "critical").length,

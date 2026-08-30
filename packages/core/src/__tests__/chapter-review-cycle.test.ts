@@ -18,6 +18,14 @@ const ZERO_USAGE: { promptTokens: number; completionTokens: number; totalTokens:
   totalTokens: 0,
 };
 
+const DETERMINISTIC_REPAIR: AuditIssue = {
+  severity: "critical",
+  category: "deterministic-repair",
+  description: "deterministic blocker",
+  suggestion: "repair prose",
+  repairTarget: "prose",
+};
+
 function createAuditResult(overrides?: Partial<AuditResult>): AuditResult {
   return {
     passed: true,
@@ -165,7 +173,57 @@ describe("runChapterReviewCycle v9", () => {
     expect(result.repairApplied).toBe(true);
   });
 
-  it("runs repair loop when score is below threshold, picks best version", async () => {
+  it("returns initial and post-revision audit runs with one shared attempt identity", async () => {
+    const auditChapter = vi.fn()
+      .mockResolvedValueOnce(createAuditResult({ passed: false, overallScore: 40 }))
+      .mockResolvedValueOnce(createAuditResult({ passed: true, overallScore: 95 }));
+    const reviseChapter = vi.fn().mockResolvedValue({
+      revisedContent: "修".repeat(220),
+      wordCount: 220,
+      fixedIssues: ["fixed"],
+      tokenUsage: ZERO_USAGE,
+    });
+
+    const result = await runChapterReviewCycle({
+      ...baseParams,
+      bookId: "book-1",
+      initialOutput: { content: "原".repeat(200), wordCount: 200, postWriteErrors: [] },
+      createReviser: () => ({ reviseChapter }),
+      auditor: { auditChapter },
+      runPostWriteChecks: (content) => content.startsWith("原") ? [DETERMINISTIC_REPAIR] : [],
+    });
+
+    expect(result.auditRuns?.map((run) => run.phase)).toEqual(["initial", "post-revision"]);
+    expect(result.auditRuns?.[0]?.attemptId).toBe(result.auditRuns?.[1]?.attemptId);
+    expect(result.auditRuns?.[0]?.canonicalCommitOutcome).toBe("superseded");
+    expect(result.auditRuns?.[1]?.canonicalCommitOutcome).toBe("terminal-commit");
+  });
+
+  it("rejects an unsettled candidate before post-revision audit", async () => {
+    const original = "原".repeat(200);
+    const auditChapter = vi.fn().mockResolvedValue(createAuditResult({ passed: false, overallScore: 40 }));
+    const reviseChapter = vi.fn().mockResolvedValue({
+      revisedContent: "修".repeat(220),
+      wordCount: 220,
+      fixedIssues: ["fixed"],
+      tokenUsage: ZERO_USAGE,
+    });
+
+    const result = await runChapterReviewCycle({
+      ...baseParams,
+      initialOutput: { content: original, wordCount: 200, postWriteErrors: [] },
+      createReviser: () => ({ reviseChapter }),
+      auditor: { auditChapter },
+      stateSettlementValid: async () => false,
+      runPostWriteChecks: (content) => content.startsWith("原") ? [DETERMINISTIC_REPAIR] : [],
+    });
+
+    expect(auditChapter).toHaveBeenCalledTimes(1);
+    expect(result.finalContent).toBe(original);
+    expect(result.revised).toBe(false);
+  });
+
+  it("runs at most one repair and rejects a candidate that does not pass acceptance", async () => {
     const auditChapter = vi.fn()
       .mockResolvedValueOnce(createAuditResult({
         passed: false,
@@ -209,18 +267,16 @@ describe("runChapterReviewCycle v9", () => {
       createReviser: () => ({ reviseChapter }),
       auditor: { auditChapter },
       maxReviewIterations: 2,
+      runPostWriteChecks: (content) => content.startsWith("c") ? [DETERMINISTIC_REPAIR] : [],
     });
 
-    // Should have attempted 2 revisions:
-    // iter 1: 70 → 80 (+10, net improvement)
-    // iter 2: 80 → 76 (no net improvement, stop)
-    expect(reviseChapter).toHaveBeenCalledTimes(2);
+    // Quality revisions are bounded to one and a non-passing candidate is rejected.
+    expect(reviseChapter).toHaveBeenCalledTimes(1);
     expect(reviseChapter.mock.calls[0]?.[4]).toBe("auto");
 
-    // Best version should be picked (score 80 from iter 1)
-    expect(result.auditResult.overallScore).toBe(80);
-    expect(result.finalContent).toBe("a".repeat(200));
-    expect(result.revised).toBe(true);
+    expect(result.auditResult.overallScore).toBe(70);
+    expect(result.finalContent).toBe("c".repeat(200));
+    expect(result.revised).toBe(false);
   });
 
   it("does not let a higher-scoring hard-range failure displace an in-range draft", async () => {
@@ -256,6 +312,7 @@ describe("runChapterReviewCycle v9", () => {
       createReviser: () => ({ reviseChapter }),
       auditor: { auditChapter },
       maxReviewIterations: 1,
+      runPostWriteChecks: (content) => content.startsWith("c") ? [DETERMINISTIC_REPAIR] : [],
     });
 
     expect(reviseChapter).toHaveBeenCalledTimes(1);
@@ -306,11 +363,12 @@ describe("runChapterReviewCycle v9", () => {
       },
       createReviser: () => ({ reviseChapter }),
       auditor: { auditChapter },
+      runPostWriteChecks: (content) => content.startsWith("c") ? [DETERMINISTIC_REPAIR] : [],
     });
 
     expect(reviseChapter).toHaveBeenCalledTimes(1);
-    expect(result.auditResult.overallScore).toBe(80);
-    expect(result.finalContent).toBe("a".repeat(200));
+    expect(result.auditResult.overallScore).toBe(70);
+    expect(result.finalContent).toBe("c".repeat(200));
   });
 
   it("stops immediately when initial score passes threshold", async () => {
