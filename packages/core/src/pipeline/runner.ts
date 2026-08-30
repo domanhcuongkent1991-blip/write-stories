@@ -36,7 +36,7 @@ import { MemoryDB, type Fact } from "../state/memory-db.js";
 import { dispatchNotification, dispatchWebhookEvent } from "../notify/dispatcher.js";
 import type { WebhookEvent } from "../notify/webhook.js";
 import { appendActivatedSkillGuidance, type AgentContext } from "../agents/base.js";
-import type { AuditResult, AuditIssue } from "../agents/continuity.js";
+import type { AuditResult, AuditIssue, AuditProvenance } from "../agents/continuity.js";
 import {
   computeChapterContentHash,
   type ChapterAuditEvaluation,
@@ -1629,9 +1629,33 @@ export class PipelineRunner {
       throw new Error(`No chapters to audit for "${book.id}"`);
     }
 
+    const index = await this.state.loadChapterIndex(book.id);
+    const chapterMeta = index.find((chapter) => chapter.number === targetChapter);
+    if (!chapterMeta) {
+      throw new Error(`Chapter ${targetChapter} not found in index`);
+    }
     const content = await this.readChapterContent(bookDir, targetChapter);
     const auditor = new ContinuityAuditor(this.agentCtxFor("auditor", book.id));
     const language = profile.scaffoldLanguage;
+    const telemetry = chapterMeta.lengthTelemetry;
+    const lengthSpec: LengthSpec = telemetry
+      ? {
+          target: telemetry.target,
+          softMin: telemetry.softMin,
+          softMax: telemetry.softMax,
+          hardMin: telemetry.hardMin,
+          hardMax: telemetry.hardMax,
+          countingMode: telemetry.countingMode,
+        }
+      : buildLengthSpec(book.chapterWordCount, profile.language);
+    const operationId = randomUUID();
+    const attemptId = randomUUID();
+    const provenance = {
+      source: "pipeline-runner",
+      operationId,
+      attemptId,
+      phase: "manual" as const,
+    };
     this.logStage(language, {
       zh: `审计第${targetChapter}章`,
       en: `auditing chapter ${targetChapter}`,
@@ -1643,22 +1667,57 @@ export class PipelineRunner {
       chapterContent: content,
       chapterNumber: targetChapter,
       language,
+      lengthSpec,
+      provenance,
     });
     const result = evaluation.auditResult;
 
-    // Update index with audit result
-    const index = await this.state.loadChapterIndex(book.id);
-    const updated = index.map((ch) =>
+    const now = new Date().toISOString();
+    const auditRun = createAuditRun({
+      bookId: book.id,
+      chapterNumber: targetChapter,
+      operation: "audit",
+      phase: "manual",
+      contentHash: result.contentHash ?? computeChapterContentHash(content),
+      evaluation: toChapterAuditEvaluation(result, content),
+      length: {
+        count: countChapterLength(content, lengthSpec.countingMode),
+        ...lengthSpec,
+      },
+      startedAt: now,
+      completedAt: now,
+      durationMs: 0,
+      operationId,
+      attemptId,
+      canonicalCommitOutcome: "unchanged",
+    });
+    const runPath = auditRunRelativePath(auditRun);
+    const updated = ChapterMetaSchema.array().parse(index.map((ch) =>
       ch.number === targetChapter
         ? {
             ...ch,
-            status: (result.passed ? "ready-for-review" : "audit-failed") as ChapterMeta["status"],
-            updatedAt: new Date().toISOString(),
+            status: (result.decision === "pass"
+              ? "ready-for-review"
+              : result.decision === "inconclusive" ? ch.status : "audit-failed") as ChapterMeta["status"],
+            updatedAt: now,
             auditIssues: result.issues.map((i) => `[${i.severity}] ${i.description}`),
+            auditDecision: result.decision,
+            auditAttemptId: attemptId,
+            auditRunPaths: [...(ch.auditRunPaths ?? []), runPath],
+            verifiedBlockerCount: result.issues.filter(
+              (issue) => issue.severity === "critical" && issue.verification === "verified",
+            ).length,
+            auditProvenance: provenance,
           }
         : ch,
-    );
-    await this.state.saveChapterIndex(book.id, updated);
+    ));
+    await commitAtomicFileSet({
+      rootDir: bookDir,
+      writes: [
+        createAuditRunWrite(auditRun),
+        { relativePath: join("chapters", "index.json"), content: JSON.stringify(updated, null, 2) },
+      ],
+    });
     const latestChapter = index.length > 0 ? Math.max(...index.map((chapter) => chapter.number)) : targetChapter;
     if (targetChapter === latestChapter) {
       await this.persistAuditDriftGuidance({
@@ -1724,9 +1783,19 @@ export class PipelineRunner {
       const { profile: gp } = await this.loadGenreProfile(book.genre);
       const language = profile.scaffoldLanguage;
       const countingMode = resolveLengthCountingMode(profile.language);
-      const chapterLengthTarget = chapterMeta.lengthTelemetry?.target ?? book.chapterWordCount;
       const lengthLanguage = chapterMeta.lengthTelemetry?.language ?? profile.language;
-      const lengthSpec = buildLengthSpec(chapterLengthTarget, lengthLanguage);
+      const lengthSpec: LengthSpec = chapterMeta.lengthTelemetry
+        ? {
+            target: chapterMeta.lengthTelemetry.target,
+            softMin: chapterMeta.lengthTelemetry.softMin,
+            softMax: chapterMeta.lengthTelemetry.softMax,
+            hardMin: chapterMeta.lengthTelemetry.hardMin,
+            hardMax: chapterMeta.lengthTelemetry.hardMax,
+            countingMode: chapterMeta.lengthTelemetry.countingMode,
+          }
+        : buildLengthSpec(book.chapterWordCount, lengthLanguage);
+      const auditOperationId = randomUUID();
+      const auditAttemptId = randomUUID();
       const persistedChapterBrief = await readChapterUserBrief(bookDir, targetChapter);
       const effectiveExternalContext = mergeChapterRevisionInstructions(
         persistedChapterBrief,
@@ -1746,7 +1815,14 @@ export class PipelineRunner {
         chapterContent: content,
         chapterNumber: targetChapter,
         language,
+        lengthSpec,
         operation: "re-audit",
+        provenance: {
+          source: "pipeline-runner",
+          operationId: auditOperationId,
+          attemptId: auditAttemptId,
+          phase: "initial",
+        },
         auditOptions: reviseControlInput
           ? {
               chapterIntent: reviseControlInput.plan.intentMarkdown,
@@ -1765,6 +1841,27 @@ export class PipelineRunner {
         && preRevision.aiTellCount === 0
         && !explicitRevisionRequested
       ) {
+        const completedAt = new Date().toISOString();
+        const initialEvaluation = toChapterAuditEvaluation(preRevision.auditResult, content);
+        const initialRun = createAuditRun({
+          bookId,
+          chapterNumber: targetChapter,
+          operation: "revise",
+          phase: "initial",
+          contentHash: initialEvaluation.contentHash,
+          evaluation: initialEvaluation,
+          length: {
+            count: countChapterLength(content, lengthSpec.countingMode),
+            ...lengthSpec,
+          },
+          startedAt: completedAt,
+          completedAt,
+          durationMs: 0,
+          operationId: auditOperationId,
+          attemptId: auditAttemptId,
+          canonicalCommitOutcome: "unchanged",
+        });
+        await commitAtomicFileSet({ rootDir: bookDir, writes: [createAuditRunWrite(initialRun)] });
         return {
           chapterNumber: targetChapter,
           wordCount: countChapterLength(content, countingMode),
@@ -1814,7 +1911,8 @@ export class PipelineRunner {
       if (reviseOutput.revisedContent.length === 0) {
         throw new Error("Reviser returned empty content");
       }
-      const revisedContent = reviseOutput.revisedContent;
+      const { normalizePostWriteSurface: normalizeRevisionSurface } = await import("../agents/post-write-validator.js");
+      const revisedContent = normalizeRevisionSurface(reviseOutput.revisedContent, language);
       const revisedCount = countChapterLength(revisedContent, lengthSpec.countingMode);
       const writer = new WriterAgent(this.agentCtxFor("writer", bookId));
       const stateValidator = new StateValidatorAgent(this.agentCtxFor("stateValidator", bookId));
@@ -1862,6 +1960,36 @@ export class PipelineRunner {
           logger: this.config.logger,
         });
         if (recovery.kind === "degraded") {
+          const rejectedAt = new Date().toISOString();
+          const rejectedReason = "state settlement did not validate after retry";
+          const initialEvaluation = toChapterAuditEvaluation(preRevision.auditResult, content);
+          const rejectionRun = createAuditRun({
+            bookId,
+            chapterNumber: targetChapter,
+            operation: "revise",
+            phase: "initial",
+            contentHash: initialEvaluation.contentHash,
+            evaluation: initialEvaluation,
+            length: {
+              count: countChapterLength(content, lengthSpec.countingMode),
+              ...lengthSpec,
+            },
+            startedAt: rejectedAt,
+            completedAt: rejectedAt,
+            durationMs: 0,
+            operationId: auditOperationId,
+            attemptId: auditAttemptId,
+            canonicalCommitOutcome: "unchanged",
+            revision: {
+              attempted: true,
+              candidateProduced: true,
+              candidateContentHash: computeChapterContentHash(revisedContent),
+              candidateWordCount: revisedCount,
+              accepted: false,
+              rejectionReason: rejectedReason,
+            },
+          });
+          await commitAtomicFileSet({ rootDir: bookDir, writes: [createAuditRunWrite(rejectionRun)] });
           return {
             chapterNumber: targetChapter,
             wordCount: countChapterLength(content, countingMode),
@@ -1870,7 +1998,7 @@ export class PipelineRunner {
             status: "unchanged",
             auditPassed: false,
             auditIssues: recovery.issues,
-            skippedReason: `Revision kept the original chapter because state settlement did not validate after retry.`,
+            skippedReason: `Revision kept the original chapter because ${rejectedReason}.`,
             revisionDiagnostics: {
               standard: "Revision text and derived story state must both validate before any file is replaced.",
               before: {
@@ -1897,7 +2025,15 @@ export class PipelineRunner {
         chapterContent: revisedContent,
         chapterNumber: targetChapter,
         language,
+        lengthSpec,
         operation: "re-audit",
+        revisionAttempts: 1,
+        provenance: {
+          source: "pipeline-runner",
+          operationId: auditOperationId,
+          attemptId: auditAttemptId,
+          phase: "post-revision",
+        },
         auditOptions: reviseControlInput
           ? {
               temperature: 0,
@@ -1962,8 +2098,6 @@ export class PipelineRunner {
       // `always` must never bypass the shared candidate acceptance gate.
       const shouldApplyRevision = candidateAcceptance.accepted;
       const auditNow = new Date().toISOString();
-      const auditOperationId = randomUUID();
-      const auditAttemptId = randomUUID();
       const auditLength = (count: number) => ({
         count,
         countingMode: lengthSpec.countingMode,
@@ -2563,6 +2697,15 @@ export class PipelineRunner {
     });
     this.throwIfOperationAborted();
     const writerCount = countChapterLength(output.content, lengthSpec.countingMode);
+    const storyDir = join(bookDir, "story");
+    const [oldState, oldHooks, oldLedger, authorityStoryFrame, authorityBookRules, authorityChapterSummaries] = await Promise.all([
+      readFile(join(storyDir, "current_state.md"), "utf-8").catch(() => ""),
+      readFile(join(storyDir, "pending_hooks.md"), "utf-8").catch(() => ""),
+      readFile(join(storyDir, "particle_ledger.md"), "utf-8").catch(() => ""),
+      readStoryFrame(bookDir).catch(() => ""),
+      readFile(join(storyDir, "book_rules.md"), "utf-8").catch(() => ""),
+      readFile(join(storyDir, "chapter_summaries.md"), "utf-8").catch(() => ""),
+    ]);
 
     // Token usage accumulator
     let totalUsage: TokenUsageSummary = output.tokenUsage ?? { promptTokens: 0, completionTokens: 0, totalTokens: 0 };
@@ -2575,6 +2718,7 @@ export class PipelineRunner {
     let auditRunWrites: ReadonlyArray<AtomicFileWrite> = [];
     let auditRuns: ReadonlyArray<AuditRunV1> = [];
     let settledRevisionCandidate: WriteChapterOutput | undefined;
+    let settledRevisionCandidateValidated = false;
 
     {
       const manualReview = (this.config.chapterReviewMode ?? "auto") === "manual";
@@ -2616,7 +2760,7 @@ export class PipelineRunner {
         // Manual mode still performs the initial audit, but never auto-revises.
         maxReviewIterations: manualReview ? 0 : this.config.writingReviewRetries,
         autoRevisionAllowed: !manualReview,
-        stateSettlementValid: async (candidate) => {
+        settleRevisionCandidate: async (normalizedContent) => {
           try {
             const settled = await this.buildPersistenceOutput(
               bookId,
@@ -2624,19 +2768,66 @@ export class PipelineRunner {
               bookDir,
               chapterNumber,
               output,
-              candidate.revisedContent,
+              normalizedContent,
               lengthSpec.countingMode,
               reducedControlInput,
             );
-            const valid = settled.content === candidate.revisedContent
+            const surfaceValid = settled.content === normalizedContent
               && settled.updatedState.trim().length > 0
               && settled.updatedHooks.trim().length > 0;
-            settledRevisionCandidate = valid ? settled : undefined;
-            return valid;
+            if (!surfaceValid) {
+              settledRevisionCandidate = undefined;
+              settledRevisionCandidateValidated = false;
+              return { valid: false, rejectionReason: "candidate settlement output is incomplete" };
+            }
+            const validator = new StateValidatorAgent(this.agentCtxFor("state-validator", bookId));
+            const validation = await validateChapterTruthPersistence({
+              writer,
+              validator,
+              book,
+              bookDir,
+              chapterNumber,
+              title: settled.title,
+              content: normalizedContent,
+              persistenceOutput: settled,
+              auditResult: {
+                passed: false,
+                decision: "inconclusive",
+                issues: [],
+                summary: "candidate state settlement validation",
+                contentHash: computeChapterContentHash(normalizedContent),
+              },
+              previousTruth: { oldState, oldHooks, oldLedger },
+              authorityContext: {
+                storyFrame: authorityStoryFrame,
+                bookRules: authorityBookRules,
+                chapterSummaries: authorityChapterSummaries,
+              },
+              reducedControlInput,
+              language: pipelineLang,
+              logWarn: (message) => this.logWarn(pipelineLang, message),
+              logger: this.config.logger,
+            });
+            const valid = validation.chapterStatus === null
+              && validation.validation.passed
+              && !validation.validation.repairRequired;
+            settledRevisionCandidate = valid ? validation.persistenceOutput : undefined;
+            settledRevisionCandidateValidated = valid;
+            return valid
+              ? {
+                  valid: true,
+                  truthFileOverrides: {
+                    currentState: validation.persistenceOutput.updatedState,
+                    ledger: validation.persistenceOutput.updatedLedger || undefined,
+                    hooks: validation.persistenceOutput.updatedHooks,
+                  },
+                }
+              : { valid: false, rejectionReason: "candidate state validation failed or degraded" };
           } catch (error) {
             this.config.logger?.warn(`Revision candidate settlement failed: ${String(error)}`);
             settledRevisionCandidate = undefined;
-            return false;
+            settledRevisionCandidateValidated = false;
+            return { valid: false, rejectionReason: `candidate state validation unavailable: ${String(error)}` };
           }
         },
         logWarn: (message) => this.logWarn(pipelineLang, message),
@@ -2650,7 +2841,6 @@ export class PipelineRunner {
       postReviseCount = reviewResult.postReviseCount;
       repairApplied = reviewResult.repairApplied;
       auditRuns = reviewResult.auditRuns ?? [];
-      auditRunWrites = auditRuns.map(createAuditRunWrite);
     }
 
     this.throwIfOperationAborted();
@@ -2692,7 +2882,7 @@ export class PipelineRunner {
         title: finalTitleResolution.title,
       };
     }
-    {
+    if (!settledRevisionCandidateValidated) {
       const { rerunPromotionPass } = await import("../utils/hook-promotion.js");
       const { parsePendingHooksMarkdown, renderHookSnapshot } = await import("../utils/story-markdown.js");
       const hooks = parsePendingHooksMarkdown(persistenceOutput.updatedHooks);
@@ -2766,45 +2956,58 @@ export class PipelineRunner {
 
     // 4.1 Validate settler output before writing
     this.logStage(stageLanguage, { zh: "校验真相文件变更", en: "validating truth file updates" });
-    const storyDir = join(bookDir, "story");
-    const [oldState, oldHooks, oldLedger, authorityStoryFrame, authorityBookRules, authorityChapterSummaries] = await Promise.all([
-      readFile(join(storyDir, "current_state.md"), "utf-8").catch(() => ""),
-      readFile(join(storyDir, "pending_hooks.md"), "utf-8").catch(() => ""),
-      readFile(join(storyDir, "particle_ledger.md"), "utf-8").catch(() => ""),
-      readStoryFrame(bookDir).catch(() => ""),
-      readFile(join(storyDir, "book_rules.md"), "utf-8").catch(() => ""),
-      readFile(join(storyDir, "chapter_summaries.md"), "utf-8").catch(() => ""),
-    ]);
-    const validator = new StateValidatorAgent(this.agentCtxFor("state-validator", bookId));
-    const truthValidation = await validateChapterTruthPersistence({
-      writer,
-      validator,
-      book,
-      bookDir,
-      chapterNumber,
-      title: persistenceOutput.title,
-      content: finalContent,
-      persistenceOutput,
-      auditResult,
-      previousTruth: {
-        oldState,
-        oldHooks,
-        oldLedger,
-      },
-      authorityContext: {
-        storyFrame: authorityStoryFrame,
-        bookRules: authorityBookRules,
-        chapterSummaries: authorityChapterSummaries,
-      },
-      reducedControlInput,
-      language: pipelineLang,
-      logWarn: (message) => this.logWarn(pipelineLang, message),
-      logger: this.config.logger,
-    });
-    let chapterStatus: ChapterPipelineResult["status"] | null = truthValidation.chapterStatus;
-    let degradedIssues: ReadonlyArray<AuditIssue> = truthValidation.degradedIssues;
-    persistenceOutput = truthValidation.persistenceOutput;
-    auditResult = truthValidation.auditResult;
+    let chapterStatus: ChapterPipelineResult["status"] | null = null;
+    let degradedIssues: ReadonlyArray<AuditIssue> = [];
+    if (!(settledRevisionCandidateValidated && settledRevisionCandidate?.content === finalContent)) {
+      const validator = new StateValidatorAgent(this.agentCtxFor("state-validator", bookId));
+      const truthValidation = await validateChapterTruthPersistence({
+        writer,
+        validator,
+        book,
+        bookDir,
+        chapterNumber,
+        title: persistenceOutput.title,
+        content: finalContent,
+        persistenceOutput,
+        auditResult,
+        previousTruth: { oldState, oldHooks, oldLedger },
+        authorityContext: {
+          storyFrame: authorityStoryFrame,
+          bookRules: authorityBookRules,
+          chapterSummaries: authorityChapterSummaries,
+        },
+        reducedControlInput,
+        language: pipelineLang,
+        logWarn: (message) => this.logWarn(pipelineLang, message),
+        logger: this.config.logger,
+      });
+      chapterStatus = truthValidation.chapterStatus;
+      degradedIssues = truthValidation.degradedIssues;
+      persistenceOutput = truthValidation.persistenceOutput;
+      auditResult = truthValidation.auditResult;
+    }
+    if (chapterStatus === "state-degraded") {
+      const contentHash = computeChapterContentHash(finalContent);
+      const validationUnavailable = degradedIssues.some((issue) => /unavailable|不可用/iu.test(issue.description));
+      const stateEvidenceIssues: ReadonlyArray<AuditIssue> = degradedIssues.map((issue) => ({
+        ...issue,
+        source: "state" as const,
+        verification: validationUnavailable ? "unverified" as const : "verified" as const,
+        evidence: { contentHash, stateRef: "chapter-truth-validation" },
+        repairTarget: issue.repairTarget ?? "runtime-state",
+      }));
+      auditResult = {
+        ...auditResult,
+        passed: false,
+        decision: validationUnavailable ? "inconclusive" : "fail",
+        contentHash,
+        issues: [
+          ...auditResult.issues.filter((issue) => !degradedIssues.includes(issue)),
+          ...stateEvidenceIssues,
+        ],
+      };
+      degradedIssues = stateEvidenceIssues;
+    }
 
     // 4.2 Final paragraph shape check on persisted content (post-normalize, post-revise)
     {
@@ -2841,6 +3044,23 @@ export class PipelineRunner {
     }
 
     const resolvedStatus = chapterStatus ?? (auditResult.passed ? "ready-for-review" : "audit-failed");
+    const finalContentHash = auditResult.contentHash ?? computeChapterContentHash(finalContent);
+    auditRuns = auditRuns.map((run) => run.contentHash === finalContentHash
+      && run.canonicalCommitOutcome === "terminal-commit"
+      ? {
+          ...run,
+          decision: auditResult.decision ?? (auditResult.passed ? "pass" : "fail"),
+          passed: auditResult.decision === "pass" && auditResult.passed,
+          findings: auditResult.issues.map(({ acceptanceCriteria, ...issue }) => ({
+            ...issue,
+            ...(acceptanceCriteria ? { acceptanceCriteria: [...acceptanceCriteria] } : {}),
+          })),
+          overallScore: auditResult.overallScore,
+          provenance: auditResult.provenance,
+          tokenUsage: auditResult.tokenUsage,
+        }
+      : run);
+    auditRunWrites = auditRuns.map(createAuditRunWrite);
     await persistChapterArtifacts({
       chapterNumber,
       chapterTitle: persistenceOutput.title,
@@ -4282,6 +4502,7 @@ ${matrix}`,
     operation?: "audit" | "re-audit" | "revise";
     autoRevisionAllowed?: boolean;
     revisionAttempts?: number;
+    provenance?: AuditProvenance;
     auditOptions?: {
       temperature?: number;
       chapterIntent?: string;
@@ -4326,6 +4547,7 @@ ${matrix}`,
       revisionAttempts: params.revisionAttempts ?? 0,
       maxRevisionAttempts: 1,
       autoRevisionAllowed: params.autoRevisionAllowed ?? false,
+      provenance: params.provenance,
     }, {
       operation: params.operation ?? "audit",
       autoRevisionAllowed: params.autoRevisionAllowed ?? false,

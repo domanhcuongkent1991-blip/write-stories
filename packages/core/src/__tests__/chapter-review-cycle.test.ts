@@ -166,11 +166,15 @@ describe("runChapterReviewCycle v9", () => {
     });
 
     expect(reviseChapter.mock.calls[0]?.[3]).toEqual(expect.arrayContaining([
-      expect.objectContaining({ category: "length-budget", severity: "critical" }),
+      expect.objectContaining({ category: "length", ruleId: "length.hard-range", severity: "critical" }),
     ]));
+    expect((reviseChapter.mock.calls[0]?.[3] ?? []).filter(
+      (issue: AuditIssue) => issue.ruleId === "length.hard-range",
+    )).toHaveLength(1);
     expect(result.finalContent).toBe(repairedDraft);
     expect(result.auditResult.passed).toBe(true);
     expect(result.repairApplied).toBe(true);
+    expect(result.auditResult.issues.filter((issue) => issue.ruleId === "length.hard-range")).toHaveLength(0);
   });
 
   it("returns initial and post-revision audit runs with one shared attempt identity", async () => {
@@ -197,6 +201,66 @@ describe("runChapterReviewCycle v9", () => {
     expect(result.auditRuns?.[0]?.attemptId).toBe(result.auditRuns?.[1]?.attemptId);
     expect(result.auditRuns?.[0]?.canonicalCommitOutcome).toBe("superseded");
     expect(result.auditRuns?.[1]?.canonicalCommitOutcome).toBe("terminal-commit");
+    expect(result.auditRuns?.[0]?.provenance).toMatchObject({
+      source: "pipeline-runner",
+      operationId: result.auditRuns?.[0]?.operationId,
+      attemptId: result.auditRuns?.[0]?.attemptId,
+      phase: "initial",
+    });
+    expect(result.auditRuns?.[1]?.provenance).toMatchObject({
+      source: "pipeline-runner",
+      operationId: result.auditRuns?.[0]?.operationId,
+      attemptId: result.auditRuns?.[0]?.attemptId,
+      phase: "post-revision",
+    });
+  });
+
+  it("normalizes a candidate before settlement and binds post-audit to its settled truth", async () => {
+    const normalizedCandidate = "修".repeat(220);
+    const rawCandidate = `\uFEFF# 第1章\r\n\r\n${normalizedCandidate}`;
+    const settleRevisionCandidate = vi.fn().mockResolvedValue({
+      valid: true,
+      truthFileOverrides: {
+        currentState: "candidate-state",
+        ledger: "candidate-ledger",
+        hooks: "candidate-hooks",
+      },
+    });
+    const auditChapter = vi.fn()
+      .mockResolvedValueOnce(createAuditResult({ passed: false, overallScore: 70 }))
+      .mockImplementationOnce(async (_dir, content, _chapter, _genre, options) => {
+        expect(content).toBe(normalizedCandidate);
+        expect(options?.truthFileOverrides).toEqual({
+          currentState: "candidate-state",
+          ledger: "candidate-ledger",
+          hooks: "candidate-hooks",
+        });
+        return createAuditResult({ passed: true, overallScore: 95 });
+      });
+
+    const result = await runChapterReviewCycle({
+      ...baseParams,
+      initialOutput: { content: "原".repeat(200), wordCount: 200, postWriteErrors: [] },
+      createReviser: () => ({
+        reviseChapter: vi.fn().mockResolvedValue({
+          revisedContent: rawCandidate,
+          wordCount: 220,
+          fixedIssues: ["fixed"],
+          tokenUsage: ZERO_USAGE,
+        }),
+      }),
+      auditor: { auditChapter },
+      normalizePostWriteSurface: (content) => content === rawCandidate ? normalizedCandidate : content,
+      settleRevisionCandidate,
+      runPostWriteChecks: (content) => content.startsWith("原") ? [DETERMINISTIC_REPAIR] : [],
+    });
+
+    expect(settleRevisionCandidate).toHaveBeenCalledWith(
+      normalizedCandidate,
+      expect.objectContaining({ revisedContent: rawCandidate }),
+    );
+    expect(result.finalContent).toBe(normalizedCandidate);
+    expect(result.auditResult.provenance?.phase).toBe("post-revision");
   });
 
   it("rejects an unsettled candidate before post-revision audit", async () => {
@@ -211,6 +275,7 @@ describe("runChapterReviewCycle v9", () => {
 
     const result = await runChapterReviewCycle({
       ...baseParams,
+      bookId: "book-1",
       initialOutput: { content: original, wordCount: 200, postWriteErrors: [] },
       createReviser: () => ({ reviseChapter }),
       auditor: { auditChapter },
@@ -221,6 +286,13 @@ describe("runChapterReviewCycle v9", () => {
     expect(auditChapter).toHaveBeenCalledTimes(1);
     expect(result.finalContent).toBe(original);
     expect(result.revised).toBe(false);
+    expect(result.revisionAttempts).toBe(1);
+    expect(result.auditRuns?.[0]?.revision).toMatchObject({
+      attempted: true,
+      candidateProduced: true,
+      accepted: false,
+      rejectionReason: expect.stringContaining("state settlement"),
+    });
   });
 
   it("runs at most one repair and rejects a candidate that does not pass acceptance", async () => {

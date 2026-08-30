@@ -47,14 +47,14 @@ export interface ReviseOutput {
 
 type AutoOutputMode = "patch-only" | "rewrite-only" | "allow-full";
 
-function lengthUnit(countingMode: LengthSpec["countingMode"]): { en: string; zh: string } {
+function lengthUnit(countingMode: LengthSpec["countingMode"]): "字" | "words" | "từ" {
   switch (countingMode) {
     case "zh_chars":
-      return { en: "Chinese characters", zh: "字" };
+      return "字";
     case "en_words":
-      return { en: "words", zh: "词" };
+      return "words";
     case "vi_wordlike_tokens_v1":
-      return { en: "Vietnamese word-like tokens", zh: "từ" };
+      return "từ";
   }
 }
 
@@ -203,8 +203,8 @@ export class ReviserAgent extends BaseAgent {
     // Auto mode delegates length to normalize, not reviser.
     const lengthGuardrail = mode !== "auto" && options?.lengthSpec
       ? (isEnglish
-          ? "\n8. Keep the chapter word count within the target range; only allow minor deviation when fixing critical issues truly requires it"
-          : "\n8. 保持章节字数在目标区间内；只有在修复关键问题确实需要时才允许轻微偏离")
+          ? "\n8. Keep chapter length within the hard range under the specified counting mode. The hard range is non-negotiable."
+          : "\n8. 章节长度必须按指定计数模式落入硬性区间；硬性区间不可突破。")
       : "";
     const langPrefix = isEnglish
       ? `【LANGUAGE OVERRIDE】ALL output (FIXED_ISSUES, PATCHES, REVISED_CONTENT) MUST be in English.\n\n`
@@ -275,7 +275,9 @@ export class ReviserAgent extends BaseAgent {
       : "";
     // Length guardrail only in legacy modes — auto mode delegates length to normalize.
     const lengthGuidanceBlock = mode !== "auto" && options?.lengthSpec
-      ? `\n## 字数护栏\n计数单位：${lengthUnit(options.lengthSpec.countingMode).zh}\n目标：${options.lengthSpec.target}\n硬性区间：${options.lengthSpec.hardMin}-${options.lengthSpec.hardMax}\n这是结构性修复约束；必须通过调整正文落入硬性区间，不得新增支线或删掉核心事实。\n`
+      ? (isEnglish
+          ? `\n## Hard length constraint\nCounting mode: ${options.lengthSpec.countingMode} (${lengthUnit(options.lengthSpec.countingMode)})\nTarget: ${options.lengthSpec.target}\nHard range: ${options.lengthSpec.hardMin}-${options.lengthSpec.hardMax}\nThis structural repair constraint is non-negotiable. Adjust the prose to fit without adding subplots or removing core facts.\n`
+          : `\n## 篇幅硬性约束\n计数模式：${options.lengthSpec.countingMode}（${lengthUnit(options.lengthSpec.countingMode)}）\n目标：${options.lengthSpec.target}\n硬性区间：${options.lengthSpec.hardMin}-${options.lengthSpec.hardMax}\n这是不可协商的结构性修复约束；必须通过调整正文落入硬性区间，不得新增支线或删掉核心事实。\n`)
       : "";
     const styleGuideBlock = reducedControlBlock.length === 0
       ? `\n## 文风指南\n${styleGuide}`
@@ -412,8 +414,8 @@ ${chapterContent}`;
     const en = resolvedLanguage === "en";
     const rewriteLengthConstraint = lengthSpec
       ? (en
-          ? `\n  HARD STRUCTURAL REPAIR: The revised chapter must stay within the hard range ${lengthSpec.hardMin}-${lengthSpec.hardMax} ${lengthUnit(lengthSpec.countingMode).en} (target: ${lengthSpec.target}). This is non-negotiable — repair structure/prose to fit the range; do not exceed it.`
-          : `\n  硬性结构修复：重写后的章节必须控制在硬性区间 ${lengthSpec.hardMin}-${lengthSpec.hardMax}${lengthUnit(lengthSpec.countingMode).zh} 内（目标 ${lengthSpec.target}）。这是不可突破的底线；请通过结构/正文修复落入区间。`)
+          ? `\n  HARD STRUCTURAL REPAIR: Using counting mode ${lengthSpec.countingMode} (${lengthUnit(lengthSpec.countingMode)}), revised chapter length must stay within the hard range ${lengthSpec.hardMin}-${lengthSpec.hardMax} (target: ${lengthSpec.target}). This is non-negotiable — repair structure/prose to fit the range; do not exceed it.`
+          : `\n  硬性结构修复：按计数模式 ${lengthSpec.countingMode}（${lengthUnit(lengthSpec.countingMode)}），重写后的章节长度必须控制在硬性区间 ${lengthSpec.hardMin}-${lengthSpec.hardMax} 内（目标 ${lengthSpec.target}）。这是不可突破的底线；请通过结构/正文修复落入区间。`)
       : "";
 
     const routingDirectiveEn = autoOutputMode === "rewrite-only"

@@ -243,6 +243,43 @@ describe("persistChapterArtifacts", () => {
     ]);
   });
 
+  it("derives rejected attempt metadata from an initial-only audit run", async () => {
+    const result = await persistChapterArtifacts({
+      chapterNumber: 3,
+      chapterTitle: "Rejected candidate",
+      status: "audit-failed",
+      auditResult: createAuditResult({ passed: false, decision: "fail" }),
+      auditRuns: [{
+        chapterNumber: 3,
+        phase: "initial",
+        attemptId: "11111111-1111-4111-8111-111111111111",
+        revision: {
+          attempted: true,
+          candidateProduced: true,
+          accepted: false,
+          rejectionReason: "state settlement is invalid",
+        },
+      } as never],
+      finalWordCount: 888,
+      lengthWarnings: [],
+      degradedIssues: [],
+      loadChapterIndex: async () => [],
+      prepareCanonicalFiles: vi.fn().mockResolvedValue(EMPTY_FILE_SET),
+      commitCanonicalFiles: vi.fn().mockResolvedValue(undefined),
+      markBookActiveIfNeeded: vi.fn().mockResolvedValue(undefined),
+      persistAuditDriftGuidance: vi.fn().mockResolvedValue(undefined),
+      snapshotState: vi.fn().mockResolvedValue(undefined),
+      syncCurrentStateFactHistory: vi.fn().mockResolvedValue(undefined),
+      logSnapshotStage: vi.fn(),
+    });
+
+    expect(result.entry).toMatchObject({
+      revisionAttempts: 1,
+      revisionOutcome: "rejected",
+      revisionRejectionReason: "state settlement is invalid",
+    });
+  });
+
   it("prepares and commits the canonical file set exactly once with the updated index", async () => {
     const prepareCanonicalFiles = vi.fn().mockResolvedValue(EMPTY_FILE_SET);
     const commitCanonicalFiles = vi.fn().mockResolvedValue(undefined);

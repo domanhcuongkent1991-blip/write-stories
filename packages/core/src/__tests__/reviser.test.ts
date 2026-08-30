@@ -67,9 +67,67 @@ describe("ReviserAgent", () => {
       );
       const systemPrompt = ((chatSpy.mock.calls[0]?.[0] ?? []) as ReadonlyArray<{ content: string }>)[0]?.content ?? "";
       expect(systemPrompt).toContain("hard range");
+      expect(systemPrompt).toContain("en_words");
       expect(systemPrompt).toContain("words");
       expect(systemPrompt).toContain("STRUCTURAL REPAIR");
       expect(systemPrompt).not.toContain("softMin");
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it.each([
+    { language: "zh", mode: "zh_chars", unit: "字", source: "原始正文。" },
+    { language: "en", mode: "en_words", unit: "words", source: "Original draft." },
+    { language: "vi", mode: "vi_wordlike_tokens_v1", unit: "từ", source: "Bản thảo ban đầu." },
+  ] as const)("includes exact $mode and $unit in manual hard-range prompts", async ({ language, mode, unit, source }) => {
+    const root = await mkdtemp(join(tmpdir(), `inkos-reviser-${language}-mode-`));
+    const bookDir = join(root, "book");
+    await mkdir(join(bookDir, "story"), { recursive: true });
+    await writeFile(join(bookDir, "book.json"), JSON.stringify({
+      id: `${language}-book`,
+      title: "Book",
+      genre: "xuanhuan",
+      platform: "other",
+      chapterWordCount: 100,
+      targetChapters: 10,
+      status: "active",
+      language,
+      createdAt: "2026-03-23T00:00:00.000Z",
+      updatedAt: "2026-03-23T00:00:00.000Z",
+    }), "utf-8");
+    const agent = new ReviserAgent({
+      client: {
+        provider: "openai",
+        apiFormat: "chat",
+        stream: false,
+        defaults: { temperature: 0.7, maxTokens: 4096, thinkingBudget: 0, extra: {} },
+      },
+      model: "test-model",
+      projectRoot: root,
+    });
+    const chatSpy = vi.spyOn(ReviserAgent.prototype as never, "chat" as never).mockResolvedValue({
+      content: "=== FIXED_ISSUES ===\n\n=== REVISED_CONTENT ===\nRevised.",
+      usage: ZERO_USAGE,
+    });
+
+    try {
+      await agent.reviseChapter(
+        bookDir,
+        source,
+        1,
+        [CRITICAL_ISSUE],
+        "rewrite",
+        "xuanhuan",
+        { lengthSpec: buildLengthSpec(100, language) },
+      );
+      const messages = (chatSpy.mock.calls[0]?.[0] ?? []) as ReadonlyArray<{ content: string }>;
+      const combinedPrompt = messages.map((message) => message.content).join("\n");
+      expect(combinedPrompt).toContain(mode);
+      expect(combinedPrompt).toContain(unit);
+      expect(combinedPrompt).toMatch(/硬性区间|Hard range/u);
+      expect(combinedPrompt).not.toContain("轻微偏离");
+      expect(combinedPrompt).not.toContain("minor deviation");
     } finally {
       await rm(root, { recursive: true, force: true });
     }
@@ -271,7 +329,7 @@ describe("ReviserAgent", () => {
       const systemPrompt = messages?.[0]?.content ?? "";
       const userPrompt = messages?.[1]?.content ?? "";
 
-      expect(systemPrompt).toContain("保持章节字数在目标区间内");
+      expect(systemPrompt).toContain("章节长度必须按指定计数模式落入硬性区间");
       expect(systemPrompt).toContain("=== PATCHES ===");
       expect(systemPrompt).not.toContain("=== REVISED_CONTENT ===");
       expect(userPrompt).toContain("目标：220");

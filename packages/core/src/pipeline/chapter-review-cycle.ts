@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import type { AuditIssue, AuditResult } from "../agents/continuity.js";
+import type { AuditIssue, AuditProvenance, AuditResult } from "../agents/continuity.js";
 import type { ReviseMode, ReviseOutput } from "../agents/reviser.js";
 import type { WriteChapterOutput } from "../agents/writer.js";
 import type { ChapterIntent, ChapterMemo, ContextPackage, RuleStack } from "../models/input-governance.js";
@@ -62,6 +62,16 @@ interface ReviewSnapshot {
   readonly lengthInRange: boolean;
 }
 
+export interface RevisionCandidateSettlement {
+  readonly valid: boolean;
+  readonly rejectionReason?: string;
+  readonly truthFileOverrides?: {
+    readonly currentState?: string;
+    readonly ledger?: string;
+    readonly hooks?: string;
+  };
+}
+
 export async function runChapterReviewCycle(params: {
   readonly book: Pick<{ genre: string }, "genre">;
   readonly bookDir: string;
@@ -101,6 +111,7 @@ export async function runChapterReviewCycle(params: {
         chapterMemo?: ChapterMemo;
         contextPackage?: ContextPackage;
         ruleStack?: RuleStack;
+        truthFileOverrides?: RevisionCandidateSettlement["truthFileOverrides"];
       },
     ) => Promise<AuditResult>;
   };
@@ -119,6 +130,13 @@ export async function runChapterReviewCycle(params: {
   readonly runPostWriteChecks?: (content: string) => ReadonlyArray<AuditIssue>;
   readonly maxReviewIterations?: number;
   readonly autoRevisionAllowed?: boolean;
+  readonly operationId?: string;
+  readonly attemptId?: string;
+  readonly settleRevisionCandidate?: (
+    normalizedContent: string,
+    output: ReviseOutput,
+  ) => RevisionCandidateSettlement | Promise<RevisionCandidateSettlement>;
+  /** @deprecated Use settleRevisionCandidate so post-audit can bind to candidate truth. */
   readonly stateSettlementValid?: (output: ReviseOutput) => boolean | Promise<boolean>;
   readonly logWarn: (message: { zh: string; en: string }) => void;
   readonly logStage: (message: { zh: string; en: string }) => void;
@@ -129,9 +147,12 @@ export async function runChapterReviewCycle(params: {
   let finalWordCount = countChapterLength(finalContent, params.lengthSpec.countingMode);
   const preAuditWordCount = finalWordCount;
   let assessmentCount = 0;
-  const auditRunOperationId = randomUUID();
-  const auditRunAttemptId = randomUUID();
+  const auditRunOperationId = params.operationId ?? randomUUID();
+  const auditRunAttemptId = params.attemptId ?? randomUUID();
   const auditAssessments: Array<{ content: string; auditResult: AuditResult }> = [];
+  let revisionAttempts = 0;
+  let revisionCandidateProduced = false;
+  let revisionRejectionReason: string | undefined;
 
   // Convert initial postWriteErrors into AuditIssues as fallback when runPostWriteChecks isn't provided.
   const initialPostWriteIssues: ReadonlyArray<AuditIssue> = params.initialOutput.postWriteErrors.map((violation) => ({
@@ -148,8 +169,17 @@ export async function runChapterReviewCycle(params: {
   // ---------------------------------------------------------------------------
   const assess = async (
     content: string,
-    options?: { temperature?: number },
+    options?: {
+      temperature?: number;
+      truthFileOverrides?: RevisionCandidateSettlement["truthFileOverrides"];
+    },
   ): Promise<{ auditResult: AuditResult; score: number; lengthInRange: boolean }> => {
+    const provenance: AuditProvenance = {
+      source: "pipeline-runner",
+      operationId: auditRunOperationId,
+      attemptId: auditRunAttemptId,
+      phase: assessmentCount === 0 ? "initial" : "post-revision",
+    };
     const llmAudit = await params.auditor.auditChapter(
       params.bookDir,
       content,
@@ -165,23 +195,13 @@ export async function runChapterReviewCycle(params: {
     const hasBlockedWords = sensitiveResult.found.some((item) => item.severity === "block");
     const wordCount = countChapterLength(content, params.lengthSpec.countingMode);
     const lengthInRange = !isOutsideHardRange(wordCount, params.lengthSpec);
-    const lengthIssues: AuditIssue[] = lengthInRange ? [] : [{
-      severity: "critical",
-      category: "length-budget",
-      description: `Chapter length ${wordCount} is outside the required range ${params.lengthSpec.hardMin}-${params.lengthSpec.hardMax}.`,
-      suggestion: `Repair only the scenes that are underdeveloped or redundant, then land near ${params.lengthSpec.target} without changing established facts.`,
-      ruleId: "length.hard-range",
-      repairScope: "structural",
-      repairTarget: "prose",
-    }];
-
     // Deterministic post-write checks: run every round, not just the first.
     // If runPostWriteChecks is provided, use it; otherwise fall back to initial postWriteErrors.
     const postWriteIssues = params.runPostWriteChecks
       ? params.runPostWriteChecks(content)
       : initialPostWriteIssues;
 
-    const deterministicFindings = [...aiTellsResult.issues, ...sensitiveResult.issues, ...postWriteIssues, ...lengthIssues]
+    const deterministicFindings = [...aiTellsResult.issues, ...sensitiveResult.issues, ...postWriteIssues]
       .map((issue) => issue.repairTarget ? issue : { ...issue, repairTarget: "prose" as const });
     const evaluation = decideAudit({
       content,
@@ -190,13 +210,14 @@ export async function runChapterReviewCycle(params: {
       deterministicFindings,
       stateFindings: [],
       operation: assessmentCount === 0 ? "audit" : "re-audit",
-      revisionAttempts: Math.max(0, assessmentCount),
+      revisionAttempts,
       maxRevisionAttempts: 1,
       autoRevisionAllowed: params.autoRevisionAllowed ?? true,
+      provenance,
     }, {
       operation: assessmentCount === 0 ? "audit" : "re-audit",
       autoRevisionAllowed: params.autoRevisionAllowed ?? true,
-      revisionAttempts: Math.max(0, assessmentCount),
+      revisionAttempts,
       maxRevisionAttempts: 1,
     });
     assessmentCount += 1;
@@ -210,6 +231,7 @@ export async function runChapterReviewCycle(params: {
       tokenUsage: llmAudit.tokenUsage,
       decision: evaluation.decision,
       contentHash: evaluation.contentHash,
+      provenance: evaluation.provenance,
     };
     auditAssessments.push({ content, auditResult });
 
@@ -275,11 +297,11 @@ export async function runChapterReviewCycle(params: {
       attemptId: auditRunAttemptId,
       canonicalCommitOutcome: candidate && finalContent !== initial.content ? "superseded" : "terminal-commit",
       revision: {
-        attempted: Boolean(candidate),
-        candidateProduced: Boolean(candidate),
+        attempted: revisionAttempts > 0,
+        candidateProduced: revisionCandidateProduced,
         ...(candidate ? { candidateContentHash: asEvaluation(candidate.auditResult, candidate.content).contentHash } : {}),
         accepted: Boolean(candidate && finalContent === candidate.content),
-        ...(candidate && finalContent !== candidate.content ? { rejectionReason: "candidate rejected by shared acceptance gate" } : {}),
+        ...(revisionRejectionReason ? { rejectionReason: revisionRejectionReason } : {}),
       },
     }));
     if (candidate) {
@@ -312,7 +334,9 @@ export async function runChapterReviewCycle(params: {
           candidateContentHash: candidateEvaluation.contentHash,
           candidateWordCount: countChapterLength(candidate.content, params.lengthSpec.countingMode),
           accepted: finalContent === candidate.content,
-          ...(finalContent !== candidate.content ? { rejectionReason: "candidate rejected by shared acceptance gate" } : {}),
+          ...(finalContent !== candidate.content
+            ? { rejectionReason: revisionRejectionReason ?? "candidate rejected by shared acceptance gate" }
+            : {}),
         },
       }));
     }
@@ -333,6 +357,7 @@ export async function runChapterReviewCycle(params: {
       totalUsage,
       postReviseCount,
       repairApplied: false,
+      revisionAttempts,
       auditRuns: buildAuditRuns(),
     };
   }
@@ -345,6 +370,7 @@ export async function runChapterReviewCycle(params: {
       });
 
       const reviser = params.createReviser();
+      revisionAttempts = 1;
       const reviseOutput = await reviser.reviseChapter(
         params.bookDir,
         finalContent,
@@ -356,7 +382,13 @@ export async function runChapterReviewCycle(params: {
       );
       totalUsage = params.addUsage(totalUsage, reviseOutput.tokenUsage);
 
-      if (reviseOutput.revisedContent.length === 0 || reviseOutput.revisedContent === finalContent) {
+      const revisedContent = params.normalizePostWriteSurface?.(reviseOutput.revisedContent)
+        ?? reviseOutput.revisedContent;
+      revisionCandidateProduced = revisedContent.length > 0 && revisedContent !== finalContent;
+      if (!revisionCandidateProduced) {
+        revisionRejectionReason = revisedContent.length === 0
+          ? "revision candidate was empty"
+          : "revision candidate was unchanged";
         params.logWarn({
           zh: `修复轮次 ${iteration + 1} 未产出新内容，退出循环`,
           en: `repair iteration ${iteration + 1} produced no new content, exiting loop`,
@@ -364,21 +396,32 @@ export async function runChapterReviewCycle(params: {
         break;
       }
 
-      params.assertChapterContentNotEmpty(reviseOutput.revisedContent, `repair iteration ${iteration + 1}`);
-      if (params.stateSettlementValid && !await params.stateSettlementValid(reviseOutput)) {
+      params.assertChapterContentNotEmpty(revisedContent, `repair iteration ${iteration + 1}`);
+      let candidateSettlement: RevisionCandidateSettlement = { valid: true };
+      if (params.settleRevisionCandidate) {
+        candidateSettlement = await params.settleRevisionCandidate(revisedContent, reviseOutput);
+      } else if (params.stateSettlementValid) {
+        candidateSettlement = {
+          valid: await params.stateSettlementValid({ ...reviseOutput, revisedContent }),
+        };
+      }
+      if (!candidateSettlement.valid) {
+        revisionRejectionReason = candidateSettlement.rejectionReason ?? "state settlement is invalid";
         params.logWarn({
           zh: "修复候选的状态结算无效，保留原章节",
           en: "Revision candidate state settlement is invalid; retaining the canonical chapter.",
         });
         break;
       }
-      const revisedContent = params.normalizePostWriteSurface?.(reviseOutput.revisedContent) ?? reviseOutput.revisedContent;
       const revisedWordCount = countChapterLength(revisedContent, params.lengthSpec.countingMode);
 
       // Re-assess revised content. If REVISED_CONTENT drifted on length,
       // lengthInRange will be false → isPassed fails → bestSnapshot picks
       // the earlier in-range version. No in-loop normalize needed.
-      const nextAssessment = await assess(revisedContent, { temperature: 0 });
+      const nextAssessment = await assess(revisedContent, {
+        temperature: 0,
+        truthFileOverrides: candidateSettlement.truthFileOverrides,
+      });
 
       snapshots.push({
         content: revisedContent,
@@ -398,6 +441,7 @@ export async function runChapterReviewCycle(params: {
 
       // Candidate is canonical only after the shared acceptance gate passes.
       if (isPassed(nextAssessment) && revisionAcceptance.accepted) {
+        revisionRejectionReason = undefined;
         params.logStage({
           zh: `修复后达到通过线（${nextAssessment.score} 分），退出循环`,
           en: `repair reached pass threshold (${nextAssessment.score}), exiting loop`,
@@ -413,6 +457,7 @@ export async function runChapterReviewCycle(params: {
         zh: `修复候选未通过验收（${revisionAcceptance.rejectionReason ?? "未达到通过线"}），保留原章节`,
         en: `revision candidate rejected (${revisionAcceptance.rejectionReason ?? "acceptance gate not met"}); retaining the canonical chapter`,
       });
+      revisionRejectionReason = revisionAcceptance.rejectionReason ?? "candidate rejected by shared acceptance gate";
       break;
     }
   }
@@ -426,7 +471,7 @@ export async function runChapterReviewCycle(params: {
     totalUsage,
     postReviseCount,
     repairApplied: snapshots.length > 1 && finalContent !== params.initialOutput.content,
-    revisionAttempts: Math.min(1, snapshots.length - 1),
+    revisionAttempts,
     auditRuns: buildAuditRuns(),
   };
 }

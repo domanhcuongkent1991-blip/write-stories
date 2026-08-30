@@ -47,8 +47,13 @@ export async function persistChapterArtifacts(params: {
   const initialAuditRun = params.auditRuns?.find((run) => run.phase === "initial");
   const postRevisionRun = params.auditRuns?.find((run) => run.phase === "post-revision");
   const revisionOutcome = postRevisionRun
-    ? postRevisionRun.revision.accepted ? "accepted" : "rejected"
-    : params.auditResult.decision === "inconclusive" ? "inconclusive" : "not-needed";
+    ? postRevisionRun.revision.accepted
+      ? "accepted"
+      : postRevisionRun.decision === "inconclusive" ? "inconclusive" : "rejected"
+    : initialAuditRun?.revision.attempted
+      ? initialAuditRun.decision === "inconclusive" ? "inconclusive" : "rejected"
+      : params.auditResult.decision === "inconclusive" ? "inconclusive" : "not-needed";
+  const revisionEvidence = postRevisionRun?.revision ?? initialAuditRun?.revision;
   const entry: ChapterMeta = {
     number: params.chapterNumber,
     title: params.chapterTitle,
@@ -71,9 +76,9 @@ export async function persistChapterArtifacts(params: {
     verifiedBlockerCount: params.auditResult.issues.filter(
       (issue) => issue.severity === "critical" && issue.verification === "verified",
     ).length,
-    revisionAttempts: postRevisionRun ? 1 : 0,
+    revisionAttempts: revisionEvidence?.attempted ? 1 : 0,
     revisionOutcome,
-    revisionRejectionReason: postRevisionRun?.revision.rejectionReason,
+    revisionRejectionReason: revisionEvidence?.rejectionReason,
     auditProvenance: params.auditResult.provenance,
     tokenUsage: params.tokenUsage,
   };
