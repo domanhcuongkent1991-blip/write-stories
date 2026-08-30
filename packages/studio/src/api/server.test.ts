@@ -7379,4 +7379,188 @@ describe("createStudioServer daemon lifecycle", () => {
     });
   });
 
+  describe("Phase A Internal route-wiring characterization", () => {
+    const internalBaseUrl = "http://localhost:56154/v1";
+    const internalModelId = "gpt-5-6-luna";
+    const syntheticCredential = "unit-test-credential";
+
+    function internalStudioConfig() {
+      const config = cloneProjectConfig();
+      return {
+        ...config,
+        llm: {
+          ...config.llm,
+          configSource: "studio" as const,
+          provider: "custom" as const,
+          service: "custom",
+          baseUrl: internalBaseUrl,
+          model: internalModelId,
+          defaultModel: internalModelId,
+          apiFormat: "chat" as const,
+          stream: true,
+          apiKey: syntheticCredential,
+          services: [{
+            service: "custom",
+            name: "Internal",
+            baseUrl: internalBaseUrl,
+            models: [internalModelId],
+            apiFormat: "chat" as const,
+            stream: true,
+          }],
+        },
+      };
+    }
+
+    function recordRouteWiringMeta(
+      ctx: { readonly task: { readonly meta: unknown } },
+      value: Record<string, string | boolean | null>,
+    ): void {
+      if (ctx.task.meta && typeof ctx.task.meta === "object") {
+        (ctx.task.meta as Record<string, unknown>).phaseA = value;
+      }
+    }
+
+    it("keeps configured and normalized layers distinct for books/create", async (ctx) => {
+      const config = internalStudioConfig();
+      const { apiKey: _apiKey, ...diskLlm } = config.llm;
+      await writeFile(join(root, "inkos.json"), JSON.stringify({ ...config, llm: diskLlm }, null, 2), "utf-8");
+      loadProjectConfigMock.mockResolvedValueOnce(config as never);
+
+      const effectiveClient = {
+        service: "custom",
+        provider: "openai",
+        configSource: "studio",
+        apiFormat: "chat",
+        stream: true,
+        _piModel: {
+          id: internalModelId,
+          provider: "openai",
+          api: "openai-completions",
+          baseUrl: internalBaseUrl,
+        },
+        _apiKey: syntheticCredential,
+      };
+      createLLMClientMock.mockReturnValueOnce(effectiveClient);
+
+      const { createStudioServer } = await import("./server.js");
+      const app = createStudioServer(cloneProjectConfig() as never, root);
+      const response = await app.request("http://localhost/api/v1/books/create", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ title: "Internal Route Book", genre: "urban", language: "zh" }),
+      });
+
+      expect(response.status).toBe(200);
+      expect(loadProjectConfigMock).toHaveBeenCalledWith(root, { consumer: "studio" });
+      const pipelineConfig = pipelineConfigs.at(-1) as Record<string, any>;
+      expect(pipelineConfig.client).toBe(effectiveClient);
+      expect(pipelineConfig.model).toBe(internalModelId);
+      const defaultLlmConfig = pipelineConfig.defaultLLMConfig as Record<string, any>;
+      const configuredEntry = defaultLlmConfig.services[0] as Record<string, any>;
+      expect(`${configuredEntry.service}:${configuredEntry.name}`).toBe("custom:Internal");
+      expect(effectiveClient.service).toBe("custom");
+      expect(effectiveClient._piModel.id).toBe(internalModelId);
+      expect(processProjectInteractionRequestMock).toHaveBeenCalled();
+
+      recordRouteWiringMeta(ctx, {
+        configuredServiceKey: "custom:Internal",
+        normalizedClientService: effectiveClient.service,
+        configuredProvider: config.llm.provider,
+        transportProvider: effectiveClient.provider,
+        requestedModelId: internalModelId,
+        effectiveModelId: effectiveClient._piModel.id,
+        resolvedPiModelId: effectiveClient._piModel.id,
+        configSource: effectiveClient.configSource,
+        baseHost: new URL(internalBaseUrl).host,
+        basePath: new URL(internalBaseUrl).pathname,
+        apiFormat: effectiveClient.apiFormat,
+        stream: effectiveClient.stream,
+        transportSeam: "native-custom-openai-compatible",
+        finalEndpoint: null,
+        credentialSource: "studio-secret",
+        keyPresent: Boolean(effectiveClient._apiKey),
+        sameSyntheticCredential: effectiveClient._apiKey === syntheticCredential,
+        liveCredentialParityProven: false,
+        observationLevel: "route-wiring-mock",
+      });
+    });
+
+    it("passes explicit Internal service/model identity through the agent session seam", async (ctx) => {
+      const config = internalStudioConfig();
+      const { apiKey: _apiKey, ...diskLlm } = config.llm;
+      await writeFile(join(root, "inkos.json"), JSON.stringify({ ...config, llm: diskLlm }, null, 2), "utf-8");
+      loadProjectConfigMock.mockResolvedValueOnce(config as never);
+
+      const resolvedPiModel = {
+        id: internalModelId,
+        provider: "openai",
+        api: "openai-completions",
+        baseUrl: internalBaseUrl,
+      };
+      resolveServiceModelMock.mockResolvedValueOnce({ model: resolvedPiModel, apiKey: syntheticCredential });
+      createLLMClientMock.mockImplementation(((cfg: Record<string, any>) => ({
+        service: cfg.service,
+        provider: "openai",
+        configSource: cfg.configSource,
+        apiFormat: cfg.apiFormat,
+        stream: cfg.stream,
+        _piModel: resolvedPiModel,
+        _apiKey: cfg.apiKey,
+      })) as any);
+      runAgentSessionMock.mockResolvedValueOnce({ responseText: "synthetic agent response", messages: [] });
+
+      const { createStudioServer } = await import("./server.js");
+      const app = createStudioServer(cloneProjectConfig() as never, root);
+      const response = await app.request("http://localhost/api/v1/agent", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          instruction: "synthetic route wiring",
+          service: "custom:Internal",
+          model: internalModelId,
+          sessionId: "agent-session-1",
+        }),
+      });
+
+      expect(response.status).toBe(200);
+      expect(resolveServiceModelMock).toHaveBeenCalledWith(
+        "custom:Internal",
+        internalModelId,
+        root,
+        internalBaseUrl,
+        "chat",
+      );
+      const lastCreateCall = createLLMClientMock.mock.calls.at(-1) as unknown as [Record<string, any>] | undefined;
+      const pipelineClientConfig = lastCreateCall?.[0] as Record<string, any>;
+      expect(pipelineClientConfig.service).toBe("custom");
+      expect(pipelineClientConfig.model).toBe(internalModelId);
+      expect(pipelineClientConfig.apiKey === syntheticCredential).toBe(true);
+      const agentConfig = runAgentSessionMock.mock.calls.at(-1)?.[0] as Record<string, any>;
+      expect(agentConfig.model).toBe(resolvedPiModel);
+      expect(agentConfig.apiKey === syntheticCredential).toBe(true);
+
+      recordRouteWiringMeta(ctx, {
+        configuredServiceKey: "custom:Internal",
+        normalizedClientService: pipelineClientConfig.service,
+        configuredProvider: config.llm.provider,
+        transportProvider: "openai",
+        requestedModelId: internalModelId,
+        effectiveModelId: resolvedPiModel.id,
+        resolvedPiModelId: resolvedPiModel.id,
+        configSource: pipelineClientConfig.configSource,
+        baseHost: new URL(internalBaseUrl).host,
+        basePath: new URL(internalBaseUrl).pathname,
+        apiFormat: pipelineClientConfig.apiFormat,
+        stream: pipelineClientConfig.stream,
+        transportSeam: "pi-agent-session-wiring",
+        finalEndpoint: null,
+        credentialSource: "studio-secret",
+        keyPresent: Boolean(pipelineClientConfig.apiKey),
+        sameSyntheticCredential: pipelineClientConfig.apiKey === syntheticCredential,
+        liveCredentialParityProven: false,
+        observationLevel: "route-wiring-mock",
+      });
+    });
+  });
+
 });
