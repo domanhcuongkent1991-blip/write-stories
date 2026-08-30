@@ -748,10 +748,22 @@ describe("ChapterTraceSchema", () => {
         "story/chapter_summaries.md#7",
       ],
       notes: ["current_focus locally overrides planning"],
+      tokenUsageByAgent: {
+        planner: {
+          promptTokens: 120,
+          completionTokens: 30,
+          totalTokens: 150,
+        },
+      },
+      tokenUsageBySource: {
+        "story/current_state.md": 42,
+      },
     });
 
     expect(result.plannerInputs).toContain("story/author_intent.md");
     expect(result.notes).toHaveLength(1);
+    expect(result.tokenUsageByAgent?.planner?.totalTokens).toBe(150);
+    expect(result.tokenUsageBySource).toEqual({ "story/current_state.md": 42 });
   });
 
   it("defaults notes to empty", () => {
@@ -763,6 +775,8 @@ describe("ChapterTraceSchema", () => {
     });
 
     expect(result.notes).toEqual([]);
+    expect(result.tokenUsageByAgent).toBeUndefined();
+    expect(result.tokenUsageBySource).toBeUndefined();
   });
 });
 

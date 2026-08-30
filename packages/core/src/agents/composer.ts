@@ -138,6 +138,7 @@ export async function composeGovernedChapter(input: ComposeChapterInput): Promis
         ? { semanticSelectedIds: [...baseContext.retrievalTrace.semanticSelectedIds] }
         : {}),
     },
+    ...(input.plan.tokenUsage ? { tokenUsageByAgent: { planner: input.plan.tokenUsage } } : {}),
   });
   const {
     contextPath,

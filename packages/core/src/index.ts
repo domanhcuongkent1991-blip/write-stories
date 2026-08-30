@@ -156,6 +156,7 @@ export {
   RuleStackSectionsSchema,
   RuleStackSchema,
   ChapterTraceSchema,
+  TokenUsageSchema,
 } from "./models/input-governance.js";
 export {
   AgentSkillSchema,

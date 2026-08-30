@@ -181,6 +181,30 @@ describe("PlannerAgent.planChapter memo generation", () => {
     expect(result.intent.pacingCode).toBe("reveal");
   });
 
+  it("aggregates provider usage across planner attempts", async () => {
+    vi.spyOn(llmProvider, "chatCompletion")
+      .mockResolvedValueOnce({
+        content: "not a memo",
+        usage: { promptTokens: 10, completionTokens: 2, totalTokens: 12 },
+      } as unknown as Awaited<ReturnType<typeof llmProvider.chatCompletion>>)
+      .mockResolvedValueOnce({
+        content: validMemoRaw(1),
+        usage: { promptTokens: 20, completionTokens: 3, totalTokens: 23 },
+      } as unknown as Awaited<ReturnType<typeof llmProvider.chatCompletion>>);
+
+    const result = await makePlanner().planChapter({
+      book: makeBook(),
+      bookDir,
+      chapterNumber: 1,
+    });
+
+    expect(result.tokenUsage).toEqual({
+      promptTokens: 30,
+      completionTokens: 5,
+      totalTokens: 35,
+    });
+  });
+
   it("does not hard-cap memo generation below the configured model output budget", async () => {
     const chatSpy = vi.spyOn(llmProvider, "chatCompletion").mockResolvedValue({
       content: validMemoRaw(1),

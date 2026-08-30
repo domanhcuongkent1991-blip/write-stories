@@ -4,6 +4,7 @@ import type { ChapterMeta } from "../models/chapter.js";
 import type { LengthTelemetry } from "../models/length-governance.js";
 import type { AtomicFileWrite } from "../utils/atomic-file-set.js";
 import type { AuditRunV1 } from "../audit/audit-run.js";
+import type { TokenUsage } from "../models/input-governance.js";
 import { auditRunRelativePath } from "../audit/audit-run.js";
 import { buildStateDegradedReviewNote } from "./chapter-state-recovery.js";
 
@@ -27,6 +28,8 @@ export async function persistChapterArtifacts(params: {
   readonly lengthTelemetry?: LengthTelemetry;
   readonly degradedIssues: ReadonlyArray<AuditIssue>;
   readonly tokenUsage?: ChapterPersistenceUsage;
+  readonly tokenUsageByAgent?: Partial<Record<"planner" | "writer" | "auditor" | "reviser", TokenUsage>>;
+  readonly tokenUsageBySource?: Readonly<Record<string, number>>;
   readonly loadChapterIndex: () => Promise<ReadonlyArray<ChapterMeta>>;
   readonly prepareCanonicalFiles: (
     updatedIndex: ReadonlyArray<ChapterMeta>,
@@ -81,6 +84,8 @@ export async function persistChapterArtifacts(params: {
     revisionRejectionReason: revisionEvidence?.rejectionReason,
     auditProvenance: params.auditResult.provenance,
     tokenUsage: params.tokenUsage,
+    tokenUsageByAgent: params.tokenUsageByAgent,
+    tokenUsageBySource: params.tokenUsageBySource,
   };
   const existingIdx = existingIndex.findIndex((e) => e.number === params.chapterNumber);
   const persistedEntry = existingIdx >= 0

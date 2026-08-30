@@ -92,6 +92,7 @@ export function buildGovernedTrace(params: {
   readonly promptPacks?: ReadonlyArray<string>;
   readonly compression?: ChapterTrace["compression"];
   readonly retrieval?: ChapterTrace["retrieval"];
+  readonly tokenUsageByAgent?: ChapterTrace["tokenUsageByAgent"];
 }): ChapterTrace {
   const protectedEntries = params.contextPackage.selectedContext.filter((entry) =>
     isProtectedContextSource(entry.source),
@@ -120,7 +121,21 @@ export function buildGovernedTrace(params: {
     ...(params.compression ? { compression: params.compression } : {}),
     ...(params.retrieval ? { retrieval: params.retrieval } : {}),
     notes: params.notes ?? [],
+    ...(params.tokenUsageByAgent ? { tokenUsageByAgent: params.tokenUsageByAgent } : {}),
+    tokenUsageBySource: measureContextTokensBySource(params.contextPackage),
   });
+}
+
+/** Measures selected context cost by source without retaining prompt contents. */
+export function measureContextTokensBySource(
+  contextPackage: ContextPackage,
+): Record<string, number> | undefined {
+  const bySource: Record<string, number> = {};
+  for (const entry of contextPackage.selectedContext) {
+    const tokens = estimateContextSourceTokens(entry);
+    if (tokens > 0) bySource[entry.source] = (bySource[entry.source] ?? 0) + tokens;
+  }
+  return Object.keys(bySource).length > 0 ? bySource : undefined;
 }
 
 export function isProtectedContextSource(source: string): boolean {

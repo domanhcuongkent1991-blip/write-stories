@@ -17,6 +17,7 @@ import {
   PacingCodeSchema,
   type ChapterIntent,
   type ChapterMemo,
+  type TokenUsage,
 } from "../models/input-governance.js";
 import {
   renderHookSnapshot,
@@ -59,6 +60,7 @@ export interface PlanChapterOutput {
   readonly intentMarkdown: string;
   readonly plannerInputs: ReadonlyArray<string>;
   readonly runtimePath: string;
+  readonly tokenUsage?: TokenUsage;
 }
 
 const MEMO_RETRY_LIMIT = 3;
@@ -147,7 +149,7 @@ export class PlannerAgent extends BaseAgent {
       input.book.chapterWordCount,
       writingLanguage,
     );
-    const memo = await this.planChapterMemo({
+    const memoResult = await this.planChapterMemo({
       storyDir,
       bookDir: input.bookDir,
       chapterNumber: input.chapterNumber,
@@ -167,6 +169,7 @@ export class PlannerAgent extends BaseAgent {
       lengthSpec,
     });
 
+    const memo = memoResult.memo;
     intent.expectedHookOps = hookOpsFromLedger(memo.body, {
       activeHooks: memorySelection.activeHooks,
       chapterNumber: input.chapterNumber,
@@ -199,6 +202,7 @@ export class PlannerAgent extends BaseAgent {
       intentMarkdown,
       plannerInputs: materials.plannerInputs,
       runtimePath,
+      ...(memoResult.tokenUsage ? { tokenUsage: memoResult.tokenUsage } : {}),
     };
   }
 
@@ -222,7 +226,7 @@ export class PlannerAgent extends BaseAgent {
     readonly authoritativeActiveHooks?: ReadonlyArray<StoredHook>;
     readonly language?: ScaffoldLanguage;
     readonly lengthSpec: LengthSpec;
-  }): Promise<ChapterMemo> {
+  }): Promise<{ memo: ChapterMemo; tokenUsage?: TokenUsage }> {
     const [characterMatrix, subplotBoard, emotionalArcs, bookRulesRaw] = await Promise.all([
       readCharacterMatrix(input.storyDir),
       readSubplotBoard(input.storyDir),
@@ -283,6 +287,7 @@ export class PlannerAgent extends BaseAgent {
 
     let currentUserMessage = userMessage;
     let lastError: PlannerParseError | undefined;
+    let tokenUsage: TokenUsage | undefined;
 
     for (let attempt = 0; attempt < MEMO_RETRY_LIMIT; attempt += 1) {
       const response = await this.chat(
@@ -292,11 +297,18 @@ export class PlannerAgent extends BaseAgent {
         ],
         { temperature: 0.7 },
       );
+      if (response.usage) {
+        tokenUsage = {
+          promptTokens: (tokenUsage?.promptTokens ?? 0) + response.usage.promptTokens,
+          completionTokens: (tokenUsage?.completionTokens ?? 0) + response.usage.completionTokens,
+          totalTokens: (tokenUsage?.totalTokens ?? 0) + response.usage.totalTokens,
+        };
+      }
 
       try {
         const memo = parseMemo(response.content, input.chapterNumber, input.isGoldenOpening);
         assertFreshMemoGovernance(memo.body, input.authoritativeActiveHooks);
-        return memo;
+        return { memo, ...(tokenUsage ? { tokenUsage } : {}) };
       } catch (error) {
         if (!(error instanceof PlannerParseError)) {
           throw error;
@@ -309,7 +321,7 @@ export class PlannerAgent extends BaseAgent {
 
     const fallbackError = lastError ?? new PlannerParseError("memo planner exhausted retries without a specific error");
     this.log?.warn(`[planner] memo planner fell back after ${MEMO_RETRY_LIMIT} attempts: ${fallbackError.message}`);
-    return parseMemo(
+    return { memo: parseMemo(
       this.buildFallbackMemoMarkdown({
         chapterNumber: input.chapterNumber,
         isGoldenOpening: input.isGoldenOpening,
@@ -320,7 +332,7 @@ export class PlannerAgent extends BaseAgent {
       }),
       input.chapterNumber,
       input.isGoldenOpening,
-    );
+    ), ...(tokenUsage ? { tokenUsage } : {}) };
   }
 
   private buildFallbackMemoMarkdown(input: {
@@ -957,7 +969,7 @@ function assertFreshMemoGovernance(
   if (!pacing.success || pacing.data === "unknown") {
     throw new PlannerParseError(
       "fresh memo must contain one canonical pacing code (setup|escalation|reveal|reversal|payoff|aftermath|bridge)",
-    );
+      );
   }
 
   if (authoritativeActiveHooks === undefined) return;

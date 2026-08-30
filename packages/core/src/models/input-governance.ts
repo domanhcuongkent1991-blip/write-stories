@@ -1,6 +1,14 @@
 import { z } from "zod";
 import { HookOpsSchema } from "./runtime-state.js";
 
+export const TokenUsageSchema = z.object({
+  promptTokens: z.number().int().nonnegative(),
+  completionTokens: z.number().int().nonnegative(),
+  totalTokens: z.number().int().nonnegative(),
+});
+
+export type TokenUsage = z.infer<typeof TokenUsageSchema>;
+
 export const ChapterMemoSchema = z.object({
   chapter: z.number().int().min(1),
   goal: z.string().min(1).max(50),
@@ -153,6 +161,13 @@ export const ChapterTraceSchema = z.object({
     semanticSelectedIds: z.array(z.string()).optional(),
   }).optional(),
   notes: z.array(z.string()).default([]),
+  tokenUsageByAgent: z.object({
+    planner: TokenUsageSchema.optional(),
+    writer: TokenUsageSchema.optional(),
+    auditor: TokenUsageSchema.optional(),
+    reviser: TokenUsageSchema.optional(),
+  }).optional(),
+  tokenUsageBySource: z.record(z.string(), z.number().int().nonnegative()).optional(),
 });
 
 export type ChapterTrace = z.infer<typeof ChapterTraceSchema>;

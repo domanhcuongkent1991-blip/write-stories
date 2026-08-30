@@ -290,6 +290,8 @@ describe("ComposerAgent", () => {
     expect(result.trace.tokenBudget.totalSelectedTokens).toBeGreaterThanOrEqual(
       result.trace.tokenBudget.protectedTokens,
     );
+    expect(result.trace.tokenUsageBySource?.["story/current_focus.md"]).toBeGreaterThan(0);
+    expect(JSON.stringify(result.trace)).not.toContain("Keep pressure on the seventh gate.");
     // trace.notes dropped with ChapterConflict removal (Phase 1 transitional)
     expect(result.trace.notes).toEqual([]);
     await expect(readFile(result.tracePath, "utf-8")).resolves.toContain("story/current_focus.md");

@@ -325,6 +325,8 @@ export interface ChapterContextTraceSummary {
   readonly tokenBudget: ChapterTrace["tokenBudget"];
   readonly retrieval?: ChapterTrace["retrieval"];
   readonly compression?: ChapterTrace["compression"];
+  readonly tokenUsageByAgent?: ChapterTrace["tokenUsageByAgent"];
+  readonly tokenUsageBySource?: ChapterTrace["tokenUsageBySource"];
 }
 
 export interface ChapterPipelineResult {
@@ -338,6 +340,8 @@ export interface ChapterPipelineResult {
   readonly lengthTelemetry?: LengthTelemetry;
   readonly tokenUsage?: TokenUsageSummary;
   readonly contextTrace?: ChapterContextTraceSummary;
+  readonly tokenUsageByAgent?: ChapterTrace["tokenUsageByAgent"];
+  readonly tokenUsageBySource?: ChapterTrace["tokenUsageBySource"];
 }
 
 export interface WriteChaptersOptions {
@@ -360,6 +364,8 @@ export interface DraftResult {
   readonly lengthWarnings?: ReadonlyArray<string>;
   readonly lengthTelemetry?: LengthTelemetry;
   readonly tokenUsage?: TokenUsageSummary;
+  readonly tokenUsageByAgent?: ChapterTrace["tokenUsageByAgent"];
+  readonly tokenUsageBySource?: ChapterTrace["tokenUsageBySource"];
 }
 
 export interface PlanChapterResult {
@@ -1830,6 +1836,15 @@ export class PipelineRunner {
         lengthWarnings,
         lengthTelemetry,
         ...(draftOutput.tokenUsage ? { tokenUsage: draftOutput.tokenUsage } : {}),
+        ...(writeInput.contextTrace?.tokenUsageByAgent || draftOutput.tokenUsage ? {
+          tokenUsageByAgent: {
+            ...(writeInput.contextTrace?.tokenUsageByAgent ?? {}),
+            ...(draftOutput.tokenUsage ? { writer: draftOutput.tokenUsage } : {}),
+          },
+        } : {}),
+        ...(writeInput.contextTrace?.tokenUsageBySource
+          ? { tokenUsageBySource: writeInput.contextTrace.tokenUsageBySource }
+          : {}),
       };
       const existingIdx = existingIndex.findIndex((e) => e.number === chapterNumber);
       const updatedIndex = existingIdx >= 0
@@ -1872,6 +1887,11 @@ export class PipelineRunner {
         lengthWarnings,
         lengthTelemetry,
         tokenUsage: draftOutput.tokenUsage,
+        tokenUsageByAgent: {
+          ...(writeInput.contextTrace?.tokenUsageByAgent ?? {}),
+          ...(draftOutput.tokenUsage ? { writer: draftOutput.tokenUsage } : {}),
+        },
+        tokenUsageBySource: writeInput.contextTrace?.tokenUsageBySource,
       };
       });
     } finally {
@@ -3216,6 +3236,10 @@ export class PipelineRunner {
     let auditRuns: ReadonlyArray<AuditRunV1> = [];
     let settledRevisionCandidate: WriteChapterOutput | undefined;
     let settledRevisionCandidateValidated = false;
+    let tokenUsageByAgent = {
+      ...(writeInput.contextTrace?.tokenUsageByAgent ?? {}),
+      ...(output.tokenUsage ? { writer: output.tokenUsage } : {}),
+    };
 
     {
       const manualReview = (this.config.chapterReviewMode ?? "auto") === "manual";
@@ -3363,6 +3387,11 @@ export class PipelineRunner {
       postReviseCount = reviewResult.postReviseCount;
       repairApplied = reviewResult.repairApplied;
       auditRuns = reviewResult.auditRuns ?? [];
+      tokenUsageByAgent = {
+        ...tokenUsageByAgent,
+        ...(auditResult.tokenUsage ? { auditor: auditResult.tokenUsage } : {}),
+        ...(reviewResult.reviserTokenUsage ? { reviser: reviewResult.reviserTokenUsage } : {}),
+      };
     }
 
     this.throwIfOperationAborted();
@@ -3616,6 +3645,8 @@ export class PipelineRunner {
       lengthTelemetry,
       degradedIssues,
       tokenUsage: totalUsage,
+      tokenUsageByAgent,
+      tokenUsageBySource: writeInput.contextTrace?.tokenUsageBySource,
       loadChapterIndex: () => this.state.loadChapterIndex(bookId),
       prepareCanonicalFiles: () => writer.prepareChapterFileSet(
         bookDir,
@@ -3696,7 +3727,14 @@ export class PipelineRunner {
       lengthWarnings,
       lengthTelemetry,
       tokenUsage: totalUsage,
-      ...(writeInput.contextTrace ? { contextTrace: writeInput.contextTrace } : {}),
+      ...(writeInput.contextTrace ? {
+        contextTrace: {
+          ...writeInput.contextTrace,
+          tokenUsageByAgent,
+        },
+      } : {}),
+      tokenUsageByAgent,
+      tokenUsageBySource: writeInput.contextTrace?.tokenUsageBySource,
     };
   }
 

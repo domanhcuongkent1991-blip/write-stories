@@ -35,6 +35,7 @@ export interface ChapterReviewCycleResult {
   readonly repairApplied: boolean;
   readonly revisionAttempts?: number;
   readonly auditRuns?: ReadonlyArray<AuditRunV1>;
+  readonly reviserTokenUsage?: ChapterReviewCycleUsage;
 }
 
 const DEFAULT_MAX_REVIEW_ITERATIONS = 1;
@@ -144,6 +145,7 @@ export async function runChapterReviewCycle(params: {
   readonly logStage: (message: { zh: string; en: string }) => void;
 }): Promise<ChapterReviewCycleResult> {
   let totalUsage = params.initialUsage;
+  let reviserTokenUsage: ChapterReviewCycleUsage | undefined;
   let finalContent = params.normalizePostWriteSurface?.(params.initialOutput.content)
     ?? params.initialOutput.content;
   let finalWordCount = countChapterLength(finalContent, params.lengthSpec.countingMode);
@@ -371,6 +373,7 @@ export async function runChapterReviewCycle(params: {
       repairApplied: false,
       revisionAttempts,
       auditRuns: buildAuditRuns(),
+      ...(reviserTokenUsage ? { reviserTokenUsage } : {}),
     };
   }
 
@@ -393,6 +396,12 @@ export async function runChapterReviewCycle(params: {
         { ...params.reducedControlInput, lengthSpec: params.lengthSpec },
       );
       totalUsage = params.addUsage(totalUsage, reviseOutput.tokenUsage);
+      if (reviseOutput.tokenUsage) {
+        reviserTokenUsage = params.addUsage(
+          reviserTokenUsage ?? { promptTokens: 0, completionTokens: 0, totalTokens: 0 },
+          reviseOutput.tokenUsage,
+        );
+      }
 
       const revisedContent = params.normalizePostWriteSurface?.(reviseOutput.revisedContent)
         ?? reviseOutput.revisedContent;
@@ -491,5 +500,6 @@ export async function runChapterReviewCycle(params: {
     repairApplied: snapshots.length > 1 && finalContent !== params.initialOutput.content,
     revisionAttempts,
     auditRuns: buildAuditRuns(),
+    ...(reviserTokenUsage ? { reviserTokenUsage } : {}),
   };
 }
