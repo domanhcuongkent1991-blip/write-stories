@@ -6,6 +6,7 @@ import {
   commitProductionArtifacts,
   createProductionRunSnapshot,
   createRangeObservation,
+  type ProductionRunSnapshot,
 } from "../production/harness.js";
 
 describe("production harness", () => {
@@ -55,5 +56,39 @@ describe("production harness", () => {
       repairable: true,
       actual: { value: 730, unit: "zh_chars" },
     });
+  });
+
+  it("declares and serializes optional canonical audit identity", async () => {
+    const root = await mkdtemp(join(tmpdir(), "inkos-production-identity-"));
+    roots.push(root);
+    const declared: ProductionRunSnapshot = {
+      version: 1,
+      kind: "long-fiction",
+      id: "book-a:chapter-0001",
+      status: "running",
+      stage: "chapter-1",
+      artifacts: [],
+      observations: [],
+      operationId: "123e4567-e89b-42d3-a456-426614174000",
+      attemptId: "123e4567-e89b-42d3-a456-426614174001",
+      phase: "initial",
+      contentHash: "a".repeat(64),
+      updatedAt: "2026-08-29T00:00:00.000Z",
+    };
+    const run = createProductionRunSnapshot({
+      ...declared,
+      updatedAt: declared.updatedAt,
+    });
+
+    await commitProductionArtifacts({
+      rootDir: root,
+      artifacts: [],
+      runPath: "status.json",
+      run,
+    });
+
+    await expect(readFile(join(root, "status.json"), "utf-8")).resolves.toContain(
+      '"contentHash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"',
+    );
   });
 });

@@ -760,7 +760,10 @@ export class PipelineRunner {
     return Object.assign(new Error(message), { code: "STATE_PREFLIGHT_FAILED" as const });
   }
 
-  private async loadResumableProductionRun(bookDir: string): Promise<ResumableProductionRun | undefined> {
+  private async loadResumableProductionRun(
+    bookDir: string,
+    expectedBookId: string,
+  ): Promise<ResumableProductionRun | undefined> {
     const runtimeDir = join(bookDir, "story", "runtime");
     const files = await readdir(runtimeDir).catch(() => [] as string[]);
     const candidates = (await Promise.all(files.sort().map(async (file) => {
@@ -790,6 +793,10 @@ export class PipelineRunner {
         return undefined;
       }
       const chapterNumber = Number(fileMatch[1]);
+      const expectedRunId = `${expectedBookId}:chapter-${fileMatch[1]}`;
+      if (value.id !== expectedRunId) {
+        throw this.statePreflightError(`Production resume snapshot ${file} does not belong to book ${expectedBookId}.`);
+      }
       if (value.resumeCursor !== String(chapterNumber) || value.stage !== `chapter-${chapterNumber}`) return undefined;
       return {
         chapterNumber,
@@ -978,7 +985,7 @@ export class PipelineRunner {
       decision: run.decision,
       issues: run.findings,
       summary: "Recovered from canonical audit evidence after an interrupted production run.",
-      parseFailed: false,
+      ...(run.parseFailed !== undefined ? { parseFailed: run.parseFailed } : {}),
       overallScore: run.overallScore,
       contentHash: projection.contentHash,
       provenance: {
@@ -2908,7 +2915,7 @@ export class PipelineRunner {
     const bookId = book.id;
     const bookDir = this.state.bookDir(bookId);
     const chapterNumber = await this.state.getNextChapterNumber(bookId);
-    const resume = await this.loadResumableProductionRun(bookDir);
+    const resume = await this.loadResumableProductionRun(bookDir, bookId);
     if (resume) {
       await this.assertResumableAuditIdentity(bookDir, resume);
       const projection = await this.state.loadCanonicalChapterProjection(bookId, resume.chapterNumber);

@@ -1,4 +1,5 @@
 import { commitAtomicFileSet, type AtomicFileWrite } from "../utils/atomic-file-set.js";
+import type { AuditPhase } from "../audit/chapter-audit-evaluator.js";
 
 export type ProductionKind =
   | "long-fiction"
@@ -39,6 +40,10 @@ export interface ProductionRunSnapshot {
   readonly model?: string;
   readonly skillIds?: ReadonlyArray<string>;
   readonly resumeCursor?: string;
+  readonly operationId?: string;
+  readonly attemptId?: string;
+  readonly phase?: AuditPhase;
+  readonly contentHash?: string;
   readonly error?: string;
   readonly updatedAt: string;
 }

@@ -1,7 +1,7 @@
 import { readFile, writeFile, mkdir, readdir, rm, stat, unlink, open } from "node:fs/promises";
 import { randomUUID } from "node:crypto";
 import { join, resolve } from "node:path";
-import type { BookConfig } from "../models/book.js";
+import { BookConfigSchema, type BookConfig } from "../models/book.js";
 import type { ChapterMeta } from "../models/chapter.js";
 import { computeChapterContentHash } from "../audit/chapter-audit-evaluator.js";
 import {
@@ -16,6 +16,7 @@ import {
   type WritingLanguage,
 } from "../models/writing-language.js";
 import { resolveWritingLanguageProfile } from "../utils/language.js";
+import { countChapterLength, resolveLengthCountingMode } from "../utils/length-metrics.js";
 
 const BOOK_LOCK_HEARTBEAT_MS = 30_000;
 const BOOK_LOCK_LEASE_MS = 3 * 60_000;
@@ -550,6 +551,9 @@ export class StateManager {
     } catch {
       return [];
     }
+    const canonicalBook = await this.loadCanonicalBookAt(bookDir, expectedBookId);
+    const recoveryBookId = expectedBookId ?? canonicalBook?.id;
+    const bookLanguage = canonicalBook?.language;
 
     const rows = await Promise.all(files.sort().flatMap(async (file) => {
       const match = file.match(/^(\d+)[_-]?(.*?)\.md$/);
@@ -564,27 +568,31 @@ export class StateManager {
       const timestamp = (metadata?.mtime ?? new Date()).toISOString();
       const rawTitle = match[2]?.replace(/^_+/, "").replace(/_/g, " ").trim();
       const contentHash = computeChapterContentHash(content);
-      const canonicalRun = expectedBookId
+      const canonicalRun = recoveryBookId
         ? await this.loadLatestCanonicalAuditRun({
             bookDir,
-            bookId: expectedBookId,
+            bookId: recoveryBookId,
             chapterNumber: number,
             contentHash,
+            bookLanguage,
           })
         : undefined;
       const meta = canonicalRun
         ? this.rebuildChapterMetaFromAuditRun({
             number,
-            title: rawTitle || `第${number}章`,
+            title: rawTitle || this.recoveredChapterTitle(number, bookLanguage),
             timestamp,
             run: canonicalRun.run,
             runPath: canonicalRun.relativePath,
+            bookLanguage,
           })
         : ({
             number,
-            title: rawTitle || `第${number}章`,
+            title: rawTitle || this.recoveredChapterTitle(number, bookLanguage),
             status: "audit-failed" as const,
-            wordCount: content.replace(/\s+/g, "").length,
+            wordCount: bookLanguage
+              ? countChapterLength(content, resolveLengthCountingMode(bookLanguage))
+              : content.replace(/\s+/g, "").length,
             createdAt: timestamp,
             updatedAt: timestamp,
             auditIssues: [`[warning] ${AUDIT_RECOVERY_NOTE}`],
@@ -614,6 +622,7 @@ export class StateManager {
     readonly timestamp: string;
     readonly run: AuditRunV1;
     readonly runPath: string;
+    readonly bookLanguage?: WritingLanguage;
   }): ChapterMeta {
     const { run } = input;
     const verifiedBlockerCount = run.findings.filter(
@@ -638,6 +647,7 @@ export class StateManager {
         ? [`Recovered audit length ${run.length.count} is outside the soft range ${run.length.softMin}-${run.length.softMax}.`]
         : [],
       lengthTelemetry: {
+        ...(input.bookLanguage ? { language: input.bookLanguage } : {}),
         target: run.length.target,
         softMin: run.length.softMin,
         softMax: run.length.softMax,
@@ -672,6 +682,7 @@ export class StateManager {
     readonly bookId: string;
     readonly chapterNumber: number;
     readonly contentHash: string;
+    readonly bookLanguage?: WritingLanguage;
   }): Promise<{ readonly run: AuditRunV1; readonly relativePath: string } | undefined> {
     const chapter = String(input.chapterNumber).padStart(4, "0");
     const runsDir = join(input.bookDir, "story", "audit", "runs", `chapter-${chapter}`);
@@ -693,6 +704,7 @@ export class StateManager {
         run.bookId !== input.bookId
         || run.chapterNumber !== input.chapterNumber
         || run.contentHash !== input.contentHash
+        || (input.bookLanguage !== undefined && run.length.countingMode !== resolveLengthCountingMode(input.bookLanguage))
         || (run.canonicalCommitOutcome !== "terminal-commit" && run.canonicalCommitOutcome !== "unchanged")
       ) {
         return undefined;
@@ -706,6 +718,32 @@ export class StateManager {
       left.run.completedAt.localeCompare(right.run.completedAt)
       || left.relativePath.localeCompare(right.relativePath));
     return candidates.at(-1);
+  }
+
+  private async loadCanonicalBookAt(
+    bookDir: string,
+    expectedBookId?: string,
+  ): Promise<Pick<BookConfig, "id" | "language"> | undefined> {
+    const raw = await readFile(join(bookDir, "book.json"), "utf-8").catch(() => undefined);
+    if (raw === undefined) return undefined;
+    let parsedJson: unknown;
+    try {
+      parsedJson = JSON.parse(raw);
+    } catch {
+      return undefined;
+    }
+    const parsed = BookConfigSchema.safeParse(parsedJson);
+    if (!parsed.success || (expectedBookId !== undefined && parsed.data.id !== expectedBookId)) return undefined;
+    return { id: parsed.data.id, language: parsed.data.language };
+  }
+
+  private recoveredChapterTitle(
+    chapterNumber: number,
+    bookLanguage?: WritingLanguage,
+  ): string {
+    if (bookLanguage === "vi") return `Chương ${chapterNumber}`;
+    if (bookLanguage === "en") return `Chapter ${chapterNumber}`;
+    return `第${chapterNumber}章`;
   }
 
   async saveChapterIndex(

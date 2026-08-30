@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   AuditRunV1Schema,
   assertAuditRunWriteOnce,
+  createAuditRun,
   createAuditRunIdentity,
   createAuditRunWrite,
   markInitialRunSuperseded,
@@ -83,5 +84,34 @@ describe("AuditRunV1", () => {
     const initial = run();
     const post = { ...run(), attemptId: initial.attemptId, phase: "post-revision" as const };
     expect(markInitialRunSuperseded(initial, post).canonicalCommitOutcome).toBe("superseded");
+  });
+
+  it("persists parse failure provenance while legacy runs remain compatible", () => {
+    const legacy = run();
+    expect(AuditRunV1Schema.parse(JSON.parse(serializeAuditRun(legacy))).parseFailed).toBeUndefined();
+
+    const value = createAuditRun({
+      bookId: legacy.bookId,
+      chapterNumber: legacy.chapterNumber,
+      operation: "write",
+      phase: "initial",
+      contentHash: legacy.contentHash,
+      evaluation: {
+        decision: "inconclusive",
+        passed: false,
+        findings: [],
+        parseFailed: true,
+        contentHash: legacy.contentHash,
+      },
+      length: legacy.length,
+      startedAt: legacy.startedAt,
+      completedAt: legacy.completedAt,
+      durationMs: legacy.durationMs,
+      operationId: legacy.operationId,
+      attemptId: legacy.attemptId,
+    });
+
+    expect(value.parseFailed).toBe(true);
+    expect(JSON.parse(serializeAuditRun(value))).toMatchObject({ parseFailed: true });
   });
 });

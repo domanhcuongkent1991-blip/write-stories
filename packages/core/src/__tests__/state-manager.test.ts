@@ -12,6 +12,8 @@ import {
   serializeAuditRun,
   type AuditRunV1,
 } from "../audit/audit-run.js";
+import { preflightWritingLanguage } from "../state/writing-language-preflight.js";
+import { countChapterLength } from "../utils/length-metrics.js";
 
 function canonicalAuditRun(overrides: Partial<AuditRunV1> = {}): AuditRunV1 {
   const contentHash = overrides.contentHash ?? "a".repeat(64);
@@ -238,6 +240,91 @@ describe("StateManager", () => {
       expect(loaded[0]?.lengthTelemetry).toMatchObject({
         countingMode: "vi_wordlike_tokens_v1",
         finalCount: latest.length.count,
+      });
+    });
+
+    it("recovers canonical Vietnamese telemetry from book.json for subsequent audit preflight", async () => {
+      const bookDir = manager.bookDir("rebuild-book");
+      const chapterContent = "# Chương 1: Mưa đêm\n\nMưa rơi trên mái hiên.";
+      const contentHash = computeChapterContentHash(chapterContent);
+      await manager.saveBookConfig("rebuild-book", {
+        id: "rebuild-book",
+        title: "Truyện thử",
+        platform: "other",
+        genre: "other",
+        language: "vi",
+        status: "active",
+        targetChapters: 10,
+        chapterWordCount: 2000,
+        createdAt: "2026-08-29T00:00:00.000Z",
+        updatedAt: "2026-08-29T00:00:00.000Z",
+      });
+      await mkdir(join(bookDir, "chapters"), { recursive: true });
+      await writeFile(join(bookDir, "chapters", "0001_Mưa đêm.md"), chapterContent, "utf-8");
+      await writeAuditRun(bookDir, canonicalAuditRun({
+        contentHash,
+        length: {
+          count: countChapterLength(chapterContent, "vi_wordlike_tokens_v1"),
+          countingMode: "vi_wordlike_tokens_v1",
+          target: 12,
+          softMin: 10,
+          softMax: 14,
+          hardMin: 8,
+          hardMax: 16,
+        },
+      }));
+      await mkdir(join(tempDir, ".inkos"), { recursive: true });
+      await writeFile(join(tempDir, ".inkos", "vi-writing-v1.json"), JSON.stringify({
+        schemaVersion: 1,
+        contractVersion: "vi-writing-v1",
+        projectRoot: tempDir,
+      }), "utf-8");
+
+      const [recovered] = await manager.loadChapterIndex("rebuild-book");
+
+      expect(recovered?.lengthTelemetry).toMatchObject({
+        language: "vi",
+        countingMode: "vi_wordlike_tokens_v1",
+      });
+      await expect(preflightWritingLanguage({
+        projectRoot: tempDir,
+        bookDir,
+        language: "vi",
+        operation: "audit",
+        telemetry: recovered?.lengthTelemetry,
+        env: { INKOS_EXPERIMENTAL_WRITING_VI: "1" },
+      })).resolves.toMatchObject({ language: "vi" });
+    });
+
+    it("uses canonical Vietnamese counting and title fallback when audit evidence is unavailable", async () => {
+      const bookDir = manager.bookDir("fallback-vi");
+      const chapterContent = "# Chương 1\n\nMột  câu có khoảng trắng.";
+      await manager.saveBookConfig("fallback-vi", {
+        id: "fallback-vi",
+        title: "Truyện thử",
+        platform: "other",
+        genre: "other",
+        language: "vi",
+        status: "active",
+        targetChapters: 10,
+        chapterWordCount: 2000,
+        createdAt: "2026-08-29T00:00:00.000Z",
+        updatedAt: "2026-08-29T00:00:00.000Z",
+      });
+      await mkdir(join(bookDir, "chapters"), { recursive: true });
+      await writeFile(join(bookDir, "chapters", "0001_.md"), chapterContent, "utf-8");
+
+      await manager.saveChapterIndex("fallback-vi", []);
+      const [recovered] = JSON.parse(await readFile(
+        join(bookDir, "chapters", "index.json"),
+        "utf-8",
+      )) as ChapterMeta[];
+
+      expect(recovered).toMatchObject({
+        title: "Chương 1",
+        status: "audit-failed",
+        auditDecision: "inconclusive",
+        wordCount: countChapterLength(chapterContent, "vi_wordlike_tokens_v1"),
       });
     });
 

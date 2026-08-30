@@ -404,6 +404,7 @@ async function writeProductionResumeSnapshot(input: {
   readonly chapterNumber: number;
   readonly operationId: string;
   readonly attemptId: string;
+  readonly snapshotId?: string;
   readonly phase?: AuditRunV1["phase"];
   readonly contentHash?: string;
   readonly status?: "running" | "failed";
@@ -414,7 +415,7 @@ async function writeProductionResumeSnapshot(input: {
   await writeFile(runPath, JSON.stringify({
     version: 1,
     kind: "long-fiction",
-    id: `test-book:chapter-${padded}`,
+    id: input.snapshotId ?? `test-book:chapter-${padded}`,
     status: input.status ?? "running",
     stage: `chapter-${input.chapterNumber}`,
     artifacts: [],
@@ -2767,6 +2768,7 @@ describe("PipelineRunner", () => {
           contentHash,
         },
       });
+      expect(result.auditResult).not.toHaveProperty("parseFailed");
       expect(planner).not.toHaveBeenCalled();
       expect(writer).not.toHaveBeenCalled();
       expect(auditor).not.toHaveBeenCalled();
@@ -2790,6 +2792,52 @@ describe("PipelineRunner", () => {
         phase: "initial",
         contentHash,
       });
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("preserves parse-failure provenance when resuming canonical audit evidence", async () => {
+    const { root, runner, state, bookId } = await createRunnerFixture();
+    const bookDir = state.bookDir(bookId);
+    const chapterContent = `# 第1章 解析失败\n\n${"证".repeat(220)}`;
+    const contentHash = computeChapterContentHash(chapterContent);
+    const operationId = randomUUID();
+    const attemptId = randomUUID();
+    await writeFile(join(bookDir, "chapters", "0001_解析失败.md"), chapterContent, "utf-8");
+    const auditRun = {
+      ...productionAuditRun({
+        bookId,
+        chapterNumber: 1,
+        contentHash,
+        operationId,
+        attemptId,
+        decision: "inconclusive",
+      }),
+      parseFailed: true,
+    };
+    const auditPath = auditRunRelativePath(auditRun);
+    await mkdir(dirname(join(bookDir, auditPath)), { recursive: true });
+    await writeFile(join(bookDir, auditPath), JSON.stringify(auditRun, null, 2), "utf-8");
+    await writeProductionResumeSnapshot({
+      bookDir,
+      chapterNumber: 1,
+      operationId,
+      attemptId,
+      contentHash,
+    });
+    const writer = vi.spyOn(WriterAgent.prototype, "writeChapter");
+
+    try {
+      const result = await runner.writeNextChapter(bookId, 220);
+
+      expect(result.auditResult).toMatchObject({
+        decision: "inconclusive",
+        passed: false,
+        parseFailed: true,
+        contentHash,
+      });
+      expect(writer).not.toHaveBeenCalled();
     } finally {
       await rm(root, { recursive: true, force: true });
     }
@@ -2860,6 +2908,41 @@ describe("PipelineRunner", () => {
       attemptId,
       contentHash: "b".repeat(64),
     }));
+    const writer = vi.spyOn(WriterAgent.prototype, "writeChapter");
+
+    try {
+      await expect(runner.writeNextChapter(bookId, 220)).rejects.toMatchObject({
+        code: "STATE_PREFLIGHT_FAILED",
+      });
+      expect(writer).not.toHaveBeenCalled();
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("fails safe instead of accepting resume identity from a copied production snapshot", async () => {
+    const { root, runner, state, bookId } = await createRunnerFixture();
+    const bookDir = state.bookDir(bookId);
+    const chapterContent = `# 第1章 复制快照\n\n${"稳".repeat(220)}`;
+    const contentHash = computeChapterContentHash(chapterContent);
+    const operationId = randomUUID();
+    const attemptId = randomUUID();
+    await writeFile(join(bookDir, "chapters", "0001_复制快照.md"), chapterContent, "utf-8");
+    await writeProductionAuditRun(bookDir, productionAuditRun({
+      bookId,
+      chapterNumber: 1,
+      contentHash,
+      operationId,
+      attemptId,
+    }));
+    await writeProductionResumeSnapshot({
+      bookDir,
+      chapterNumber: 1,
+      operationId,
+      attemptId,
+      contentHash,
+      snapshotId: "copied-book:chapter-0001",
+    });
     const writer = vi.spyOn(WriterAgent.prototype, "writeChapter");
 
     try {
