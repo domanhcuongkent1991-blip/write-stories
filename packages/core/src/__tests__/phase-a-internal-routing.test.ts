@@ -220,7 +220,7 @@ describe("Phase A Internal custom routing characterization", () => {
     expect(llmError.retryCounts.transport).toBe(0);
     expect(llmError.retryCounts.output).toBe(0);
     expect(llmError.retryCounts.quality).toBe(0);
-    expect(llmError.message).not.toContain(SENTINEL_KEY);
+    expect(!llmError.message.includes(SENTINEL_KEY)).toBe(true);
 
     phaseAMeta(ctx, {
       scenario: "internal-chat-model-scope-404",
