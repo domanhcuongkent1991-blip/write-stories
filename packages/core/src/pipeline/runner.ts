@@ -3389,7 +3389,7 @@ export class PipelineRunner {
       auditRuns = reviewResult.auditRuns ?? [];
       tokenUsageByAgent = {
         ...tokenUsageByAgent,
-        ...(auditResult.tokenUsage ? { auditor: auditResult.tokenUsage } : {}),
+        ...(reviewResult.auditorTokenUsage ? { auditor: reviewResult.auditorTokenUsage } : {}),
         ...(reviewResult.reviserTokenUsage ? { reviser: reviewResult.reviserTokenUsage } : {}),
       };
     }
@@ -4714,6 +4714,8 @@ ${matrix}`,
         protectedSources: [...composed.trace.contextTiers.protectedSources],
         compressibleSources: [...composed.trace.contextTiers.compressibleSources],
         tokenBudget: { ...composed.trace.tokenBudget },
+        ...(composed.trace.tokenUsageByAgent ? { tokenUsageByAgent: { ...composed.trace.tokenUsageByAgent } } : {}),
+        ...(composed.trace.tokenUsageBySource ? { tokenUsageBySource: { ...composed.trace.tokenUsageBySource } } : {}),
         ...(composed.trace.retrieval ? {
           retrieval: {
             ...composed.trace.retrieval,

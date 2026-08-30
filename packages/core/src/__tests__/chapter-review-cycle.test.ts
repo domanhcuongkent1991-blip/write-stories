@@ -57,6 +57,43 @@ const baseParams = {
 } as const;
 
 describe("runChapterReviewCycle v9", () => {
+  it("aggregates auditor usage across initial and post-revision assessments", async () => {
+    const auditChapter = vi.fn()
+      .mockResolvedValueOnce(createAuditResult({
+        passed: false,
+        decision: "repair-required",
+        overallScore: 70,
+        issues: [DETERMINISTIC_REPAIR],
+        tokenUsage: { promptTokens: 11, completionTokens: 3, totalTokens: 14 },
+      }))
+      .mockResolvedValueOnce(createAuditResult({
+        passed: true,
+        decision: "pass",
+        overallScore: 95,
+        tokenUsage: { promptTokens: 17, completionTokens: 5, totalTokens: 22 },
+      }));
+    const result = await runChapterReviewCycle({
+      ...baseParams,
+      initialOutput: {
+        content: "b".repeat(200),
+        wordCount: 200,
+        postWriteErrors: [{ rule: "deterministic", severity: "error", description: "repair", suggestion: "repair" }],
+      },
+      auditor: { auditChapter },
+      createReviser: () => ({ reviseChapter: vi.fn().mockResolvedValue({
+        revisedContent: "a".repeat(200),
+        wordCount: 200,
+        fixedIssues: [],
+        updatedState: "",
+        updatedLedger: "",
+        updatedHooks: "",
+        tokenUsage: ZERO_USAGE,
+      }) }),
+    });
+    expect(auditChapter).toHaveBeenCalledTimes(2);
+    expect(result.auditorTokenUsage).toEqual({ promptTokens: 28, completionTokens: 8, totalTokens: 36 });
+  });
+
   it("feeds postWriteErrors as extra issues into first assessment", async () => {
     // postWriteErrors are critical → auditResult.passed forced false
     // even though LLM says passed=true. This triggers the repair loop.

@@ -205,6 +205,23 @@ describe("PlannerAgent.planChapter memo generation", () => {
     });
   });
 
+  it("keeps the legacy planChapterMemo return shape for direct callers", async () => {
+    vi.spyOn(llmProvider, "chatCompletion").mockResolvedValue({
+      content: validMemoRaw(1),
+      usage: { promptTokens: 4, completionTokens: 2, totalTokens: 6 },
+    } as unknown as Awaited<ReturnType<typeof llmProvider.chatCompletion>>);
+    const memo = await makePlanner().planChapterMemo({
+      storyDir: join(bookDir, "story"),
+      bookDir,
+      chapterNumber: 1,
+      isGoldenOpening: true,
+      fallbackGoal: "test goal",
+      chapterSummariesRaw: "",
+      lengthSpec: { target: 3000, softMin: 2700, softMax: 3300, hardMin: 2400, hardMax: 3600, countingMode: "zh_chars" },
+    });
+    expect(memo.body).toContain("## 当前任务");
+  });
+
   it("does not hard-cap memo generation below the configured model output budget", async () => {
     const chatSpy = vi.spyOn(llmProvider, "chatCompletion").mockResolvedValue({
       content: validMemoRaw(1),

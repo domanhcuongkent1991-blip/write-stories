@@ -36,6 +36,7 @@ export interface ChapterReviewCycleResult {
   readonly revisionAttempts?: number;
   readonly auditRuns?: ReadonlyArray<AuditRunV1>;
   readonly reviserTokenUsage?: ChapterReviewCycleUsage;
+  readonly auditorTokenUsage?: ChapterReviewCycleUsage;
 }
 
 const DEFAULT_MAX_REVIEW_ITERATIONS = 1;
@@ -146,6 +147,7 @@ export async function runChapterReviewCycle(params: {
 }): Promise<ChapterReviewCycleResult> {
   let totalUsage = params.initialUsage;
   let reviserTokenUsage: ChapterReviewCycleUsage | undefined;
+  let auditorTokenUsage: ChapterReviewCycleUsage | undefined;
   let finalContent = params.normalizePostWriteSurface?.(params.initialOutput.content)
     ?? params.initialOutput.content;
   let finalWordCount = countChapterLength(finalContent, params.lengthSpec.countingMode);
@@ -199,6 +201,12 @@ export async function runChapterReviewCycle(params: {
         : options,
     );
     totalUsage = params.addUsage(totalUsage, llmAudit.tokenUsage);
+    if (llmAudit.tokenUsage) {
+      auditorTokenUsage = params.addUsage(
+        auditorTokenUsage ?? { promptTokens: 0, completionTokens: 0, totalTokens: 0 },
+        llmAudit.tokenUsage,
+      );
+    }
     const aiTellsResult = params.analyzeAITells(content);
     const sensitiveResult = params.analyzeSensitiveWords(content);
     const hasBlockedWords = sensitiveResult.found.some((item) => item.severity === "block");
@@ -374,6 +382,7 @@ export async function runChapterReviewCycle(params: {
       revisionAttempts,
       auditRuns: buildAuditRuns(),
       ...(reviserTokenUsage ? { reviserTokenUsage } : {}),
+      ...(auditorTokenUsage ? { auditorTokenUsage } : {}),
     };
   }
 
@@ -501,5 +510,6 @@ export async function runChapterReviewCycle(params: {
     revisionAttempts,
     auditRuns: buildAuditRuns(),
     ...(reviserTokenUsage ? { reviserTokenUsage } : {}),
+    ...(auditorTokenUsage ? { auditorTokenUsage } : {}),
   };
 }

@@ -149,7 +149,7 @@ export class PlannerAgent extends BaseAgent {
       input.book.chapterWordCount,
       writingLanguage,
     );
-    const memoResult = await this.planChapterMemo({
+    const memoResult = await this.planChapterMemoWithUsage({
       storyDir,
       bookDir: input.bookDir,
       chapterNumber: input.chapterNumber,
@@ -212,6 +212,26 @@ export class PlannerAgent extends BaseAgent {
    * prompt so the LLM can correct itself.
    */
   async planChapterMemo(input: {
+    readonly storyDir: string;
+    readonly bookDir: string;
+    readonly chapterNumber: number;
+    readonly isGoldenOpening: boolean;
+    readonly fallbackGoal: string;
+    readonly chapterSummariesRaw: string;
+    readonly previousEndingExcerpt?: string;
+    readonly brief?: string;
+    readonly chapterContext?: string;
+    readonly relevantHooks?: ReadonlyArray<StoredHook>;
+    readonly recyclableHooks?: ReadonlyArray<StoredHook>;
+    readonly authoritativeActiveHooks?: ReadonlyArray<StoredHook>;
+    readonly language?: ScaffoldLanguage;
+    readonly lengthSpec: LengthSpec;
+  }): Promise<ChapterMemo> {
+    const result = await this.planChapterMemoWithUsage(input);
+    return result.memo;
+  }
+
+  private async planChapterMemoWithUsage(input: {
     readonly storyDir: string;
     readonly bookDir: string;
     readonly chapterNumber: number;
