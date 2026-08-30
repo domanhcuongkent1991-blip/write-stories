@@ -445,6 +445,12 @@ interface ChapterRevisionDetails {
   readonly fixedIssues: ReadonlyArray<string>;
   readonly auditIssues: ReadonlyArray<ChapterRevisionIssueDetails>;
   readonly skippedReason?: string;
+  readonly decision?: string;
+  readonly verifiedBlockerCount?: number;
+  readonly revisionOutcome?: string;
+  readonly rejectionReason?: string;
+  readonly provider?: string;
+  readonly model?: string;
 }
 
 interface ChapterStateResyncDetails {
@@ -483,6 +489,12 @@ export function getChapterRevisionDetails(exec: ToolExecution): ChapterRevisionD
     fixedIssues: rawStringArrayField(details, "fixedIssues"),
     auditIssues: parseChapterAuditIssues(details.auditIssues),
     skippedReason: stringField(details, "skippedReason"),
+    decision: stringField(details, "decision"),
+    verifiedBlockerCount: numberField(details, "verifiedBlockerCount"),
+    revisionOutcome: stringField(details, "revisionOutcome"),
+    rejectionReason: stringField(details, "rejectionReason"),
+    provider: stringField(details, "provider"),
+    model: stringField(details, "model"),
   };
 }
 
@@ -546,6 +558,15 @@ function ChapterRevisionPreview({ exec }: { exec: ToolExecution }) {
       </div>
       {details.skippedReason && (
         <div className="mt-2 text-[13px] leading-5 text-muted-foreground">{details.skippedReason}</div>
+      )}
+      {(details.decision || details.verifiedBlockerCount !== undefined || details.revisionOutcome || details.rejectionReason || details.provider || details.model) && (
+        <div className="mt-2 grid min-w-0 gap-1 text-[12px] leading-5 text-muted-foreground sm:grid-cols-2">
+          {details.decision && <div className="break-words">Decision: {details.decision}</div>}
+          {details.verifiedBlockerCount !== undefined && <div>Verified blockers: {details.verifiedBlockerCount}</div>}
+          {details.revisionOutcome && <div>Revision: {details.revisionOutcome}</div>}
+          {details.rejectionReason && <div className="break-words">Reason: {details.rejectionReason}</div>}
+          {(details.provider || details.model) && <div className="break-words">Provider: {[details.provider, details.model].filter(Boolean).join(" / ")}</div>}
+        </div>
       )}
       {details.fixedIssues.length > 0 && (
         <div className="mt-2 text-[13px] leading-5 text-muted-foreground">

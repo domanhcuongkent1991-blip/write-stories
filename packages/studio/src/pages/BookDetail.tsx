@@ -57,6 +57,19 @@ type ExportFormat = "txt" | "md" | "epub";
 export function getBookDetailExportControlsClassName(): string {
   return "flex min-w-0 flex-wrap items-center gap-2";
 }
+
+interface AuditTelemetry {
+  readonly passed?: boolean;
+  readonly decision?: "pass" | "repair-required" | "fail" | "inconclusive";
+  readonly issues?: ReadonlyArray<unknown>;
+  readonly verifiedBlockerCount?: number;
+  readonly revisionAttempted?: boolean;
+  readonly revisionOutcome?: "not-needed" | "accepted" | "rejected" | "inconclusive";
+  readonly rejectionReason?: string;
+  readonly attemptId?: string;
+  readonly provider?: string;
+  readonly model?: string;
+}
 type BookStatus = "active" | "paused" | "outlining" | "completed" | "dropped";
 
 interface Nav {
@@ -115,6 +128,7 @@ export function BookDetail({
   const [exportFormat, setExportFormat] = useState<ExportFormat>("txt");
   const [exportApprovedOnly, setExportApprovedOnly] = useState(false);
   const [bookActionPending, setBookActionPending] = useState<string | null>(null);
+  const [auditTelemetry, setAuditTelemetry] = useState<Readonly<Record<number, AuditTelemetry>>>({});
   // Auto (pipeline self-reviews) vs manual (write the draft and stop; you
   // run audit / revise / approve as checkpoint actions). This is scoped to
   // the current book, with project-level mode as the inherited default.
@@ -701,6 +715,15 @@ export function BookDetail({
                     >
                       {ch.title || t("chapter.label").replace("{n}", String(ch.number))}
                     </button>
+                    {auditTelemetry[ch.number] && (
+                      <div className="mt-1.5 max-w-full space-y-0.5 break-words text-xs leading-5 text-muted-foreground" data-testid={`audit-telemetry-${ch.number}`}>
+                        <div>Decision: {auditTelemetry[ch.number].decision ?? (auditTelemetry[ch.number].passed ? "pass" : "fail")}</div>
+                        {typeof auditTelemetry[ch.number].verifiedBlockerCount === "number" && <div>Verified blockers: {auditTelemetry[ch.number].verifiedBlockerCount}</div>}
+                        {auditTelemetry[ch.number].revisionAttempted !== undefined && <div>Revision: {auditTelemetry[ch.number].revisionAttempted ? (auditTelemetry[ch.number].revisionOutcome ?? "attempted") : "not attempted"}</div>}
+                        {auditTelemetry[ch.number].rejectionReason && <div>Reason: {auditTelemetry[ch.number].rejectionReason}</div>}
+                        {(auditTelemetry[ch.number].provider || auditTelemetry[ch.number].model) && <div>Provider: {[auditTelemetry[ch.number].provider, auditTelemetry[ch.number].model].filter(Boolean).join(" / ")}</div>}
+                      </div>
+                    )}
                   </td>
                   <td className="px-6 py-4 text-muted-foreground font-medium tabular-nums text-xs">{(ch.wordCount ?? 0).toLocaleString()}</td>
                   <td className="px-6 py-4">
@@ -744,12 +767,8 @@ export function BookDetail({
                       <button
                         onClick={async () => {
                           try {
-                            const auditResult = await fetchJson<{ passed?: boolean; issues?: unknown[] }>(`/books/${bookId}/audit/${ch.number}`, { method: "POST" });
-                            globalThis["alert"](
-                              auditResult.passed
-                                ? t("book.auditPassed")
-                                : t("book.auditIssues", { count: auditResult.issues?.length ?? 0 }),
-                            );
+                            const auditResult = await fetchJson<AuditTelemetry>(`/books/${bookId}/audit/${ch.number}`, { method: "POST" });
+                            setAuditTelemetry((previous) => ({ ...previous, [ch.number]: auditResult }));
                             refetch();
                           } catch (e) {
                             const detail = e instanceof Error ? e.message : String(e);

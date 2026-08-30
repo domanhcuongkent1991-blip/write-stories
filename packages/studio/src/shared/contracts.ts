@@ -93,6 +93,27 @@ export interface ReviewActionPayload {
 
 export type RunAction = "draft" | "audit" | "revise" | "write-next";
 
+export type OperationPhase = "writing" | "auditing" | "revising" | "re-auditing" | "persisting" | "completed" | "failed";
+export type AuditDecision = "pass" | "repair-required" | "fail" | "inconclusive";
+export type RevisionOutcome = "not-needed" | "accepted" | "rejected" | "inconclusive";
+export type RetryClass = "transport" | "output" | "quality";
+
+/** Compatibility-safe payload carried by Studio audit/revision SSE events. */
+export interface OperationTelemetry {
+  readonly bookId?: string;
+  readonly chapter?: number;
+  readonly attemptId?: string;
+  readonly operationPhase?: OperationPhase;
+  readonly decision?: AuditDecision;
+  readonly verifiedBlockerCount?: number;
+  readonly revisionAttempted?: boolean;
+  readonly revisionOutcome?: RevisionOutcome;
+  readonly rejectionReason?: string;
+  readonly retryClass?: RetryClass;
+  readonly provider?: string;
+  readonly model?: string;
+}
+
 export type RunStatus = "queued" | "running" | "succeeded" | "failed";
 
 export interface RunLogEntry {

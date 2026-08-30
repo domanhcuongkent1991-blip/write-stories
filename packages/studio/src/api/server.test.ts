@@ -17,6 +17,8 @@ const importFanficCanonMock = vi.fn();
 const consolidateMock = vi.fn();
 const evaluateBookQualityMock = vi.fn();
 const reviseDraftMock = vi.fn();
+const auditDraftMock = vi.fn();
+const continuityAuditorCtorMock = vi.fn();
 const resyncChapterArtifactsMock = vi.fn();
 const writeNextChapterMock = vi.fn();
 const writeChaptersMock = vi.fn();
@@ -284,6 +286,7 @@ vi.mock("@actalk/inkos-core", async (importOriginal) => {
     initImitationBook = initImitationBookMock;
     importFanficCanon = importFanficCanonMock;
     reviseDraft = reviseDraftMock;
+    auditDraft = auditDraftMock;
     resyncChapterArtifacts = resyncChapterArtifactsMock;
     writeNextChapter = writeNextChapterMock;
     writeChapters = writeChaptersMock;
@@ -293,6 +296,12 @@ vi.mock("@actalk/inkos-core", async (importOriginal) => {
     constructor(_config: unknown) {}
 
     consolidate = consolidateMock;
+  }
+
+  class MockContinuityAuditor {
+    constructor(...args: unknown[]) {
+      continuityAuditorCtorMock(...args);
+    }
   }
 
   class MockPlayRunner {
@@ -325,6 +334,7 @@ vi.mock("@actalk/inkos-core", async (importOriginal) => {
   return {
     StateManager: MockStateManager,
     PipelineRunner: MockPipelineRunner,
+    ContinuityAuditor: MockContinuityAuditor,
     Scheduler: MockScheduler,
     createLLMClient: createLLMClientMock,
     createLogger: vi.fn(() => logger),
@@ -531,6 +541,8 @@ describe("createStudioServer daemon lifecycle", () => {
     consolidateMock.mockReset();
     evaluateBookQualityMock.mockReset();
     reviseDraftMock.mockReset();
+    auditDraftMock.mockReset();
+    continuityAuditorCtorMock.mockReset();
     resyncChapterArtifactsMock.mockReset();
     writeNextChapterMock.mockReset();
     writeChaptersMock.mockReset();
@@ -580,6 +592,15 @@ describe("createStudioServer daemon lifecycle", () => {
       fixedIssues: ["focus restored"],
       applied: true,
       status: "ready-for-review",
+    });
+    auditDraftMock.mockResolvedValue({
+      chapterNumber: 3,
+      passed: true,
+      decision: "pass",
+      issues: [],
+      summary: "audited",
+      contentHash: "a".repeat(64),
+      provenance: { source: "pipeline-runner", attemptId: "core-attempt-1" },
     });
     resyncChapterArtifactsMock.mockResolvedValue({
       chapterNumber: 3,
@@ -786,6 +807,64 @@ describe("createStudioServer daemon lifecycle", () => {
     expect(isSafeBookId("demo-book")).toBe(true);
     expect(isSafeBookId("demo/book")).toBe(false);
   }, 60_000);
+
+  it("delegates chapter audit to PipelineRunner and returns Core's decision telemetry", async () => {
+    const { createStudioServer } = await import("./server.js");
+    const app = createStudioServer(cloneProjectConfig() as never, root);
+
+    const response = await app.request("http://localhost/api/v1/books/demo-book/audit/3", { method: "POST" });
+
+    expect(response.status).toBe(200);
+    expect(auditDraftMock).toHaveBeenCalledWith("demo-book", 3);
+    expect(continuityAuditorCtorMock).not.toHaveBeenCalled();
+    await expect(response.json()).resolves.toMatchObject({
+      chapterNumber: 3,
+      decision: "pass",
+      attemptId: "core-attempt-1",
+    });
+  });
+
+  it("returns fail and inconclusive Core audit decisions without converting them to success", async () => {
+    const { createStudioServer } = await import("./server.js");
+    const app = createStudioServer(cloneProjectConfig() as never, root);
+    auditDraftMock
+      .mockResolvedValueOnce({ chapterNumber: 3, passed: false, decision: "fail", issues: [{ severity: "critical", verification: "verified" }] })
+      .mockResolvedValueOnce({ chapterNumber: 3, passed: false, decision: "inconclusive", issues: [] });
+
+    const failed = await app.request("http://localhost/api/v1/books/demo-book/audit/3", { method: "POST" });
+    const inconclusive = await app.request("http://localhost/api/v1/books/demo-book/audit/3", { method: "POST" });
+
+    await expect(failed.json()).resolves.toMatchObject({ passed: false, decision: "fail", verifiedBlockerCount: 1 });
+    await expect(inconclusive.json()).resolves.toMatchObject({ passed: false, decision: "inconclusive" });
+  });
+
+  it("preserves Core audit transaction and state-preflight error codes", async () => {
+    const { createStudioServer } = await import("./server.js");
+    const app = createStudioServer(cloneProjectConfig() as never, root);
+    auditDraftMock
+      .mockRejectedValueOnce(
+        Object.assign(new Error("truth transaction incomplete"), {
+          code: "CANONICAL_TRANSACTION_INCOMPLETE",
+        }),
+      )
+      .mockRejectedValueOnce(
+        Object.assign(new Error("state preflight failed"), {
+          code: "STATE_PREFLIGHT_FAILED",
+        }),
+      );
+
+    const canonicalResponse = await app.request("http://localhost/api/v1/books/demo-book/audit/3", { method: "POST" });
+    const preflightResponse = await app.request("http://localhost/api/v1/books/demo-book/audit/3", { method: "POST" });
+
+    expect(canonicalResponse.status).toBe(409);
+    await expect(canonicalResponse.json()).resolves.toEqual({
+      error: { code: "CANONICAL_TRANSACTION_INCOMPLETE", message: "truth transaction incomplete" },
+    });
+    expect(preflightResponse.status).toBe(409);
+    await expect(preflightResponse.json()).resolves.toEqual({
+      error: { code: "STATE_PREFLIGHT_FAILED", message: "state preflight failed" },
+    });
+  });
 
   it("returns from /api/daemon/start before the first write cycle finishes", async () => {
     let resolveStart: (() => void) | undefined;

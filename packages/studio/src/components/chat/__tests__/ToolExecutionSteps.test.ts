@@ -716,6 +716,35 @@ describe("runtime labels follow UI locale", () => {
     setAppLanguage("zh");
   });
 
+  it("renders revision decision and safe provider provenance in a narrow-safe telemetry block", () => {
+    const exec = makeExec({
+      id: "revision-telemetry",
+      tool: "sub_agent",
+      agent: "reviser",
+      label: "Revise chapter",
+      details: {
+        kind: "chapter_revision",
+        chapterNumber: 1,
+        applied: false,
+        fixedIssues: [],
+        auditIssues: [],
+        decision: "inconclusive",
+        verifiedBlockerCount: 2,
+        revisionOutcome: "rejected",
+        rejectionReason: "state settlement unavailable",
+        provider: "openai",
+        model: "gpt-5.4",
+      },
+    });
+
+    const html = renderToStaticMarkup(React.createElement(ToolExecutionSteps, { executions: [exec] }));
+
+    expect(html).toContain("Decision: inconclusive");
+    expect(html).toContain("Verified blockers: 2");
+    expect(html).toContain("Provider: openai / gpt-5.4");
+    expect(html).toContain("min-w-0");
+  });
+
   it.each([
     ["zh", "写作", "撰写章节草稿"],
     ["en", "Write", "Draft the chapter"],

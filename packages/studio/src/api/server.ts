@@ -5512,33 +5512,66 @@ export function createStudioServer(
 
   app.post("/api/v1/books/:id/audit/:chapter", async (c) => {
     const id = c.req.param("id");
-    const chapterNum = parseInt(c.req.param("chapter"), 10);
-    const bookDir = state.bookDir(id);
+    const chapterNum = Number(c.req.param("chapter"));
+    if (!Number.isInteger(chapterNum) || chapterNum < 1) {
+      throw new ApiError(400, "INVALID_CHAPTER_NUMBER", "chapter must be a positive integer.");
+    }
 
-    broadcast("audit:start", { bookId: id, chapter: chapterNum });
+    broadcast("audit:start", { bookId: id, chapter: chapterNum, operationPhase: "auditing" });
     try {
-      const book = await state.loadBookConfig(id);
-      const chaptersDir = join(bookDir, "chapters");
-      const files = await readdir(chaptersDir);
-      const paddedNum = String(chapterNum).padStart(4, "0");
-      const match = files.find((f) => f.startsWith(paddedNum) && f.endsWith(".md"));
-      if (!match) return c.json({ error: "Chapter not found" }, 404);
-
-      const content = await readFile(join(chaptersDir, match), "utf-8");
-      const currentConfig = await loadCurrentProjectConfig();
-      const { ContinuityAuditor } = await import("@actalk/inkos-core");
-      const auditor = new ContinuityAuditor({
-        client: createLLMClient(currentConfig.llm),
-        model: currentConfig.llm.model,
-        projectRoot: root,
+      const pipelineConfig = await buildPipelineConfig({ bookIdForSettings: id });
+      const pipeline = new PipelineRunner(pipelineConfig);
+      const result = await pipeline.auditDraft(id, chapterNum);
+      const resultRecord = result as unknown as Record<string, unknown>;
+      const provenance = resultRecord.provenance as Record<string, unknown> | undefined;
+      const attemptId = typeof provenance?.attemptId === "string" ? provenance.attemptId : undefined;
+      const verifiedBlockerCount = Array.isArray(resultRecord.issues)
+        ? resultRecord.issues.filter((issue) => {
+            const entry = issue as Record<string, unknown>;
+            return entry.severity === "critical" && entry.verification === "verified";
+          }).length
+        : 0;
+      const provider = typeof (pipelineConfig.defaultLLMConfig as { readonly provider?: unknown } | undefined)?.provider === "string"
+        ? (pipelineConfig.defaultLLMConfig as { readonly provider: string }).provider
+        : undefined;
+      broadcast("audit:complete", {
         bookId: id,
+        chapter: chapterNum,
+        operationPhase: "completed",
+        passed: resultRecord.passed === true,
+        ...(typeof resultRecord.decision === "string" ? { decision: resultRecord.decision } : {}),
+        verifiedBlockerCount,
+        revisionAttempted: false,
+        revisionOutcome: "not-needed",
+        ...(attemptId ? { attemptId } : {}),
+        ...(provider ? { provider } : {}),
+        ...(pipelineConfig.model ? { model: pipelineConfig.model } : {}),
       });
-      const result = await auditor.auditChapter(bookDir, content, chapterNum, book.genre);
-      broadcast("audit:complete", { bookId: id, chapter: chapterNum, passed: result.passed });
-      return c.json(result);
+      return c.json({
+        ...resultRecord,
+        chapterNumber: chapterNum,
+        verifiedBlockerCount,
+        revisionAttempted: false,
+        revisionOutcome: "not-needed",
+        ...(attemptId ? { attemptId } : {}),
+        ...(provider ? { provider } : {}),
+        ...(pipelineConfig.model ? { model: pipelineConfig.model } : {}),
+      });
     } catch (e) {
-      broadcast("audit:error", { bookId: id, error: String(e) });
-      return c.json({ error: String(e) }, 500);
+      const details = e as { readonly code?: unknown; readonly message?: unknown };
+      const code = typeof details.code === "string" ? details.code : undefined;
+      const message = e instanceof Error ? e.message : String(e);
+      broadcast("audit:error", {
+        bookId: id,
+        chapter: chapterNum,
+        operationPhase: "failed",
+        error: message,
+        ...(code ? { code } : {}),
+      });
+      if (code === "CANONICAL_TRANSACTION_INCOMPLETE" || code === "STATE_PREFLIGHT_FAILED") {
+        return c.json({ error: { code, message } }, 409);
+      }
+      return c.json({ error: message }, 500);
     }
   });
 
