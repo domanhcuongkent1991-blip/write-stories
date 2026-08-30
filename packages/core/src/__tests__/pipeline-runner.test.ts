@@ -3635,6 +3635,71 @@ describe("PipelineRunner", () => {
     }
   });
 
+  it("promotes an auto recovery output before retry validation, post-audit, and persistence", async () => {
+    const { root, runner, state, bookId } = await createRunnerFixture();
+    const originalDraft = "原".repeat(80);
+    const acceptedCandidate = "修".repeat(220);
+    const promotedHook = {
+      hookId: "H-AUTO",
+      startChapter: 1,
+      type: "clue",
+      status: "open",
+      lastAdvancedChapter: 1,
+      expectedPayoff: "later",
+      notes: "promoted recovery hook",
+      promoted: true,
+    };
+    const promotion = vi.spyOn(hookPromotionModule, "rerunPromotionPass").mockReturnValue({
+      updated: true,
+      hooks: [promotedHook],
+      flippedCount: 1,
+    });
+    vi.spyOn(WriterAgent.prototype, "writeChapter").mockResolvedValue(
+      createWriterOutput({ content: originalDraft, wordCount: originalDraft.length }),
+    );
+    vi.spyOn(ReviserAgent.prototype, "reviseChapter").mockResolvedValue(
+      createReviseOutput({ revisedContent: acceptedCandidate, wordCount: acceptedCandidate.length }),
+    );
+    vi.spyOn(ChapterAnalyzerAgent.prototype, "analyzeChapter").mockResolvedValue(
+      createAnalyzedOutput({
+        content: acceptedCandidate,
+        wordCount: acceptedCandidate.length,
+        updatedHooks: "# Pending Hooks\n\n- raw candidate hook",
+      }),
+    );
+    vi.spyOn(WriterAgent.prototype, "settleChapterState").mockImplementation(async (input) =>
+      createSettledRevisionOutput(input, {
+        content: acceptedCandidate,
+        wordCount: acceptedCandidate.length,
+        updatedHooks: "# Pending Hooks\n\n- raw recovery hook",
+      }));
+    const auditChapter = vi.spyOn(ContinuityAuditor.prototype, "auditChapter")
+      .mockResolvedValueOnce(createAuditResult({ passed: true, issues: [], summary: "initial", overallScore: 95 }))
+      .mockResolvedValueOnce(createAuditResult({ passed: true, issues: [], summary: "accepted", overallScore: 95 }));
+    const validate = vi.spyOn(StateValidatorAgent.prototype, "validate")
+      .mockResolvedValueOnce({
+        passed: false,
+        repairRequired: true,
+        warnings: [{ category: "state", description: "retry settlement" }],
+      })
+      .mockResolvedValueOnce({ passed: true, repairRequired: false, warnings: [] });
+
+    try {
+      const result = await runner.writeNextChapter(bookId, 220);
+      const retriedPromotedHooks = String(validate.mock.calls[1]?.[5]);
+
+      expect(result.status).toBe("ready-for-review");
+      expect(promotion).toHaveBeenCalledTimes(2);
+      expect(String(validate.mock.calls[0]?.[5])).toContain("H-AUTO");
+      expect(retriedPromotedHooks).toContain("H-AUTO");
+      expect(auditChapter.mock.calls[1]?.[4]?.truthFileOverrides?.hooks).toBe(retriedPromotedHooks);
+      await expect(readFile(join(state.bookDir(bookId), "story", "pending_hooks.md"), "utf-8"))
+        .resolves.toBe(retriedPromotedHooks);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
   it("still performs the initial audit in manual chapter mode without auto revision", async () => {
     const { root, runner, bookId } = await createRunnerFixture({ chapterReviewMode: "manual" });
     const draftBody = "手动模式仍需先审计。".repeat(24);
@@ -6331,6 +6396,46 @@ describe("PipelineRunner", () => {
     }
   }, SLOW_PIPELINE_TEST_TIMEOUT_MS);
 
+  it("promotes latest manual revision hooks before validation, post-audit, and persistence", async () => {
+    const { root, runner, state, bookId, chaptersDir } = await createRevisionGateFixture("strict");
+    const storyDir = join(state.bookDir(bookId), "story");
+    const promotedHook = {
+      hookId: "H-MANUAL",
+      startChapter: 1,
+      type: "clue",
+      status: "open",
+      lastAdvancedChapter: 1,
+      expectedPayoff: "later",
+      notes: "promoted manual hook",
+      promoted: true,
+    };
+    vi.spyOn(hookPromotionModule, "rerunPromotionPass").mockReturnValue({
+      updated: true,
+      hooks: [promotedHook],
+      flippedCount: 1,
+    });
+    const auditChapter = vi.spyOn(ContinuityAuditor.prototype, "auditChapter")
+      .mockResolvedValueOnce(createAuditResult({ passed: false, issues: [CRITICAL_ISSUE], summary: "needs revision" }))
+      .mockResolvedValueOnce(createAuditResult({ passed: true, issues: [], summary: "clean" }));
+    const validate = vi.spyOn(StateValidatorAgent.prototype, "validate")
+      .mockResolvedValue({ passed: true, repairRequired: false, warnings: [] });
+
+    try {
+      const result = await runner.reviseDraft(bookId, 1, "rework");
+      const promotedHooks = String(validate.mock.calls[0]?.[5]);
+
+      expect(result.applied).toBe(true);
+      expect(promotedHooks).toContain("H-MANUAL");
+      expect(auditChapter.mock.calls[1]?.[4]?.truthFileOverrides?.hooks).toBe(promotedHooks);
+      await expect(readFile(join(storyDir, "pending_hooks.md"), "utf-8"))
+        .resolves.toBe(promotedHooks);
+      await expect(readFile(join(chaptersDir, "0001_Test_Chapter.md"), "utf-8"))
+        .resolves.toContain("门被风顶开");
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  }, SLOW_PIPELINE_TEST_TIMEOUT_MS);
+
   async function createRevisionGateFixture(revisionGate?: "strict" | "lenient" | "always") {
     const fixture = await createRunnerFixture(revisionGate ? { revisionGate } : {});
     const storyDir = join(fixture.state.bookDir(fixture.bookId), "story");
@@ -6683,6 +6788,41 @@ describe("PipelineRunner", () => {
     }
   }, SLOW_PIPELINE_TEST_TIMEOUT_MS);
 
+  it("records an immutable initial rejection run before a manual reviser error escapes", async () => {
+    const { root, runner, state, bookId, chaptersDir } = await createRevisionGateFixture("strict");
+    const originalChapter = await readFile(join(chaptersDir, "0001_Test_Chapter.md"), "utf-8");
+    vi.spyOn(ContinuityAuditor.prototype, "auditChapter").mockResolvedValue(
+      createAuditResult({ passed: false, issues: [CRITICAL_ISSUE], summary: "needs revision" }),
+    );
+    vi.spyOn(ReviserAgent.prototype, "reviseChapter").mockRejectedValue(
+      new Error("provider output failed"),
+    );
+
+    try {
+      await expect(runner.reviseDraft(bookId, 1, "rework"))
+        .rejects.toThrow("provider output failed");
+      const auditRunDir = join(state.bookDir(bookId), "story", "audit", "runs", "chapter-0001");
+      const [auditRunFile] = await readdir(auditRunDir);
+      const auditRun = JSON.parse(await readFile(join(auditRunDir, auditRunFile!), "utf-8"));
+
+      await expect(readFile(join(chaptersDir, "0001_Test_Chapter.md"), "utf-8")).resolves.toBe(originalChapter);
+      expect(auditRun).toMatchObject({
+        phase: "initial",
+        canonicalCommitOutcome: "unchanged",
+        revision: {
+          attempted: true,
+          candidateProduced: false,
+          accepted: false,
+          rejectionReason: expect.stringContaining("provider output failed"),
+        },
+      });
+      expect(auditRun.revision).not.toHaveProperty("candidateContentHash");
+      expect(auditRun.revision).not.toHaveProperty("candidateWordCount");
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  }, SLOW_PIPELINE_TEST_TIMEOUT_MS);
+
   it("records a rejection run before returning from unavailable manual state validation", async () => {
     const { root, runner, state, bookId, chaptersDir } = await createRevisionGateFixture("strict");
     const originalChapter = await readFile(join(chaptersDir, "0001_Test_Chapter.md"), "utf-8");
@@ -6708,6 +6848,42 @@ describe("PipelineRunner", () => {
         accepted: false,
         rejectionReason: expect.stringContaining("state validation unavailable"),
       });
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  }, SLOW_PIPELINE_TEST_TIMEOUT_MS);
+
+  it("uses one authority context for initial and retried manual state validation", async () => {
+    const { root, runner, state, bookId } = await createRevisionGateFixture("strict");
+    const storyDir = join(state.bookDir(bookId), "story");
+    const authorityContext = {
+      storyFrame: "# Story Frame\n\nThe bronze token never changes ownership.",
+      bookRules: "# Book Rules\n\nThe oath token is immutable.",
+      chapterSummaries: "# Chapter Summaries\n\nChapter 0: Lin Yue carries the token.",
+    };
+    await mkdir(join(storyDir, "outline"), { recursive: true });
+    await Promise.all([
+      writeFile(join(storyDir, "outline", "story_frame.md"), authorityContext.storyFrame, "utf-8"),
+      writeFile(join(storyDir, "book_rules.md"), authorityContext.bookRules, "utf-8"),
+      writeFile(join(storyDir, "chapter_summaries.md"), authorityContext.chapterSummaries, "utf-8"),
+    ]);
+    vi.spyOn(ContinuityAuditor.prototype, "auditChapter")
+      .mockResolvedValueOnce(createAuditResult({ passed: false, issues: [CRITICAL_ISSUE], summary: "needs revision" }))
+      .mockResolvedValueOnce(createAuditResult({ passed: true, issues: [], summary: "clean" }));
+    const validate = vi.spyOn(StateValidatorAgent.prototype, "validate")
+      .mockResolvedValueOnce({
+        passed: false,
+        repairRequired: true,
+        warnings: [{ category: "authority", description: "settlement needs retry" }],
+      })
+      .mockResolvedValueOnce({ passed: true, repairRequired: false, warnings: [] });
+
+    try {
+      await runner.reviseDraft(bookId, 1, "rework");
+
+      expect(validate).toHaveBeenCalledTimes(2);
+      expect(validate.mock.calls[0]?.[7]).toEqual(authorityContext);
+      expect(validate.mock.calls[1]?.[7]).toEqual(authorityContext);
     } finally {
       await rm(root, { recursive: true, force: true });
     }

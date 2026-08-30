@@ -40,6 +40,10 @@ export interface SettlementRetryParams {
   readonly language: ScaffoldLanguage;
   /** Reuse the same authority supplied to the validation that requested retry. */
   readonly authorityContext?: StateValidationAuthorityContext;
+  /** Apply deterministic truth normalization before retry validation. */
+  readonly normalizeSettledOutput?: (
+    output: WriteChapterOutput,
+  ) => WriteChapterOutput | Promise<WriteChapterOutput>;
   readonly logWarn?: (message: { zh: string; en: string }) => void;
   readonly logger?: Pick<Logger, "warn">;
 }
@@ -65,7 +69,7 @@ export async function retrySettlementAfterValidationFailure(
     en: `State validation failed; retrying settlement only for chapter ${params.chapterNumber}`,
   });
 
-  const retryOutput = await params.writer.settleChapterState({
+  const rawRetryOutput = await params.writer.settleChapterState({
     book: params.book,
     bookDir: params.bookDir,
     chapterNumber: params.chapterNumber,
@@ -82,6 +86,9 @@ export async function retrySettlementAfterValidationFailure(
       scaffoldLanguage,
     ),
   });
+  const retryOutput = params.normalizeSettledOutput
+    ? await params.normalizeSettledOutput(rawRetryOutput)
+    : rawRetryOutput;
 
   if (
     writingLanguage === "vi"

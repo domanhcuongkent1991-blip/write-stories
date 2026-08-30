@@ -26,6 +26,9 @@ export async function validateChapterTruthPersistence(params: {
     readonly oldLedger: string;
   };
   readonly authorityContext?: StateValidationAuthorityContext;
+  readonly normalizeSettledOutput?: (
+    output: WriteChapterOutput,
+  ) => WriteChapterOutput | Promise<WriteChapterOutput>;
   readonly reducedControlInput?: {
     chapterIntent: string;
     contextPackage: ContextPackage;
@@ -113,6 +116,7 @@ export async function validateChapterTruthPersistence(params: {
       originalValidation: validation,
       language: params.language,
       authorityContext: params.authorityContext,
+      normalizeSettledOutput: params.normalizeSettledOutput,
       logWarn: params.logWarn,
       logger: params.logger,
     });

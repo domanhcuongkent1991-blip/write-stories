@@ -1873,48 +1873,36 @@ export class PipelineRunner {
 
       const baselineChapter = targetChapter - 1;
       const baselineStoryDir = join(bookDir, "story", "snapshots", String(baselineChapter));
-      const [baselineState, baselineHooks] = await Promise.all([
+      const [
+        baselineState,
+        baselineHooks,
+        authorityStoryFrame,
+        authorityBookRules,
+        authorityChapterSummaries,
+      ] = await Promise.all([
         readFile(join(baselineStoryDir, "current_state.md"), "utf-8"),
         readFile(join(baselineStoryDir, "pending_hooks.md"), "utf-8"),
+        readStoryFrame(bookDir).catch(() => ""),
+        readFile(join(bookDir, "story", "book_rules.md"), "utf-8").catch(() => ""),
+        readFile(join(bookDir, "story", "chapter_summaries.md"), "utf-8").catch(() => ""),
       ]).catch((error) => {
         throw new Error(
           `Cannot revise chapter ${targetChapter} safely: baseline snapshot ${baselineChapter} is unavailable (${String(error)})`,
         );
       });
+      const authorityContext = {
+        storyFrame: authorityStoryFrame,
+        bookRules: authorityBookRules,
+        chapterSummaries: authorityChapterSummaries,
+      };
 
-      const reviser = new ReviserAgent(this.agentCtxFor("reviser", bookId));
-      this.logStage(stageLanguage, {
-        zh: `修订第${targetChapter}章`,
-        en: `revising chapter ${targetChapter}`,
-      });
-      const reviseOutput = await reviser.reviseChapter(
-        bookDir,
-        content,
-        targetChapter,
-        preRevision.auditResult.issues,
-        mode,
-        book.genre,
-        reviseControlInput
-          ? {
-              chapterIntent: reviseControlInput.plan.intentMarkdown,
-              chapterMemo: reviseControlInput.plan.memo,
-              chapterIntentData: reviseControlInput.plan.intent,
-              contextPackage: reviseControlInput.composed.contextPackage,
-              ruleStack: reviseControlInput.composed.ruleStack,
-              lengthSpec,
-              baselineChapter,
-            }
-          : { lengthSpec, baselineChapter },
-      );
-
-      const { normalizePostWriteSurface: normalizeRevisionSurface } = await import("../agents/post-write-validator.js");
-      const revisedContent = reviseOutput.revisedContent.length === 0
-        ? ""
-        : normalizeRevisionSurface(reviseOutput.revisedContent, language);
-      const revisedCount = countChapterLength(revisedContent, lengthSpec.countingMode);
       const persistManualRevisionRejection = async (
         rejectionReason: string,
-        candidateProduced: boolean,
+        candidate?: {
+          readonly content: string;
+          readonly count: number;
+          readonly produced: boolean;
+        },
       ): Promise<void> => {
         const now = new Date().toISOString();
         const initialEvaluation = toChapterAuditEvaluation(preRevision.auditResult, content);
@@ -1937,15 +1925,54 @@ export class PipelineRunner {
           canonicalCommitOutcome: "unchanged",
           revision: {
             attempted: true,
-            candidateProduced,
-            candidateContentHash: computeChapterContentHash(revisedContent),
-            candidateWordCount: revisedCount,
+            candidateProduced: candidate?.produced ?? false,
+            ...(candidate ? {
+              candidateContentHash: computeChapterContentHash(candidate.content),
+              candidateWordCount: candidate.count,
+            } : {}),
             accepted: false,
             rejectionReason,
           },
         });
         await commitAtomicFileSet({ rootDir: bookDir, writes: [createAuditRunWrite(rejectionRun)] });
       };
+
+      const reviser = new ReviserAgent(this.agentCtxFor("reviser", bookId));
+      this.logStage(stageLanguage, {
+        zh: `修订第${targetChapter}章`,
+        en: `revising chapter ${targetChapter}`,
+      });
+      let reviseOutput: Awaited<ReturnType<ReviserAgent["reviseChapter"]>>;
+      try {
+        reviseOutput = await reviser.reviseChapter(
+          bookDir,
+          content,
+          targetChapter,
+          preRevision.auditResult.issues,
+          mode,
+          book.genre,
+          reviseControlInput
+            ? {
+                chapterIntent: reviseControlInput.plan.intentMarkdown,
+                chapterMemo: reviseControlInput.plan.memo,
+                chapterIntentData: reviseControlInput.plan.intent,
+                contextPackage: reviseControlInput.composed.contextPackage,
+                ruleStack: reviseControlInput.composed.ruleStack,
+                lengthSpec,
+                baselineChapter,
+              }
+            : { lengthSpec, baselineChapter },
+        );
+      } catch (error) {
+        await persistManualRevisionRejection(`reviser failed: ${String(error)}`);
+        throw error;
+      }
+
+      const { normalizePostWriteSurface: normalizeRevisionSurface } = await import("../agents/post-write-validator.js");
+      const revisedContent = reviseOutput.revisedContent.length === 0
+        ? ""
+        : normalizeRevisionSurface(reviseOutput.revisedContent, language);
+      const revisedCount = countChapterLength(revisedContent, lengthSpec.countingMode);
       const manualRevisionUnchanged = (
         rejectionReason: string,
         auditIssues: ReadonlyArray<AuditIssue> = [],
@@ -1977,7 +2004,11 @@ export class PipelineRunner {
         const rejectionReason = revisedContent.length === 0
           ? "revision candidate was empty"
           : "revision candidate was unchanged";
-        await persistManualRevisionRejection(rejectionReason, false);
+        await persistManualRevisionRejection(rejectionReason, {
+          content: revisedContent,
+          count: revisedCount,
+          produced: false,
+        });
         return manualRevisionUnchanged(rejectionReason);
       }
       const writer = new WriterAgent(this.agentCtxFor("writer", bookId));
@@ -1996,6 +2027,14 @@ export class PipelineRunner {
           contextPackage: reviseControlInput?.composed.contextPackage,
           ruleStack: reviseControlInput?.composed.ruleStack,
         });
+        if (isLatestChapter) {
+          settledRevision = await this.promotePersistenceHooks(
+            bookDir,
+            targetChapter,
+            settledRevision,
+            language,
+          );
+        }
         stateValidation = await stateValidator.validate(
           revisedContent,
           targetChapter,
@@ -2004,10 +2043,15 @@ export class PipelineRunner {
           baselineHooks,
           settledRevision.updatedHooks,
           language,
+          authorityContext,
         );
       } catch (error) {
         const rejectionReason = `state validation unavailable: ${String(error)}`;
-        await persistManualRevisionRejection(rejectionReason, true);
+        await persistManualRevisionRejection(rejectionReason, {
+          content: revisedContent,
+          count: revisedCount,
+          produced: true,
+        });
         return manualRevisionUnchanged(rejectionReason, [{
           severity: "warning",
           category: "state-validation",
@@ -2038,11 +2082,20 @@ export class PipelineRunner {
             oldHooks: baselineHooks,
             originalValidation: stateValidation,
             language,
+            authorityContext,
+            ...(isLatestChapter ? {
+              normalizeSettledOutput: (output: WriteChapterOutput) =>
+                this.promotePersistenceHooks(bookDir, targetChapter, output, language),
+            } : {}),
             logger: this.config.logger,
           });
         } catch (error) {
           const rejectionReason = `state validation unavailable: ${String(error)}`;
-          await persistManualRevisionRejection(rejectionReason, true);
+          await persistManualRevisionRejection(rejectionReason, {
+            content: revisedContent,
+            count: revisedCount,
+            produced: true,
+          });
           return manualRevisionUnchanged(rejectionReason, [{
             severity: "warning",
             category: "state-validation",
@@ -2052,7 +2105,11 @@ export class PipelineRunner {
         }
         if (recovery.kind === "degraded") {
           const rejectedReason = "state settlement did not validate after retry";
-          await persistManualRevisionRejection(rejectedReason, true);
+          await persistManualRevisionRejection(rejectedReason, {
+            content: revisedContent,
+            count: revisedCount,
+            produced: true,
+          });
           return manualRevisionUnchanged(rejectedReason, recovery.issues);
         }
         settledRevision = recovery.output;
@@ -2843,6 +2900,12 @@ export class PipelineRunner {
                 bookRules: authorityBookRules,
                 chapterSummaries: authorityChapterSummaries,
               },
+              normalizeSettledOutput: (candidateOutput) => this.promotePersistenceHooks(
+                bookDir,
+                chapterNumber,
+                candidateOutput,
+                pipelineLang,
+              ),
               reducedControlInput,
               language: pipelineLang,
               logWarn: (message) => this.logWarn(pipelineLang, message),
@@ -3004,6 +3067,12 @@ export class PipelineRunner {
           bookRules: authorityBookRules,
           chapterSummaries: authorityChapterSummaries,
         },
+        normalizeSettledOutput: (settledOutput) => this.promotePersistenceHooks(
+          bookDir,
+          chapterNumber,
+          settledOutput,
+          pipelineLang,
+        ),
         reducedControlInput,
         language: pipelineLang,
         logWarn: (message) => this.logWarn(pipelineLang, message),
