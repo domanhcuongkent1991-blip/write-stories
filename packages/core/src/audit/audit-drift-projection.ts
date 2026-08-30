@@ -49,12 +49,16 @@ export function selectAuditDriftFindings(params: {
           }
         }
       }
-      latestByIdentity.set(findingIdentity(finding), {
-        issue: finding,
-        chapterNumber: run.chapterNumber,
-        completedAt: run.completedAt,
-        attemptId: run.attemptId,
-      });
+      const identity = findingIdentity(finding);
+      const previous = latestByIdentity.get(identity);
+      if (previous === undefined || shouldReplaceFinding(previous.issue, finding)) {
+        latestByIdentity.set(identity, {
+          issue: finding,
+          chapterNumber: run.chapterNumber,
+          completedAt: run.completedAt,
+          attemptId: run.attemptId,
+        });
+      }
     }
   }
 
@@ -173,6 +177,22 @@ function findingPriority(issue: AuditIssue): number {
   if (issue.severity === "critical") return 0;
   if (issue.verification === "verified") return 1;
   return 2;
+}
+
+function shouldReplaceFinding(previous: AuditIssue, incoming: AuditIssue): boolean {
+  const incomingTerminal = incoming.lifecycle === "resolved"
+    || incoming.lifecycle === "superseded"
+    || incoming.lifecycle === "expired";
+  if (incomingTerminal) return true;
+
+  const previousTerminal = previous.lifecycle === "resolved"
+    || previous.lifecycle === "superseded"
+    || previous.lifecycle === "expired";
+  if (previousTerminal) return true;
+
+  // Retain the higher-priority occurrence for a shared semantic fingerprint;
+  // equal priority uses the later deterministic evidence.
+  return findingPriority(incoming) <= findingPriority(previous);
 }
 
 function positiveIntegerOr(value: number | undefined, fallback: number): number {

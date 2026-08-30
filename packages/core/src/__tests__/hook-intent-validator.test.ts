@@ -110,6 +110,58 @@ describe("validateExpectedHookOps", () => {
     ]);
   });
 
+  it("rejects an advance upsert whose authoritative final status remains open", () => {
+    const issues = validateExpectedHookOps({
+      expected: {
+        upsert: [{
+          hookId: "H007",
+          startChapter: 1,
+          type: "mystery",
+          status: "progressing",
+          lastAdvancedChapter: 4,
+          expectedPayoff: "badge",
+          notes: "",
+        }],
+        mention: [],
+        resolve: [],
+        defer: [],
+      },
+      actual: {
+        upsert: [{
+          hookId: "H007",
+          startChapter: 1,
+          type: "mystery",
+          status: "open",
+          lastAdvancedChapter: 4,
+          expectedPayoff: "badge",
+          notes: "",
+        }],
+        mention: [],
+        resolve: [],
+        defer: [],
+      },
+      runtimeHooks: [{
+        hookId: "H007",
+        startChapter: 1,
+        type: "mystery",
+        status: "open",
+        lastAdvancedChapter: 4,
+        expectedPayoff: "badge",
+        notes: "",
+      }],
+      acceptanceCriteria: [],
+      contentHash,
+    });
+
+    expect(issues).toEqual([
+      expect.objectContaining({
+        severity: "critical",
+        verification: "verified",
+        evidence: expect.objectContaining({ stateRef: "runtime:hook:H007" }),
+      }),
+    ]);
+  });
+
   it("accepts matching typed runtime operations", () => {
     expect(validateExpectedHookOps({
       expected,

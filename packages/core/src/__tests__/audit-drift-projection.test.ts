@@ -139,6 +139,34 @@ describe("audit drift projection", () => {
     ]);
   });
 
+  it("retains a critical occurrence when a later warning shares its semantic fingerprint", () => {
+    const critical = issue({
+      findingId: "critical-occurrence",
+      fingerprint: "shared-fingerprint",
+      severity: "critical",
+      description: "Critical contradiction",
+    });
+    const warning = issue({
+      findingId: "warning-occurrence",
+      fingerprint: "shared-fingerprint",
+      description: "Warning reminder",
+    });
+
+    const findings = selectAuditDriftFindings({
+      runs: [
+        run({ chapter: 8, findings: [critical], completedAt: "2026-08-30T00:00:01.000Z" }),
+        run({ chapter: 9, findings: [warning], completedAt: "2026-08-30T00:00:02.000Z" }),
+      ],
+      currentChapter: 9,
+      defaultTtlChapters: 2,
+    });
+
+    expect(findings).toEqual([expect.objectContaining({
+      severity: "critical",
+      description: "Critical contradiction",
+    })]);
+  });
+
   it("does not collide blank finding IDs when fingerprints are absent", () => {
     const findings = selectAuditDriftFindings({
       runs: [run({

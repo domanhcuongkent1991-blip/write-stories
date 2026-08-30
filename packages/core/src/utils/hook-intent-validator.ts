@@ -117,7 +117,7 @@ function operationSatisfied(
   }
   if (!actual.has("upsert")) return false;
   const finalHook = runtimeHook ?? actualUpsert;
-  if (finalHook === undefined || finalHook.status === "resolved" || finalHook.status === "deferred") return false;
+  if (finalHook === undefined || finalHook.status !== "progressing") return false;
   if (expected.record === undefined || actualUpsert === undefined) return false;
   return actualUpsert.lastAdvancedChapter >= expected.record.lastAdvancedChapter;
 }
@@ -141,7 +141,7 @@ function contradictoryAction(
     if (actual.has("resolve")) return "resolve";
     if (actual.has("defer")) return "defer";
     const finalHook = runtimeHook ?? actualUpsert;
-    if (finalHook?.status === "resolved" || finalHook?.status === "deferred") {
+    if (finalHook?.status === "resolved" || finalHook?.status === "deferred" || finalHook?.status === "open") {
       return `upsert:${finalHook.status}`;
     }
   }
