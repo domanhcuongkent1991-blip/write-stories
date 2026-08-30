@@ -34,6 +34,9 @@ export function decideAudit(
   if (blockers.length === 0) {
     return evaluation.overallScore >= 85 ? withDecision(evaluation, "pass") : withDecision(evaluation, "fail");
   }
+  if (blockers.some((finding) => finding.repairTarget === undefined || finding.evidence?.contentHash !== evaluation.contentHash)) {
+    return withDecision(evaluation, "fail");
+  }
   const revisionBudget = context.autoRevisionAllowed && context.revisionAttempts < Math.min(1, context.maxRevisionAttempts);
   return revisionBudget ? withDecision(evaluation, "repair-required") : withDecision(evaluation, "fail");
 }

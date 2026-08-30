@@ -116,7 +116,9 @@ function normalizedIssue(
     fingerprint,
     source,
     verification,
-    evidence: { ...issue.evidence, contentHash },
+    evidence: issue.evidence
+      ? { ...issue.evidence, contentHash: issue.evidence.contentHash ?? contentHash }
+      : { contentHash },
     repairScope: issue.repairScope ?? (ruleId === "length.hard-range" ? "structural" : undefined),
     repairTarget: issue.repairTarget ?? (ruleId === "length.hard-range" ? "prose" : undefined),
   };

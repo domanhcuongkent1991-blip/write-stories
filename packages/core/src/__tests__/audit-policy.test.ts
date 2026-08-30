@@ -60,6 +60,26 @@ describe("decideAudit", () => {
     expect(result).toMatchObject({ decision: "repair-required", passed: false });
   });
 
+  it("fails closed when a verified critical blocker has no repair target", () => {
+    const result = decideAudit(input({
+      deterministicFindings: [{
+        severity: "critical",
+        category: "state",
+        description: "broken invariant",
+        suggestion: "inspect",
+        ruleId: "state.invariant",
+        evidence: { contentHash },
+      }],
+    }), {
+      operation: "write",
+      autoRevisionAllowed: true,
+      revisionAttempts: 0,
+      maxRevisionAttempts: 1,
+    });
+
+    expect(result).toMatchObject({ decision: "fail", passed: false });
+  });
+
   it("does not spend a second quality revision", () => {
     const result = decideAudit(input({
       operation: "re-audit",

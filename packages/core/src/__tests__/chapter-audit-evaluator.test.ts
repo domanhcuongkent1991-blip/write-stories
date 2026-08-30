@@ -86,6 +86,33 @@ describe("evaluateChapterAudit", () => {
 
     expect(result).toMatchObject({ decision: "inconclusive", passed: false });
   });
+
+  it("preserves stale evidence hash instead of rewriting its provenance", () => {
+    const staleHash = "f".repeat(64);
+    const result = evaluateChapterAudit({
+      content: "current",
+      lengthSpec,
+      operation: "audit",
+      revisionAttempts: 0,
+      maxRevisionAttempts: 1,
+      autoRevisionAllowed: true,
+      deterministicFindings: [{
+        severity: "critical",
+        category: "state",
+        description: "stale fact",
+        suggestion: "recheck",
+        ruleId: "state.fact",
+        evidence: { contentHash: staleHash, stateRef: "story/current_state.md#fact" },
+      }],
+      stateFindings: [],
+      llmAudit: { passed: true, overallScore: 90, summary: "ok", issues: [] },
+    });
+
+    expect(result.findings[0]).toMatchObject({
+      verification: "stale",
+      evidence: { contentHash: staleHash, stateRef: "story/current_state.md#fact" },
+    });
+  });
 });
 
 describe("computeAuditFingerprint", () => {
