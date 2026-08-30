@@ -6778,11 +6778,47 @@ describe("PipelineRunner", () => {
         revision: {
           attempted: true,
           candidateProduced: false,
-          candidateWordCount: 0,
           accepted: false,
           rejectionReason: expect.stringContaining("empty"),
         },
       });
+      expect(auditRun.revision).not.toHaveProperty("candidateContentHash");
+      expect(auditRun.revision).not.toHaveProperty("candidateWordCount");
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  }, SLOW_PIPELINE_TEST_TIMEOUT_MS);
+
+  it("omits candidate identity from an unchanged manual revision rejection run", async () => {
+    const { root, runner, state, bookId, chaptersDir } = await createRevisionGateFixture("strict");
+    const originalChapter = await readFile(join(chaptersDir, "0001_Test_Chapter.md"), "utf-8");
+    const originalBody = originalChapter.split("\n\n").slice(1).join("\n\n");
+    vi.spyOn(ContinuityAuditor.prototype, "auditChapter").mockResolvedValue(
+      createAuditResult({ passed: false, issues: [CRITICAL_ISSUE], summary: "needs revision" }),
+    );
+    vi.spyOn(ReviserAgent.prototype, "reviseChapter").mockResolvedValue(
+      createReviseOutput({ revisedContent: originalBody, wordCount: originalBody.length }),
+    );
+
+    try {
+      const result = await runner.reviseDraft(bookId, 1, "rework");
+      const auditRunDir = join(state.bookDir(bookId), "story", "audit", "runs", "chapter-0001");
+      const [auditRunFile] = await readdir(auditRunDir);
+      const auditRun = JSON.parse(await readFile(join(auditRunDir, auditRunFile!), "utf-8"));
+
+      expect(result).toMatchObject({ applied: false, status: "unchanged" });
+      expect(auditRun).toMatchObject({
+        phase: "initial",
+        canonicalCommitOutcome: "unchanged",
+        revision: {
+          attempted: true,
+          candidateProduced: false,
+          accepted: false,
+          rejectionReason: expect.stringContaining("unchanged"),
+        },
+      });
+      expect(auditRun.revision).not.toHaveProperty("candidateContentHash");
+      expect(auditRun.revision).not.toHaveProperty("candidateWordCount");
     } finally {
       await rm(root, { recursive: true, force: true });
     }

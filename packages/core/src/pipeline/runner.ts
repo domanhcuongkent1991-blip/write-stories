@@ -1926,7 +1926,7 @@ export class PipelineRunner {
           revision: {
             attempted: true,
             candidateProduced: candidate?.produced ?? false,
-            ...(candidate ? {
+            ...(candidate?.produced ? {
               candidateContentHash: computeChapterContentHash(candidate.content),
               candidateWordCount: candidate.count,
             } : {}),
