@@ -134,6 +134,7 @@ export {
 export {
   type ChapterMemo,
   type ChapterIntent,
+  type PacingCode,
   type ContextSource,
   type ContextPackage,
   type RuleLayerScope,
@@ -145,6 +146,7 @@ export {
   type ChapterTrace,
   ChapterMemoSchema,
   ChapterIntentSchema,
+  PacingCodeSchema,
   ContextSourceSchema,
   ContextPackageSchema,
   RuleLayerScopeSchema,

@@ -66,6 +66,9 @@ describe("ComposerAgent", () => {
         ],
         mustAvoid: ["Do not reveal the mastermind."],
         styleEmphasis: ["character conflict", "tight POV"],
+        acceptanceCriteria: [],
+        pacingCode: "unknown",
+        expectedHookOps: { upsert: [], mention: [], resolve: [], defer: [] },
       },
       memo: {
         chapter: 4,

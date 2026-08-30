@@ -1,5 +1,6 @@
 import { describe, it, expect } from "vitest";
 import {
+  hookOpsFromLedger,
   parseHookLedger,
   validateHookLedger,
 } from "../utils/hook-ledger-validator.js";
@@ -136,6 +137,7 @@ describe("validateHookLedger", () => {
     const violations = validateHookLedger(ZH_MEMO, draft);
     expect(violations).toHaveLength(2);
     expect(violations.every((v) => v.severity === "warning")).toBe(true);
+    expect(violations.every((v) => v.verification === "unverified")).toBe(true);
     expect(violations.map((v) => v.description).join(" ")).toContain("H012");
     expect(violations.map((v) => v.description).join(" ")).toContain("H003");
   });
@@ -149,6 +151,7 @@ advance:
     const violations = validateHookLedger(memo, draft);
     expect(violations).toHaveLength(1);
     expect(violations[0]!.severity).toBe("warning");
+    expect(violations[0]!.verification).toBe("unverified");
     expect(violations[0]!.category).toContain("语义复核");
   });
 
@@ -207,6 +210,7 @@ resolve:
     const violations = validateHookLedger(memo, draft);
     expect(violations).toHaveLength(1);
     expect(violations[0]!.category).toContain("揭 1 埋 1");
+    expect(violations[0]).toMatchObject({ severity: "warning", verification: "unverified" });
   });
 
   it("accepts 揭 1 埋 1 floor when a [new] line balances the resolved hook", () => {
@@ -245,5 +249,14 @@ advance:
     const draft = "旧手机弹出定位结果，林知夏发现店外有人盯梢，安全空间塌了。";
     const violations = validateHookLedger(memo, draft);
     expect(violations).toEqual([]);
+  });
+
+  it("derives typed expected hook operations from stable memo hook IDs", () => {
+    expect(hookOpsFromLedger(ZH_MEMO)).toEqual({
+      upsert: [],
+      mention: ["H007", "H012"],
+      resolve: ["H003"],
+      defer: ["H009"],
+    });
   });
 });

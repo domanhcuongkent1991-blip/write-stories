@@ -16,6 +16,9 @@ const VALID_BODY = `
 ## 当前任务
 主角进入七号门现场，比对锁芯刮痕与监控时间线，把"被动过手脚"从猜测钉成实证。
 
+## 节奏代码
+reveal
+
 ## 读者此刻在等什么
 1) 读者在等七号门是否有异常实锤
 2) 本章完全兑现，钉成现场实证
@@ -155,6 +158,17 @@ describe("PlannerAgent.planChapter memo generation", () => {
     expect(result.memo.goal).toBe("把七号门被动过手脚钉成现场实证");
     expect(result.memo.threadRefs).toEqual(["H03", "S004"]);
     expect(result.memo.body).toContain("## 当前任务");
+    expect(result.intent.expectedHookOps).toEqual({
+      upsert: [],
+      mention: ["H03"],
+      resolve: ["S004"],
+      defer: ["H07"],
+    });
+    expect(result.intent.acceptanceCriteria).toEqual(expect.arrayContaining([
+      expect.stringContaining("H03"),
+      expect.stringContaining("S004"),
+    ]));
+    expect(result.intent.pacingCode).toBe("reveal");
   });
 
   it("does not hard-cap memo generation below the configured model output budget", async () => {

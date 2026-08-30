@@ -5,10 +5,15 @@ import type { BookConfig } from "../models/book.js";
 import type { LengthSpec } from "../models/length-governance.js";
 import type { ScaffoldLanguage } from "../models/writing-language.js";
 import { buildLengthSpec } from "../utils/length-metrics.js";
+import {
+  acceptanceCriteriaFromHookOps,
+  hookOpsFromLedger,
+} from "../utils/hook-ledger-validator.js";
 import { resolveWritingLanguageProfile } from "../utils/language.js";
 import { readBookRules as readAuthoritativeBookRules } from "./rules-reader.js";
 import {
   ChapterIntentSchema,
+  PacingCodeSchema,
   type ChapterIntent,
   type ChapterMemo,
 } from "../models/input-governance.js";
@@ -159,6 +164,13 @@ export class PlannerAgent extends BaseAgent {
       language: scaffoldLanguage,
       lengthSpec,
     });
+
+    intent.expectedHookOps = hookOpsFromLedger(memo.body);
+    intent.acceptanceCriteria = acceptanceCriteriaFromHookOps(
+      intent.expectedHookOps,
+      scaffoldLanguage,
+    );
+    intent.pacingCode = pacingCodeFromMemo(memo.body);
 
     // memo.goal is LLM-produced and specific (<=50 chars, validated).
     // Overwrite intent.goal so downstream composer/retrieval gets the
@@ -910,4 +922,12 @@ export class PlannerAgent extends BaseAgent {
       return "(文件尚未创建)";
     }
   }
+}
+
+function pacingCodeFromMemo(memoBody: string): ChapterIntent["pacingCode"] {
+  const match = memoBody.match(
+    /^##\s*(?:节奏代码|Pacing Code)\s*\r?\n\s*([a-z-]+)\s*$/imu,
+  );
+  const parsed = PacingCodeSchema.safeParse(match?.[1]?.toLocaleLowerCase());
+  return parsed.success ? parsed.data : "unknown";
 }

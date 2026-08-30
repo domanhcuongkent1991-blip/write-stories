@@ -73,6 +73,10 @@ export async function loadPersistedPlan(
 
   let intent: ChapterIntent;
   try {
+    const expectedHookOpsRaw = readField(raw, "Expected Hook Ops");
+    const expectedHookOps = expectedHookOpsRaw === undefined
+      ? undefined
+      : JSON.parse(expectedHookOpsRaw) as unknown;
     intent = ChapterIntentSchema.parse({
       chapter: chapterNumber,
       goal: readField(raw, "Intent Goal") ?? memo.goal,
@@ -81,6 +85,10 @@ export async function loadPersistedPlan(
       mustKeep: readListSection(raw, "Must Keep"),
       mustAvoid: readListSection(raw, "Must Avoid"),
       styleEmphasis: readListSection(raw, "Style Emphasis"),
+      acceptanceCriteria: readListSection(raw, "Acceptance Criteria"),
+      pacingCode: readField(raw, "Pacing Code"),
+      pacingOverrideReason: readOptionalField(raw, "Pacing Override Reason"),
+      expectedHookOps,
     });
   } catch {
     return null;
@@ -127,6 +135,12 @@ function renderPersistedPlanMarkdown(
     `Intent Goal: ${intent.goal}`,
     `Outline Node: ${intent.outlineNode ?? "(none)"}`,
     `Arc Context: ${intent.arcContext ?? "(none)"}`,
+    `Pacing Code: ${intent.pacingCode}`,
+    `Pacing Override Reason: ${intent.pacingOverrideReason ?? "(none)"}`,
+    `Expected Hook Ops: ${JSON.stringify(intent.expectedHookOps)}`,
+    "",
+    "### Acceptance Criteria",
+    renderList(intent.acceptanceCriteria),
     "",
     "### Must Keep",
     renderList(intent.mustKeep),

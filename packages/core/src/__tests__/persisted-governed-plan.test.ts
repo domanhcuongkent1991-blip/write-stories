@@ -50,6 +50,15 @@ function buildPlan(chapter: number): PlanChapterOutput {
       mustKeep: ["林越父亲已死", "母亲遗物"],
       mustAvoid: ["提前揭露母亲身份"],
       styleEmphasis: ["潮湿氛围", "短句交替"],
+      acceptanceCriteria: ["H1 is advanced by a visible ledger handoff"],
+      pacingCode: "reveal",
+      pacingOverrideReason: "The volume outline schedules the reveal here.",
+      expectedHookOps: {
+        upsert: [],
+        mention: ["H1"],
+        resolve: [],
+        defer: ["H4"],
+      },
     },
     memo: {
       chapter,
@@ -92,7 +101,39 @@ describe("persisted-governed-plan round trip", () => {
     expect(loaded!.intent.mustKeep).toEqual(plan.intent.mustKeep);
     expect(loaded!.intent.mustAvoid).toEqual(plan.intent.mustAvoid);
     expect(loaded!.intent.styleEmphasis).toEqual(plan.intent.styleEmphasis);
+    expect(loaded!.intent.acceptanceCriteria).toEqual(plan.intent.acceptanceCriteria);
+    expect(loaded!.intent.pacingCode).toBe(plan.intent.pacingCode);
+    expect(loaded!.intent.pacingOverrideReason).toBe(plan.intent.pacingOverrideReason);
+    expect(loaded!.intent.expectedHookOps).toEqual(plan.intent.expectedHookOps);
     expect(loaded!.plannerInputs).toEqual(plan.plannerInputs);
+  });
+
+  it("loads historical plans with conservative defaults without rewriting them", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "inkos-plan-legacy-"));
+    await mkdir(join(dir, "story", "runtime"), { recursive: true });
+    await writeFile(
+      join(dir, "story", "runtime", "chapter-0001.intent.md"),
+      "# Chapter Intent\n\n## Goal\n取回账册离开旧港\n",
+      "utf-8",
+    );
+    await savePersistedPlan(dir, buildPlan(1));
+    const path = join(dir, "story", "runtime", "chapter-0001.plan.md");
+    const legacy = (await readFile(path, "utf-8"))
+      .replace(/^Pacing Code:.*\r?\n/m, "")
+      .replace(/^Pacing Override Reason:.*\r?\n/m, "")
+      .replace(/^Expected Hook Ops:.*\r?\n/m, "")
+      .replace(/\n### Acceptance Criteria\n[\s\S]*?(?=\n### Must Keep)/m, "");
+    await writeFile(path, legacy, "utf-8");
+
+    const loaded = await loadPersistedPlan(dir, 1);
+
+    expect(loaded?.intent).toMatchObject({
+      acceptanceCriteria: [],
+      pacingCode: "unknown",
+      expectedHookOps: { upsert: [], mention: [], resolve: [], defer: [] },
+    });
+    expect(loaded?.intent.pacingOverrideReason).toBeUndefined();
+    expect(await readFile(path, "utf-8")).toBe(legacy);
   });
 
   it("returns null when plan file does not exist", async () => {

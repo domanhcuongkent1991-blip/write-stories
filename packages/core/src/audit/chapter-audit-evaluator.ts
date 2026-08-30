@@ -106,6 +106,7 @@ function normalizedIssue(
   const stale = issue.evidence?.contentHash !== undefined && issue.evidence.contentHash !== contentHash;
   const verification: AuditVerification = stale
     ? "stale"
+    : issue.verification === "unverified" ? "unverified"
     : source === "llm" ? "unverified" : "verified";
   const ruleId = issue.ruleId ?? issue.category;
   const fingerprint = issue.fingerprint ?? computeAuditFingerprint({ ruleId, category: issue.category, repairTarget: issue.repairTarget });

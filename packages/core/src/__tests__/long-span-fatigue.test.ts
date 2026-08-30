@@ -25,7 +25,7 @@ async function writeChapter(bookDir: string, chapter: number, title: string, bod
 }
 
 describe("analyzeLongSpanFatigue", () => {
-  it("warns when the last three chapter types are identical", async () => {
+  it("warns on the fourth consecutive explicit pacing code", async () => {
     const bookDir = await createBookDir("inkos-long-span-type-test-");
 
     await Promise.all([
@@ -48,13 +48,76 @@ describe("analyzeLongSpanFatigue", () => {
     try {
       const result = await analyzeLongSpanFatigue({
         bookDir,
-        chapterNumber: 3,
+        chapterNumber: 4,
         chapterContent: "夜色像潮水一样漫到院墙根。林越没有立刻翻墙，而是先贴着墙根听了一阵。最后，他把手按在那道旧债印上。",
-        chapterSummary: "| 3 | 试探 | 林越 | 继续潜伏 | 目标未变 | 债印未解 | 克制 | 布局 |",
+        chapterSummary: "| 4 | 试探 | 林越 | 继续潜伏 | 目标未变 | 债印未解 | 克制 | 推进章 |",
+        pacingIntents: [1, 2, 3, 4].map((chapter) => ({
+          chapter,
+          pacingCode: "escalation" as const,
+        })),
         language: "zh",
       });
 
       expect(result.issues.some((issue) => issue.category === "节奏单调")).toBe(true);
+    } finally {
+      await rm(join(bookDir, ".."), { recursive: true, force: true });
+    }
+  });
+
+  it("allows a non-empty current pacing override reason", async () => {
+    const bookDir = await createBookDir("inkos-long-span-override-test-");
+
+    try {
+      const result = await analyzeLongSpanFatigue({
+        bookDir,
+        chapterNumber: 4,
+        chapterContent: "The siege continues for one deliberately extended beat.",
+        pacingIntents: [
+          { chapter: 1, pacingCode: "escalation" },
+          { chapter: 2, pacingCode: "escalation" },
+          { chapter: 3, pacingCode: "escalation" },
+          { chapter: 4, pacingCode: "escalation", pacingOverrideReason: "The siege must crest before reversal." },
+        ],
+        language: "en",
+      });
+
+      expect(result.issues.some((issue) => issue.category === "Pacing Monotony")).toBe(false);
+    } finally {
+      await rm(join(bookDir, ".."), { recursive: true, force: true });
+    }
+  });
+
+  it("excludes unknown pacing and legacy chapter-type labels from streak counting", async () => {
+    const bookDir = await createBookDir("inkos-long-span-legacy-pacing-test-");
+    await writeFile(
+      join(bookDir, "story", "chapter_summaries.md"),
+      [
+        "# 章节摘要",
+        "| 章节 | 标题 | 出场人物 | 关键事件 | 状态变化 | 伏笔动态 | 情绪基调 | 章节类型 |",
+        "| --- | --- | --- | --- | --- | --- | --- | --- |",
+        "| 1 | 一 | 林越 | 推进 | 无 | 无 | 平静 | 推进章 |",
+        "| 2 | 二 | 林越 | 推进 | 无 | 无 | 平静 | 推进章 |",
+        "| 3 | 三 | 林越 | 推进 | 无 | 无 | 平静 | 推进章 |",
+      ].join("\n"),
+      "utf-8",
+    );
+
+    try {
+      const result = await analyzeLongSpanFatigue({
+        bookDir,
+        chapterNumber: 4,
+        chapterContent: "旧标签保持原样，但不作为结构化 pacing 证据。",
+        chapterSummary: "| 4 | 四 | 林越 | 推进 | 无 | 无 | 平静 | 推进章 |",
+        pacingIntents: [
+          { chapter: 1, pacingCode: "escalation" },
+          { chapter: 2, pacingCode: "unknown" },
+          { chapter: 3, pacingCode: "escalation" },
+          { chapter: 4, pacingCode: "escalation" },
+        ],
+        language: "zh",
+      });
+
+      expect(result.issues.some((issue) => issue.category === "节奏单调")).toBe(false);
     } finally {
       await rm(join(bookDir, ".."), { recursive: true, force: true });
     }

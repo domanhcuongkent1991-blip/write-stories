@@ -113,6 +113,31 @@ describe("evaluateChapterAudit", () => {
       evidence: { contentHash: staleHash, stateRef: "story/current_state.md#fact" },
     });
   });
+
+  it("preserves an explicit unverified deterministic warning for heuristic checks", () => {
+    const content = "Heuristic hook prose check.";
+    const result = evaluateChapterAudit({
+      content,
+      operation: "audit",
+      revisionAttempts: 0,
+      maxRevisionAttempts: 1,
+      autoRevisionAllowed: false,
+      deterministicFindings: [{
+        severity: "warning",
+        category: "hook-keyword",
+        description: "No matching keyword was found.",
+        suggestion: "Review the prose manually.",
+        verification: "unverified",
+      }],
+      stateFindings: [],
+      llmAudit: { passed: true, overallScore: 90, summary: "ok", issues: [] },
+    });
+
+    expect(result.findings[0]).toMatchObject({
+      source: "deterministic",
+      verification: "unverified",
+    });
+  });
 });
 
 describe("computeAuditFingerprint", () => {

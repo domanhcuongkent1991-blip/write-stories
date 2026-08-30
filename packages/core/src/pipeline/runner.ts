@@ -54,6 +54,7 @@ import {
   createAuditRunWrite,
   type AuditRunV1,
 } from "../audit/audit-run.js";
+import { loadAuditDriftProjection } from "../audit/audit-drift-projection.js";
 import type { RadarResult } from "../agents/radar.js";
 import type { LengthSpec, LengthTelemetry } from "../models/length-governance.js";
 import {
@@ -62,7 +63,7 @@ import {
   type WritingLanguage,
 } from "../models/writing-language.js";
 import { HooksStateSchema } from "../models/runtime-state.js";
-import type { ChapterMemo, ChapterTrace, ContextPackage, RuleStack } from "../models/input-governance.js";
+import type { ChapterIntent, ChapterMemo, ChapterTrace, ContextPackage, RuleStack } from "../models/input-governance.js";
 import type { ContextCompressionCallback } from "../models/context-compression.js";
 import { buildLengthSpec, countChapterLength, formatLengthCount, isOutsideHardRange, resolveLengthCountingMode, type LengthLanguage } from "../utils/length-metrics.js";
 import {
@@ -70,6 +71,7 @@ import {
   type WritingLanguageProfile,
 } from "../utils/language.js";
 import { analyzeLongSpanFatigue } from "../utils/long-span-fatigue.js";
+import { validateExpectedHookOps } from "../utils/hook-intent-validator.js";
 import { buildWritingMethodologySection } from "../utils/writing-methodology.js";
 import {
   isNewLayoutBook,
@@ -2061,12 +2063,13 @@ export class PipelineRunner {
     });
     const latestChapter = index.length > 0 ? Math.max(...index.map((chapter) => chapter.number)) : targetChapter;
     if (targetChapter === latestChapter) {
-      await this.persistAuditDriftGuidance({
-        bookDir,
-        chapterNumber: targetChapter,
-        issues: result.issues.filter((issue) => issue.severity === "critical" || issue.severity === "warning"),
-        language,
-      }).catch(() => undefined);
+      await this.runDerivedStep(language, "persist audit drift guidance", () =>
+        this.persistAuditDriftGuidance({
+          bookDir,
+          bookId: book.id,
+          chapterNumber: targetChapter,
+          language,
+        }));
     }
 
     await this.emitWebhook(
@@ -2719,10 +2722,8 @@ export class PipelineRunner {
         await this.runDerivedStep(stageLanguage, "persist audit drift guidance", () =>
           this.persistAuditDriftGuidance({
             bookDir,
+            bookId,
             chapterNumber: targetChapter,
-            issues: effectivePostRevision.auditResult.issues.filter(
-              (issue) => issue.severity === "critical" || issue.severity === "warning",
-            ),
             language,
           }));
       }
@@ -3425,6 +3426,11 @@ export class PipelineRunner {
       chapterContent: finalContent,
       chapterSummary: persistenceOutput.chapterSummary,
       language: pipelineLang,
+      pacingIntents: await this.loadRecentPacingIntents(
+        bookDir,
+        chapterNumber,
+        writeInput.chapterIntentData,
+      ),
     });
     auditResult = {
       ...auditResult,
@@ -3513,6 +3519,28 @@ export class PipelineRunner {
       degradedIssues = stateEvidenceIssues;
     }
 
+    const expectedHookOps = writeInput.chapterIntentData?.expectedHookOps;
+    if (expectedHookOps) {
+      const hookIntentIssues = validateExpectedHookOps({
+        expected: expectedHookOps,
+        actual: persistenceOutput.runtimeStateDelta?.hookOps
+          ?? { upsert: [], mention: [], resolve: [], defer: [] },
+        runtimeHooks: persistenceOutput.runtimeStateSnapshot?.hooks.hooks ?? [],
+        acceptanceCriteria: writeInput.chapterIntentData?.acceptanceCriteria ?? [],
+        contentHash: computeChapterContentHash(finalContent),
+      });
+      if (hookIntentIssues.length > 0) {
+        const hasVerifiedContradiction = hookIntentIssues.some(
+          (issue) => issue.severity === "critical" && issue.verification === "verified",
+        );
+        auditResult = {
+          ...auditResult,
+          ...(hasVerifiedContradiction ? { passed: false, decision: "fail" as const } : {}),
+          issues: [...auditResult.issues, ...hookIntentIssues],
+        };
+      }
+    }
+
     // 4.2 Final paragraph shape check on persisted content (post-normalize, post-revise)
     {
       const {
@@ -3588,14 +3616,15 @@ export class PipelineRunner {
         this.commitCanonicalChapterFileSet(bookDir, fileSet, updatedIndex),
       markBookActiveIfNeeded: () => this.runDerivedStep(stageLanguage, "mark book active", () =>
         this.markBookActiveIfNeeded(bookId)),
-      persistAuditDriftGuidance: (issues) => this.runDerivedStep(
+      persistAuditDriftGuidance: (_issues) => this.runDerivedStep(
         stageLanguage,
         "persist audit drift guidance",
         () => this.persistAuditDriftGuidance({
           bookDir,
+          bookId,
           chapterNumber,
-          issues,
           language: stageLanguage,
+          suppressProjection: resolvedStatus === "state-degraded",
         }),
       ),
       snapshotState: () => this.runDerivedStep(stageLanguage, "snapshot state", () =>
@@ -4577,6 +4606,36 @@ ${matrix}`,
   // Helpers
   // ---------------------------------------------------------------------------
 
+  private async loadRecentPacingIntents(
+    bookDir: string,
+    chapterNumber: number,
+    currentIntent?: ChapterIntent,
+  ): Promise<Array<{
+    readonly chapter: number;
+    readonly pacingCode: ChapterIntent["pacingCode"];
+    readonly pacingOverrideReason?: string;
+  }>> {
+    const firstChapter = Math.max(1, chapterNumber - 3);
+    const chapters = Array.from(
+      { length: chapterNumber - firstChapter + 1 },
+      (_, index) => firstChapter + index,
+    );
+    const intents = await Promise.all(chapters.map(async (chapter) => {
+      if (currentIntent?.chapter === chapter) {
+        return currentIntent;
+      }
+      return (await loadPersistedPlan(bookDir, chapter))?.intent;
+    }));
+
+    return intents.flatMap((intent) => intent ? [{
+      chapter: intent.chapter,
+      pacingCode: intent.pacingCode,
+      ...(intent.pacingOverrideReason
+        ? { pacingOverrideReason: intent.pacingOverrideReason }
+        : {}),
+    }] : []);
+  }
+
   private async prepareWriteInput(
     book: BookConfig,
     bookDir: string,
@@ -4918,9 +4977,10 @@ ${matrix}`,
 
   private async persistAuditDriftGuidance(params: {
     readonly bookDir: string;
+    readonly bookId: string;
     readonly chapterNumber: number;
-    readonly issues: ReadonlyArray<AuditIssue>;
     readonly language: LengthLanguage;
+    readonly suppressProjection?: boolean;
   }): Promise<void> {
     const storyDir = join(params.bookDir, "story");
     const driftPath = join(storyDir, "audit_drift.md");
@@ -4932,7 +4992,19 @@ ${matrix}`,
       await writeFile(statePath, sanitizedState, "utf-8");
     }
 
-    if (params.issues.length === 0) {
+    if (params.suppressProjection) {
+      await rm(driftPath, { force: true }).catch(() => undefined);
+      return;
+    }
+
+    const projectedIssues = await loadAuditDriftProjection({
+      bookDir: params.bookDir,
+      bookId: params.bookId,
+      currentChapter: params.chapterNumber,
+      maxFindings: 3,
+    });
+
+    if (projectedIssues.length === 0) {
       await rm(driftPath, { force: true }).catch(() => undefined);
       return;
     }
@@ -4952,7 +5024,7 @@ ${matrix}`,
         zh: `> 第${params.chapterNumber}章审计发现以下问题，下一章写作时必须避免：`,
         en: `> Chapter ${params.chapterNumber} audit found the following issues to avoid in the next chapter:`,
       }),
-      ...params.issues.map((issue) => `> - [${issue.severity}] ${issue.category}: ${issue.description}`),
+      ...projectedIssues.map((issue) => `> - [${issue.severity}] ${issue.category}: ${issue.description}`),
       "",
     ].join("\n");
 
@@ -5069,6 +5141,10 @@ ${matrix}`,
       chapterNumber: params.chapterNumber,
       chapterContent: params.chapterContent,
       language: params.language,
+      pacingIntents: await this.loadRecentPacingIntents(
+        params.bookDir,
+        params.chapterNumber,
+      ),
     });
     const hasBlockedWords = sensitiveResult.found.some((f) => f.severity === "block");
     const deterministicFindings: ReadonlyArray<AuditIssue> = [

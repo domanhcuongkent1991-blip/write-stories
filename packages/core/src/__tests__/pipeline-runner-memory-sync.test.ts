@@ -175,6 +175,9 @@ describe("PipelineRunner structured-state memory sync", () => {
         mustKeep: [],
         mustAvoid: [],
         styleEmphasis: [],
+        acceptanceCriteria: [],
+        pacingCode: "unknown" as const,
+        expectedHookOps: { upsert: [], mention: [], resolve: [], defer: [] },
       },
       memo: {
         chapter: input.chapterNumber,
@@ -228,7 +231,6 @@ describe("PipelineRunner structured-state memory sync", () => {
       projectRoot: root,
     });
 
-    const originalSaveChapter = WriterAgent.prototype.saveChapter;
     vi.spyOn(WriterAgent.prototype, "writeChapter").mockResolvedValue({
       chapterNumber: 1,
       title: "Structured Chapter",
@@ -284,6 +286,42 @@ describe("PipelineRunner structured-state memory sync", () => {
         characterMatrixOps: [],
         notes: [],
       },
+      runtimeStateSnapshot: {
+        manifest: {
+          schemaVersion: 2,
+          language: "en",
+          lastAppliedChapter: 1,
+          projectionVersion: 1,
+          migrationWarnings: [],
+        },
+        currentState: {
+          chapter: 1,
+          facts: [],
+        },
+        hooks: {
+          hooks: [{
+            hookId: "structured-hook",
+            startChapter: 1,
+            type: "relationship",
+            status: "open",
+            lastAdvancedChapter: 1,
+            expectedPayoff: "Reveal why the mentor vanished.",
+            notes: "Structured hook should win.",
+          }],
+        },
+        chapterSummaries: {
+          rows: [{
+            chapter: 1,
+            title: "Structured Summary",
+            characters: "Lin Yue",
+            events: "Lin Yue follows the debt into the watchtower archive.",
+            stateChanges: "The debt trail sharpens.",
+            hookActivity: "structured-hook advanced",
+            mood: "tense",
+            chapterType: "investigation",
+          }],
+        },
+      },
     });
     vi.spyOn(ContinuityAuditor.prototype, "auditChapter").mockResolvedValue({
       passed: true,
@@ -296,36 +334,31 @@ describe("PipelineRunner structured-state memory sync", () => {
       warnings: [],
       passed: true,
     });
-    vi.spyOn(WriterAgent.prototype, "saveChapter").mockImplementation(async function (
-      this: InstanceType<typeof WriterAgent>,
-      bookDirArg,
-      output,
-      numericalSystem,
-      language,
-    ) {
-      await originalSaveChapter.call(this, bookDirArg, output, numericalSystem, language);
-      await Promise.all([
-        writeFile(
-          join(bookDirArg, "story", "pending_hooks.md"),
-          [
-            "| hook_id | start_chapter | type | status | last_advanced | expected_payoff | notes |",
-            "| --- | --- | --- | --- | --- | --- | --- |",
-            "| markdown-drift-hook | 1 | mystery | open | 1 | 5 | Drifted markdown hook |",
-            "",
-          ].join("\n"),
-          "utf-8",
-        ),
-        writeFile(
-          join(bookDirArg, "story", "chapter_summaries.md"),
-          [
-            "| chapter | title | characters | events | stateChanges | hookActivity | mood | chapterType |",
-            "| --- | --- | --- | --- | --- | --- | --- | --- |",
-            "| 1 | Markdown Drift Summary | Lin Yue | Drifted markdown event | Drifted markdown state | markdown-drift-hook advanced | flat | fallback |",
-            "",
-          ].join("\n"),
-          "utf-8",
-        ),
-      ]);
+    Object.assign(runner as object, {
+      persistAuditDriftGuidance: vi.fn(async () => {
+        await Promise.all([
+          writeFile(
+            join(bookDir, "story", "pending_hooks.md"),
+            [
+              "| hook_id | start_chapter | type | status | last_advanced | expected_payoff | notes |",
+              "| --- | --- | --- | --- | --- | --- | --- |",
+              "| markdown-drift-hook | 1 | mystery | open | 1 | 5 | Drifted markdown hook |",
+              "",
+            ].join("\n"),
+            "utf-8",
+          ),
+          writeFile(
+            join(bookDir, "story", "chapter_summaries.md"),
+            [
+              "| chapter | title | characters | events | stateChanges | hookActivity | mood | chapterType |",
+              "| --- | --- | --- | --- | --- | --- | --- | --- |",
+              "| 1 | Markdown Drift Summary | Lin Yue | Drifted markdown event | Drifted markdown state | markdown-drift-hook advanced | flat | fallback |",
+              "",
+            ].join("\n"),
+            "utf-8",
+          ),
+        ]);
+      }),
     });
 
     await runner.writeNextChapter(bookId);

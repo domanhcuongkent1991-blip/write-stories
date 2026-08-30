@@ -1,6 +1,7 @@
 import { readFile, readdir } from "node:fs/promises";
 import { join } from "node:path";
 import { analyzeChapterCadence } from "./chapter-cadence.js";
+import type { PacingCode } from "../models/input-governance.js";
 import {
   CADENCE_WINDOW_DEFAULTS,
   LONG_SPAN_FATIGUE_THRESHOLDS,
@@ -11,6 +12,10 @@ export interface LongSpanFatigueIssue {
   readonly category: string;
   readonly description: string;
   readonly suggestion: string;
+  readonly source?: "deterministic";
+  readonly verification?: "verified";
+  readonly repairTarget?: "next-plan";
+  readonly lifecycle?: "open";
 }
 
 export interface AnalyzeLongSpanFatigueInput {
@@ -19,6 +24,11 @@ export interface AnalyzeLongSpanFatigueInput {
   readonly chapterContent: string;
   readonly chapterSummary?: string;
   readonly language?: "zh" | "en";
+  readonly pacingIntents?: ReadonlyArray<{
+    readonly chapter: number;
+    readonly pacingCode: PacingCode;
+    readonly pacingOverrideReason?: string;
+  }>;
 }
 
 export interface EnglishVarianceBrief {
@@ -102,9 +112,9 @@ export async function analyzeLongSpanFatigue(
     language,
   });
 
-  const chapterTypeIssue = buildChapterTypeIssue(cadence, language);
-  if (chapterTypeIssue) {
-    issues.push(chapterTypeIssue);
+  const pacingIssue = buildPacingIssue(input.pacingIntents ?? [], input.chapterNumber, language);
+  if (pacingIssue) {
+    issues.push(pacingIssue);
   }
 
   const moodIssue = buildMoodIssue(cadence, language);
@@ -206,29 +216,52 @@ function parseSummaryRow(line: string): SummaryRow | null {
   };
 }
 
-function buildChapterTypeIssue(
-  cadence: ReturnType<typeof analyzeChapterCadence>,
+function buildPacingIssue(
+  pacingIntents: AnalyzeLongSpanFatigueInput["pacingIntents"],
+  currentChapter: number,
   language: "zh" | "en",
 ): LongSpanFatigueIssue | null {
-  if (cadence.scenePressure?.pressure !== "high") {
+  const byChapter = new Map(
+    (pacingIntents ?? [])
+      .filter((intent) => intent.chapter <= currentChapter)
+      .map((intent) => [intent.chapter, intent] as const),
+  );
+  const window = [currentChapter - 3, currentChapter - 2, currentChapter - 1, currentChapter]
+    .map((chapter) => byChapter.get(chapter));
+  if (window.some((intent) => !intent || intent.pacingCode === "unknown")) {
     return null;
   }
-  const { repeatedType, streak } = cadence.scenePressure;
+  const typedWindow = window as Array<NonNullable<(typeof window)[number]>>;
+  const repeatedCode = typedWindow[0]!.pacingCode;
+  if (!typedWindow.every((intent) => intent.pacingCode === repeatedCode)) {
+    return null;
+  }
+  if ((typedWindow.at(-1)?.pacingOverrideReason ?? "").trim().length > 0) {
+    return null;
+  }
 
   if (language === "en") {
     return {
       severity: "warning",
       category: "Pacing Monotony",
-      description: `The last ${streak} chapter types have stayed on ${repeatedType}, which suggests macro pacing monotony.`,
+      description: `Four consecutive chapters use the explicit pacing code "${repeatedCode}", exceeding the supported streak of three.`,
       suggestion: "Switch the next chapter's function instead of extending the same beat again. Rotate setup, payoff, reversal, and fallout more deliberately.",
+      source: "deterministic",
+      verification: "verified",
+      repairTarget: "next-plan",
+      lifecycle: "open",
     };
   }
 
   return {
     severity: "warning",
     category: "节奏单调",
-    description: `最近${streak}章章节类型持续停留在“${repeatedType}”，长篇节奏可能开始固化。`,
+    description: `连续四章使用结构化节奏代码“${repeatedCode}”，超过最多连续三章的约束。`,
     suggestion: "下一章应切换章节功能，不要连续重复同一种布局/推进节拍。",
+    source: "deterministic",
+    verification: "verified",
+    repairTarget: "next-plan",
+    lifecycle: "open",
   };
 }
 

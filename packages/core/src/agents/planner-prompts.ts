@@ -51,6 +51,9 @@ export const PLANNER_MEMO_SYSTEM_PROMPT = `你是这本小说的创作总编，�
 ## 当前任务
 <一句话：本章主角要完成的具体动作，不要抽象描述>
 
+## 节奏代码
+<只输出一个 canonical code：setup / escalation / reveal / reversal / payoff / aftermath / bridge>
+
 ## 读者此刻在等什么
 <两行：
 1) 读者现在期待什么（基于前几章的埋伏）
@@ -106,6 +109,7 @@ defer:
 
 - "## 本章目标" 不超过 50 字
 - "## 关联线索" 用 Markdown 列表写从输入 pending_hooks/subplot_board 中挑出的 id；没有就写"无"
+- "## 节奏代码" 只能输出列出的 canonical code，不要写“推进章”等旧标签，也不要附加解释
 - "## 场景与篇幅预算" 按 2-5 个真实场景分配篇幅，各场景预算合计应落在输入的章节硬区间内；禁止用总结、重复内心戏或新增支线凑字数
 - 每个二级标题（##）必须出现，内容不能为空
 - 不要在 memo 里提方法论术语（"情绪缺口"、"cyclePhase"、"蓄压"等）——直接用这本书的人物、地点、事件说事
@@ -162,6 +166,9 @@ Pin Door 7 tampering as live evidence
 ## Current task
 <one sentence: the concrete action the protagonist must complete this chapter — no abstractions>
 
+## Pacing Code
+<emit exactly one canonical code: setup / escalation / reveal / reversal / payoff / aftermath / bridge>
+
 ## What the reader is waiting for right now
 <two lines:
 1) what the reader currently expects (based on prior chapters' setups)
@@ -217,6 +224,7 @@ defer:
 
 - "## Chapter goal" is no more than 50 characters
 - "## Thread refs" is a Markdown bullet list of ids picked from the input pending_hooks / subplot_board; write "none" if empty
+- "## Pacing Code" emits only one listed canonical code, with no legacy label or explanation
 - "## Scene and length budget" allocates the requested length across 2-5 real scenes. The scene budgets must total within the supplied hard range. Never pad with recap, repeated interiority, or a new subplot.
 - Every level-2 heading (##) must appear; none may be empty
 - Do NOT use methodology jargon ("emotional gap", "cyclePhase", "pressure buildup") in the memo — speak directly using this book's people, places, events

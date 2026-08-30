@@ -62,7 +62,8 @@ export interface AuditIssue {
   readonly evidence?: AuditEvidence;
   readonly acceptanceCriteria?: ReadonlyArray<string>;
   readonly repairTarget?: "prose" | "runtime-state" | "next-plan";
-  readonly lifecycle?: "open" | "resolved" | "superseded";
+  readonly lifecycle?: "open" | "resolved" | "superseded" | "expired";
+  readonly ttlChapters?: number;
   readonly confidence?: number;
 }
 
@@ -93,7 +94,10 @@ function normalizeParsedIssue(issue: Record<string, unknown>, language: PromptLa
       : undefined,
     acceptanceCriteria: Array.isArray(issue.acceptanceCriteria) ? issue.acceptanceCriteria.filter((v): v is string => typeof v === "string") : undefined,
     repairTarget: issue.repairTarget === "prose" || issue.repairTarget === "runtime-state" || issue.repairTarget === "next-plan" ? issue.repairTarget : undefined,
-    lifecycle: issue.lifecycle === "open" || issue.lifecycle === "resolved" || issue.lifecycle === "superseded" ? issue.lifecycle : undefined,
+    lifecycle: issue.lifecycle === "open" || issue.lifecycle === "resolved" || issue.lifecycle === "superseded" || issue.lifecycle === "expired" ? issue.lifecycle : undefined,
+    ttlChapters: typeof issue.ttlChapters === "number" && Number.isInteger(issue.ttlChapters) && issue.ttlChapters > 0
+      ? issue.ttlChapters
+      : undefined,
     confidence: typeof issue.confidence === "number" && Number.isFinite(issue.confidence) ? Math.max(0, Math.min(1, issue.confidence)) : undefined,
   };
 }

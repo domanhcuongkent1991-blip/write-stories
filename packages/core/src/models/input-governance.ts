@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { HookOpsSchema } from "./runtime-state.js";
 
 export const ChapterMemoSchema = z.object({
   chapter: z.number().int().min(1),
@@ -10,6 +11,19 @@ export const ChapterMemoSchema = z.object({
 
 export type ChapterMemo = z.infer<typeof ChapterMemoSchema>;
 
+export const PacingCodeSchema = z.enum([
+  "setup",
+  "escalation",
+  "reveal",
+  "reversal",
+  "payoff",
+  "aftermath",
+  "bridge",
+  "unknown",
+]);
+
+export type PacingCode = z.infer<typeof PacingCodeSchema>;
+
 export const ChapterIntentSchema = z.object({
   chapter: z.number().int().min(1),
   goal: z.string().min(1),
@@ -18,6 +32,15 @@ export const ChapterIntentSchema = z.object({
   mustKeep: z.array(z.string()).default([]),
   mustAvoid: z.array(z.string()).default([]),
   styleEmphasis: z.array(z.string()).default([]),
+  acceptanceCriteria: z.array(z.string()).default([]),
+  pacingCode: PacingCodeSchema.default("unknown"),
+  pacingOverrideReason: z.string().trim().min(1).optional(),
+  expectedHookOps: HookOpsSchema.default({
+    upsert: [],
+    mention: [],
+    resolve: [],
+    defer: [],
+  }),
 });
 
 export type ChapterIntent = z.infer<typeof ChapterIntentSchema>;

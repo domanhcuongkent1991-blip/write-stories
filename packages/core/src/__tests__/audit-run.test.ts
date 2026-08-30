@@ -123,4 +123,24 @@ describe("AuditRunV1", () => {
     expect(value.parseFailed).toBe(true);
     expect(JSON.parse(serializeAuditRun(value))).toMatchObject({ parseFailed: true });
   });
+
+  it("round-trips optional drift lifecycle and TTL while legacy findings remain valid", () => {
+    const legacy = run();
+    expect(AuditRunV1Schema.parse(JSON.parse(serializeAuditRun(legacy))).findings[0])
+      .not.toHaveProperty("ttlChapters");
+
+    const value = {
+      ...legacy,
+      findings: [{
+        ...legacy.findings[0],
+        lifecycle: "expired" as const,
+        ttlChapters: 2,
+      }],
+    };
+
+    expect(JSON.parse(serializeAuditRun(value)).findings[0]).toMatchObject({
+      lifecycle: "expired",
+      ttlChapters: 2,
+    });
+  });
 });

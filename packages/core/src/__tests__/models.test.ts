@@ -543,6 +543,15 @@ describe("ChapterIntentSchema", () => {
       mustKeep: ["Protagonist remains injured"],
       mustAvoid: ["Do not reveal the mastermind"],
       styleEmphasis: ["dialogue tension", "character conflict"],
+      acceptanceCriteria: ["H019 is advanced through an observable action"],
+      pacingCode: "escalation",
+      pacingOverrideReason: "The siege requires one additional escalation beat.",
+      expectedHookOps: {
+        mention: ["H019"],
+        resolve: [],
+        defer: [],
+        upsert: [],
+      },
     });
 
     expect(result.chapter).toBe(12);
@@ -550,6 +559,10 @@ describe("ChapterIntentSchema", () => {
     expect(result.outlineNode).toBe("Volume 2 / Chapter 12");
     expect(result.arcContext).toContain("Volume arc");
     expect(result.mustKeep).toContain("Protagonist remains injured");
+    expect(result.acceptanceCriteria).toEqual(["H019 is advanced through an observable action"]);
+    expect(result.pacingCode).toBe("escalation");
+    expect(result.pacingOverrideReason).toContain("siege");
+    expect(result.expectedHookOps.mention).toEqual(["H019"]);
   });
 
   it("defaults optional arrays to empty", () => {
@@ -563,6 +576,10 @@ describe("ChapterIntentSchema", () => {
     expect(result.mustKeep).toEqual([]);
     expect(result.mustAvoid).toEqual([]);
     expect(result.styleEmphasis).toEqual([]);
+    expect(result.acceptanceCriteria).toEqual([]);
+    expect(result.pacingCode).toBe("unknown");
+    expect(result.pacingOverrideReason).toBeUndefined();
+    expect(result.expectedHookOps).toEqual({ upsert: [], mention: [], resolve: [], defer: [] });
   });
 
   it("rejects invalid chapter numbers", () => {

@@ -29,7 +29,8 @@ const AuditIssueSchema = z.object({
   }).optional(),
   acceptanceCriteria: z.array(z.string()).optional(),
   repairTarget: z.enum(["prose", "runtime-state", "next-plan"]).optional(),
-  lifecycle: z.enum(["open", "resolved", "superseded"]).optional(),
+  lifecycle: z.enum(["open", "resolved", "superseded", "expired"]).optional(),
+  ttlChapters: z.number().int().positive().optional(),
   confidence: z.number().min(0).max(1).optional(),
 }).strict();
 

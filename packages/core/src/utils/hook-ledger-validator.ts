@@ -1,7 +1,10 @@
+import type { AuditIssue } from "../agents/continuity.js";
+import type { HookOps } from "../models/runtime-state.js";
+
 /**
- * Phase 9-3: hard gate that a chapter draft actually acts on the hook ledger
- * the planner declared in the memo's "## 本章 hook 账" / "## Hook ledger for
- * this chapter" section.
+ * Legacy prose heuristic for the memo's "## 本章 hook 账" / "## Hook ledger
+ * for this chapter" section. Stable-ID runtime hook operations are the
+ * authoritative validator; these keyword checks can only request review.
  *
  * The planner commits, per chapter, to:
  *   - advance: <hook_id> "name" → state-change
@@ -14,12 +17,7 @@
  * hook_id like "H007" — writers don't embed IDs in prose.
  */
 
-export interface HookLedgerViolation {
-  readonly severity: "critical" | "warning";
-  readonly category: string;
-  readonly description: string;
-  readonly suggestion: string;
-}
+export type HookLedgerViolation = AuditIssue;
 
 export interface HookLedgerEntry {
   readonly id: string;
@@ -136,6 +134,9 @@ export function validateHookLedger(
         category: "hook 账需语义复核",
         description: `memo 在 advance/resolve 里声明要处理 ${entry.id}，但确定性关键词检查没有找到对应落点`,
         suggestion: `复核正文是否已经用动作、对话、物件或信息变化推进了 ${entry.id}；若没有，请补具体场景，若已推进，可忽略这条确定性提示`,
+        source: "deterministic",
+        verification: "unverified",
+        repairTarget: "prose",
       });
     }
   }
@@ -149,14 +150,47 @@ export function validateHookLedger(
   const openedCount = ledger.open.length + ledger.newOpenCount;
   if (resolvedCount > 0 && openedCount < resolvedCount) {
     violations.push({
-      severity: "critical",
+      severity: "warning",
       category: "hook 账揭 1 埋 1 违规",
       description: `本章 resolve 了 ${resolvedCount} 个钩子，但 open 只有 ${openedCount} 个新钩子。只揭不埋会让读者豁然开朗后索然无味，本书的前进拉力被削弱。`,
       suggestion: `在 memo 的 open 段下至少再埋 ${resolvedCount - openedCount} 个与本章已揭钩子相关的新钩子。新钩子最好与已揭钩子彼此关联，不要凭空冒出来。`,
+      source: "deterministic",
+      verification: "unverified",
+      repairTarget: "next-plan",
     });
   }
 
   return violations;
+}
+
+export function hookOpsFromLedger(memoBody: string): HookOps {
+  const ledger = parseHookLedger(memoBody);
+  return {
+    upsert: [],
+    mention: dedupeById(ledger.advance).map((entry) => entry.id),
+    resolve: dedupeById(ledger.resolve).map((entry) => entry.id),
+    defer: dedupeById(ledger.defer).map((entry) => entry.id),
+  };
+}
+
+export function acceptanceCriteriaFromHookOps(
+  hookOps: HookOps,
+  language: "zh" | "en",
+): string[] {
+  const actionLabel = language === "en"
+    ? { mention: "advanced", resolve: "resolved", defer: "explicitly deferred" }
+    : { mention: "通过可观察动作推进", resolve: "在运行时真相中回收", defer: "在运行时真相中明确延后" };
+  return [
+    ...hookOps.mention.map((hookId) => language === "en"
+      ? `Hook ${hookId} is ${actionLabel.mention} through observable chapter action.`
+      : `伏笔 ${hookId} 必须${actionLabel.mention}。`),
+    ...hookOps.resolve.map((hookId) => language === "en"
+      ? `Hook ${hookId} is ${actionLabel.resolve} in runtime truth.`
+      : `伏笔 ${hookId} 必须${actionLabel.resolve}。`),
+    ...hookOps.defer.map((hookId) => language === "en"
+      ? `Hook ${hookId} is ${actionLabel.defer} in runtime truth.`
+      : `伏笔 ${hookId} 必须${actionLabel.defer}。`),
+  ];
 }
 
 function extractLedgerSection(memoBody: string): string | undefined {

@@ -44,6 +44,7 @@ import {
 import * as atomicFileSetModule from "../utils/atomic-file-set.js";
 import type { AtomicFileWrite } from "../utils/atomic-file-set.js";
 import * as hookPromotionModule from "../utils/hook-promotion.js";
+import { loadPersistedPlan, savePersistedPlan } from "../pipeline/persisted-governed-plan.js";
 
 const require = createRequire(import.meta.url);
 const hasNodeSqlite = (() => {
@@ -63,6 +64,65 @@ const ZERO_USAGE = {
   completionTokens: 0,
   totalTokens: 0,
 } as const;
+
+const PACING_TEST_MEMO_BODY = `## 当前任务
+Advance the governed chapter through one concrete causal change in the active conflict.
+
+## 场景与篇幅预算
+- One bounded scene carries the conflict forward without adding an unrelated subplot.
+
+## 读者此刻在等什么
+The reader is waiting for the next causal turn and visible evidence of its consequence.
+
+## 该兑现的 / 暂不掀的
+- Keep the current hook stable while paying off only the evidence scheduled for this chapter.
+
+## 日常/过渡承担什么任务
+- Carry state forward and preserve the established transition between the two conflict beats.
+
+## 关键抉择过三连问
+The protagonist makes a motivated choice that fits the present goal, interests, and characterization.
+
+## 章尾必须发生的改变
+- The situation changes in a way that leaves a concrete state difference for the next chapter.
+
+## 本章 hook 账
+No hook operation is required beyond the typed operations stored in the governed chapter intent.
+
+## 不要做
+- Do not contradict established state.`;
+
+async function savePacingPlan(
+  bookDir: string,
+  chapter: number,
+  pacingCode: "setup" | "escalation" | "reveal" | "reversal" | "payoff" | "aftermath" | "bridge" | "unknown",
+  pacingOverrideReason?: string,
+): Promise<void> {
+  await mkdir(join(bookDir, "story", "runtime"), { recursive: true });
+  await savePersistedPlan(bookDir, {
+    intent: {
+      chapter,
+      goal: "Advance the governed chapter.",
+      mustKeep: [],
+      mustAvoid: [],
+      styleEmphasis: [],
+      acceptanceCriteria: [],
+      pacingCode,
+      ...(pacingOverrideReason ? { pacingOverrideReason } : {}),
+      expectedHookOps: { upsert: [], mention: [], resolve: [], defer: [] },
+    },
+    memo: {
+      chapter,
+      goal: "Advance the governed chapter.",
+      isGoldenOpening: false,
+      body: PACING_TEST_MEMO_BODY,
+      threadRefs: [],
+    },
+    intentMarkdown: "# Chapter Intent\n",
+    plannerInputs: [],
+    runtimePath: join(bookDir, "story", "runtime", `chapter-${String(chapter).padStart(4, "0")}.intent.md`),
+  });
+}
 
 describe("buildImportFoundationSource", () => {
   it("selects complete opening, middle, and ending chapters without truncating their text", () => {
@@ -489,6 +549,9 @@ describe("PipelineRunner", () => {
           mustKeep: [],
           mustAvoid: [],
           styleEmphasis: [],
+          acceptanceCriteria: [],
+          pacingCode: "unknown" as const,
+          expectedHookOps: { upsert: [], mention: [], resolve: [], defer: [] },
         },
         memo,
         intentMarkdown,
@@ -2134,6 +2197,9 @@ describe("PipelineRunner", () => {
           mustKeep: ["Lin Yue still hides the broken oath token."],
           mustAvoid: [],
           styleEmphasis: [],
+          acceptanceCriteria: [],
+          pacingCode: "unknown" as const,
+          expectedHookOps: { upsert: [], mention: [], resolve: [], defer: [] },
         },
         memo,
         intentMarkdown,
@@ -3526,6 +3592,9 @@ describe("PipelineRunner", () => {
           mustKeep: [],
           mustAvoid: [],
           styleEmphasis: [],
+          acceptanceCriteria: [],
+          pacingCode: "unknown" as const,
+          expectedHookOps: { upsert: [], mention: [], resolve: [], defer: [] },
         },
         memo: {
           chapter: input.chapterNumber,
@@ -6379,7 +6448,7 @@ describe("PipelineRunner", () => {
 
     await Promise.all([
       writeFile(join(storyDir, "current_state.md"), createStateCard({
-        chapter: 2,
+        chapter: 3,
         location: "Ashen ferry crossing",
         protagonistState: "Lin Yue still hides the oath token.",
         goal: "Find the vanished mentor.",
@@ -6395,11 +6464,13 @@ describe("PipelineRunner", () => {
           "|------|------|----------|----------|----------|----------|----------|----------|",
           "| 1 | 旧路 | 林越 | 进城 | 潜伏开始 | 债印未解 | 克制 | 布局 |",
           "| 2 | 暗巷 | 林越 | 试探 | 目标未变 | 债印未解 | 克制 | 布局 |",
+          "| 3 | 灰门 | 林越 | 逼近 | 风险升级 | 债印未解 | 克制 | 推进章 |",
         ].join("\n"),
         "utf-8",
       ),
       writeFile(join(state.bookDir(bookId), "chapters", "0001_旧路.md"), "# 第1章 旧路\n\n城门在晨雾里半开。林越顺着石阶慢慢往里走。巷口那盏灯一直没有灭。", "utf-8"),
       writeFile(join(state.bookDir(bookId), "chapters", "0002_暗巷.md"), "# 第2章 暗巷\n\n午后的风掠过墙头。林越没有回头，只是沿着阴影继续向前。墙后的铃声很轻。", "utf-8"),
+      writeFile(join(state.bookDir(bookId), "chapters", "0003_灰门.md"), "# 第3章 灰门\n\n暮色落在门楣上。林越贴着墙继续逼近，门后的脚步声突然停了。", "utf-8"),
     ]);
     await state.saveChapterIndex(bookId, [
       {
@@ -6422,16 +6493,57 @@ describe("PipelineRunner", () => {
         auditIssues: [],
         lengthWarnings: [],
       },
+      {
+        number: 3,
+        title: "灰门",
+        status: "ready-for-review",
+        wordCount: 31,
+        createdAt: now,
+        updatedAt: now,
+        auditIssues: [],
+        lengthWarnings: [],
+      },
     ]);
+
+    await Promise.all([
+      savePacingPlan(state.bookDir(bookId), 1, "escalation"),
+      savePacingPlan(state.bookDir(bookId), 2, "escalation"),
+      savePacingPlan(state.bookDir(bookId), 3, "escalation"),
+    ]);
+    await expect(loadPersistedPlan(state.bookDir(bookId), 1)).resolves.toEqual(
+      expect.objectContaining({ intent: expect.objectContaining({ pacingCode: "escalation" }) }),
+    );
+    vi.spyOn(PlannerAgent.prototype, "planChapter").mockResolvedValueOnce({
+      intent: {
+        chapter: 4,
+        goal: "Escalate the debt trail.",
+        mustKeep: [],
+        mustAvoid: [],
+        styleEmphasis: [],
+        acceptanceCriteria: [],
+        pacingCode: "escalation",
+        expectedHookOps: { upsert: [], mention: [], resolve: [], defer: [] },
+      },
+      memo: {
+        chapter: 4,
+        goal: "Escalate the debt trail.",
+        isGoldenOpening: false,
+        body: PACING_TEST_MEMO_BODY,
+        threadRefs: [],
+      },
+      intentMarkdown: "# Chapter Intent\n",
+      plannerInputs: [],
+      runtimePath: join(storyDir, "runtime", "chapter-0004.intent.md"),
+    });
 
     vi.spyOn(WriterAgent.prototype, "writeChapter").mockResolvedValue(
       createWriterOutput({
-        chapterNumber: 3,
+        chapterNumber: 4,
         title: "回声",
         content: "夜色慢慢压低了屋檐。林越先停在门外，随后才抬手去碰那道旧债印。风从更深的巷子里吹了出来。",
         wordCount: "夜色慢慢压低了屋檐。林越先停在门外，随后才抬手去碰那道旧债印。风从更深的巷子里吹了出来。".length,
         updatedState: createStateCard({
-          chapter: 3,
+          chapter: 4,
           location: "Ashen ferry crossing",
           protagonistState: "Lin Yue still hides the oath token.",
           goal: "Find the vanished mentor.",
@@ -6439,7 +6551,7 @@ describe("PipelineRunner", () => {
         }),
         updatedLedger: "",
         updatedHooks: "# Pending Hooks\n",
-        chapterSummary: "| 3 | 回声 | 林越 | 继续潜伏 | 目标未变 | 债印未解 | 克制 | 布局 |",
+        chapterSummary: "| 4 | 回声 | 林越 | 继续潜伏 | 目标未变 | 债印未解 | 克制 | 推进章 |",
       }),
     );
     vi.spyOn(ContinuityAuditor.prototype, "auditChapter").mockResolvedValue(
@@ -6551,6 +6663,61 @@ describe("PipelineRunner", () => {
           expect.stringContaining("活跃伏笔过多"),
         ]),
       );
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("warns without rolling back canonical files when audit drift projection fails", async () => {
+    const capture = createCaptureLogger();
+    const { root, runner, state, bookId } = await createRunnerFixture({ logger: capture.logger });
+    const bookDir = state.bookDir(bookId);
+    const storyDir = join(bookDir, "story");
+    await Promise.all([
+      writeFile(join(storyDir, "current_state.md"), createStateCard({
+        chapter: 0,
+        location: "Ashen ferry crossing",
+        protagonistState: "Lin Yue still hides the oath token.",
+        goal: "Find the vanished mentor.",
+        conflict: "The debt trail keeps narrowing.",
+      }), "utf-8"),
+      writeFile(join(storyDir, "pending_hooks.md"), "# Pending Hooks\n", "utf-8"),
+      mkdir(join(storyDir, "audit_drift.md"), { recursive: true }),
+    ]);
+    vi.spyOn(WriterAgent.prototype, "writeChapter").mockResolvedValue(createWriterOutput({
+      content: "A bounded chapter body carries the conflict forward safely.",
+      wordCount: 9,
+      updatedState: createStateCard({
+        chapter: 1,
+        location: "Ashen ferry crossing",
+        protagonistState: "Lin Yue still hides the oath token.",
+        goal: "Find the vanished mentor.",
+        conflict: "The debt trail keeps narrowing.",
+      }),
+      hookHealthIssues: [{
+        severity: "warning",
+        category: "hook-health",
+        description: "A useful next-chapter correction must be projected.",
+        suggestion: "Advance the oldest active hook.",
+      }],
+    }));
+    vi.spyOn(ContinuityAuditor.prototype, "auditChapter").mockResolvedValue(createAuditResult({
+      passed: true,
+      issues: [],
+      overallScore: 95,
+    }));
+
+    try {
+      const result = await runner.writeNextChapter(bookId, 9);
+      const index = await state.loadChapterIndex(bookId);
+      const chapterFiles = await readdir(join(bookDir, "chapters"));
+
+      expect(index.some((chapter) => chapter.number === result.chapterNumber)).toBe(true);
+      expect(chapterFiles.some((file) => file.startsWith("0001_") && file.endsWith(".md"))).toBe(true);
+      expect(capture.warnings.some((warning) =>
+        warning.includes("persist audit drift guidance")
+        && (warning.includes("canonical files were preserved") || warning.includes("已保留权威文件"))
+      )).toBe(true);
     } finally {
       await rm(root, { recursive: true, force: true });
     }
@@ -7945,6 +8112,8 @@ describe("PipelineRunner", () => {
       "| 3 | 纸页 | 林越 | 对照纸页 | 压力升高 | none | 冷峻 | 调查 |",
       "",
     ].join("\n"), "utf-8");
+    await Promise.all([1, 2, 3, 4].map((chapter) =>
+      savePacingPlan(bookDir, chapter, "escalation")));
 
     const result = await (
       runner as unknown as {
@@ -7975,7 +8144,7 @@ describe("PipelineRunner", () => {
       book,
       bookDir,
       chapterContent: "林越把纸页摊平，先看角上的水痕，再看最末那道被抹掉的签名。",
-      chapterNumber: 3,
+      chapterNumber: 4,
       language: "zh",
     });
 
@@ -8002,6 +8171,8 @@ describe("PipelineRunner", () => {
       "| 3 | 纸页 | 林越 | 对照纸页 | 压力升高 | none | 冷峻 | 调查 |",
       "",
     ].join("\n"), "utf-8");
+    await Promise.all([1, 2, 3, 4].map((chapter) =>
+      savePacingPlan(bookDir, chapter, "escalation")));
 
     const result = await (
       runner as unknown as {
@@ -8037,7 +8208,7 @@ describe("PipelineRunner", () => {
       book,
       bookDir,
       chapterContent: "林越把纸页摊平，先看角上的水痕，再看最末那道被抹掉的签名。",
-      chapterNumber: 3,
+      chapterNumber: 4,
       language: "zh",
     });
 
@@ -8092,6 +8263,109 @@ describe("PipelineRunner", () => {
       expect(result).toMatchObject({ applied: false, status: "unchanged" });
       expect(result.wordCount).toBe(countChapterLength(originalBody, "en_words"));
       expect(reviseChapter).not.toHaveBeenCalled();
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("fails closed when typed runtime hook evidence contradicts the governed hook intent", async () => {
+    const { root, runner, state, bookId } = await createRunnerFixture();
+    const storyDir = join(state.bookDir(bookId), "story");
+    const hook = {
+      hookId: "mentor-debt",
+      startChapter: 0,
+      type: "mystery",
+      status: "deferred" as const,
+      lastAdvancedChapter: 1,
+      expectedPayoff: "Reveal the mentor's debt.",
+      notes: "Runtime explicitly deferred this hook.",
+    };
+    await Promise.all([
+      writeFile(join(storyDir, "current_state.md"), createStateCard({
+        chapter: 0,
+        location: "Ashen ferry crossing",
+        protagonistState: "Lin Yue still hides the oath token.",
+        goal: "Find the vanished mentor.",
+        conflict: "The debt trail keeps narrowing.",
+      }), "utf-8"),
+      writeFile(join(storyDir, "pending_hooks.md"), "# Pending Hooks\n", "utf-8"),
+    ]);
+    vi.spyOn(PlannerAgent.prototype, "planChapter").mockResolvedValueOnce({
+      intent: {
+        chapter: 1,
+        goal: "Resolve the mentor debt.",
+        mustKeep: [],
+        mustAvoid: [],
+        styleEmphasis: [],
+        acceptanceCriteria: ["Hook mentor-debt must be resolved in typed runtime state."],
+        pacingCode: "payoff",
+        expectedHookOps: { upsert: [], mention: [], resolve: ["mentor-debt"], defer: [] },
+      },
+      memo: {
+        chapter: 1,
+        goal: "Resolve the mentor debt.",
+        isGoldenOpening: false,
+        body: "",
+        threadRefs: [],
+      },
+      intentMarkdown: "# Chapter Intent\n",
+      plannerInputs: [],
+      runtimePath: join(storyDir, "runtime", "chapter-0001.intent.md"),
+    });
+    vi.spyOn(WriterAgent.prototype, "writeChapter").mockResolvedValue(createWriterOutput({
+      runtimeStateDelta: {
+        chapter: 1,
+        hookOps: { upsert: [], mention: [], resolve: [], defer: ["mentor-debt"] },
+        newHookCandidates: [],
+        chapterSummary: {
+          chapter: 1,
+          title: "Test Chapter",
+          characters: "Lin Yue",
+          events: "The debt is delayed.",
+          stateChanges: "None",
+          hookActivity: "mentor-debt deferred",
+          mood: "tense",
+          chapterType: "mainline",
+        },
+        subplotOps: [],
+        emotionalArcOps: [],
+        characterMatrixOps: [],
+        notes: [],
+      },
+      runtimeStateSnapshot: {
+        manifest: {
+          schemaVersion: 2,
+          language: "zh",
+          lastAppliedChapter: 1,
+          projectionVersion: 1,
+          migrationWarnings: [],
+        },
+        currentState: { chapter: 1, facts: [] },
+        hooks: { hooks: [hook] },
+        chapterSummaries: { rows: [] },
+      },
+      updatedHooks: "# Pending Hooks\n",
+    }));
+    vi.spyOn(ContinuityAuditor.prototype, "auditChapter").mockResolvedValue(createAuditResult({
+      passed: true,
+      issues: [],
+      summary: "LLM found no issue.",
+      overallScore: 95,
+    }));
+
+    try {
+      const result = await runner.writeNextChapter(bookId, 25);
+      const contradiction = result.auditResult.issues.find(
+        (issue) => issue.category === "hook-runtime-contradiction",
+      );
+
+      expect(result.status).toBe("audit-failed");
+      expect(contradiction).toEqual(expect.objectContaining({
+        severity: "critical",
+        verification: "verified",
+        acceptanceCriteria: ["Hook mentor-debt must be resolved in typed runtime state."],
+        evidence: expect.objectContaining({ stateRef: "runtime:hook:mentor-debt" }),
+      }));
     } finally {
       await rm(root, { recursive: true, force: true });
     }
