@@ -1,11 +1,13 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { loadProjectConfig } from "../utils/config-loader.js";
 import { resolveServiceModel } from "../llm/service-resolver.js";
 import { chatCompletion, createLLMClient, LLMError } from "../llm/provider.js";
 
-const TEST_PARENT = "C:/tmp/CodexScratch/2026-08-30-phase-a-offline-evidence-45356b6-1914/test-tmp";
+const TEST_PARENT = process.env.INKOS_PHASE_A_TEST_ROOT
+  ?? join(tmpdir(), "inkos-phase-a-internal-routing");
 const SENTINEL_KEY = "unit-test-credential";
 const ENV_KEYS = [
   "INKOS_LLM_SERVICE",
@@ -121,9 +123,9 @@ describe("Phase A Internal custom routing characterization", () => {
     expect(client._piModel?.provider).toBe("openai");
     expect(client._piModel?.api).toBe("openai-completions");
     expect(client._piModel?.baseUrl).toBe("http://localhost:56154/v1");
-    expect(resolved.apiKey).toBe(SENTINEL_KEY);
-    expect(client._apiKey).toBe(SENTINEL_KEY);
-    expect(resolved.apiKey).toBe(client._apiKey);
+    expect(resolved.apiKey === SENTINEL_KEY).toBe(true);
+    expect(client._apiKey === SENTINEL_KEY).toBe(true);
+    expect(resolved.apiKey === client._apiKey).toBe(true);
     expect(resolved.model.id).toBe("gpt-5-6-luna");
     expect(resolved.model.provider).toBe("openai");
     expect(resolved.model.api).toBe("openai-completions");
@@ -256,9 +258,9 @@ describe("Phase A Internal custom routing characterization", () => {
     const internal = await resolveServiceModel("custom:Internal", "gpt-5-6-luna", root, "http://localhost:56154/v1", "chat");
     const other = await resolveServiceModel("custom:Other", "other-model", root, "http://localhost:56155/v1", "chat");
 
-    expect(internal.apiKey).toBe(SENTINEL_KEY);
-    expect(other.apiKey).toBe("other-unit-credential");
-    expect(internal.apiKey).not.toBe(other.apiKey);
+    expect(internal.apiKey === SENTINEL_KEY).toBe(true);
+    expect(other.apiKey === "other-unit-credential").toBe(true);
+    expect(internal.apiKey !== other.apiKey).toBe(true);
     expect(internal.model.id).toBe("gpt-5-6-luna");
     expect(other.model.id).toBe("other-model");
     expect(internal.model.id).not.toBe(other.model.id);
