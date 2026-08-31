@@ -52,7 +52,7 @@ Agent 2 must not modify the spelling catalog, repair-hint contract, Reviser prom
 
 ## Task 1: Add the typed repair-hint contract
 
-**Owner:** Agent 1  
+**Owner:** Agent 1
 **Files:** Create `packages/core/src/models/repair-hint.ts`; modify `post-write-validator.ts`, `continuity.ts`, `audit-run.ts`, `index.ts`; tests under `packages/core/src/__tests__/`.
 
 - [ ] **Step 1: Add failing contract tests**
@@ -100,7 +100,7 @@ git commit -m "feat: preserve structured Vietnamese repair hints"
 
 ## Task 2: Implement deterministic Vietnamese spelling findings
 
-**Owner:** Agent 1  
+**Owner:** Agent 1
 **Files:** Create `packages/core/src/agents/vietnamese-spelling-catalog.ts`; modify `vietnamese-surface-validator.ts`; tests for validator.
 
 - [ ] **Step 1: Add red tests for the three known errors**
@@ -138,7 +138,7 @@ git commit -m "feat: block known Vietnamese spelling errors"
 
 ## Task 3: Route spelling hints through Reviser safely
 
-**Owner:** Agent 1  
+**Owner:** Agent 1
 **Files:** Modify `packages/core/src/agents/reviser.ts` and, only if required for occurrence-aware exact matching, `packages/core/src/utils/spot-fix-patches.ts`; tests under `reviser.test.ts` and a focused repair-routing test.
 
 - [ ] **Step 1: Add failing routing and exact-patch tests**
@@ -170,7 +170,7 @@ git commit -m "feat: route Vietnamese spelling fixes through exact patches"
 
 ## Task 4: Make the review cycle length-authoritative and spelling-aware
 
-**Owner:** Agent 2  
+**Owner:** Agent 2
 **Files:** Modify `chapter-review-cycle.ts`, `runner.ts`, `chapter-audit-evaluator.ts`, `audit-policy.ts`; tests for review cycle and evaluator.
 
 - [ ] **Step 1: Add failing review-cycle tests**
@@ -212,7 +212,7 @@ git commit -m "feat: enforce deterministic Vietnamese review gates"
 
 ## Task 5: Prevent failed Vietnamese chapters from advancing progress
 
-**Owner:** Agent 2  
+**Owner:** Agent 2
 **Files:** Modify `state-bootstrap.ts`, `manager.ts`, persistence/recovery wiring in `runner.ts`; tests for state manager and recovery.
 
 - [ ] **Step 1: Add failing progress tests**
@@ -248,7 +248,7 @@ git commit -m "fix: keep failed Vietnamese chapters recoverable"
 
 ## Task 6: Integration verification before provider qualification
 
-**Owner:** Manager  
+**Owner:** Manager
 **Files:** None beyond preceding tasks unless a test exposes a scoped defect.
 
 - [ ] **Step 1: Review both agent diffs**
@@ -278,7 +278,7 @@ Confirm the historical baseline book is unchanged. Confirm the qualification boo
 
 ## Task 7: Fresh Ecoapi qualification and stop rules
 
-**Owner:** Manager  
+**Owner:** Manager
 **Scope:** Only `phase-a-ecoapi-1150-20260831-0` qualification sandbox; no baseline mutation.
 
 - [ ] **Step 1: Run chapter 1 once with validated Ecoapi configuration**
