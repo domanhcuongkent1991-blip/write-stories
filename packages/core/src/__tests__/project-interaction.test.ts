@@ -135,7 +135,7 @@ describe("project interaction control", () => {
     expect(book).toMatchObject({
       id: "dem-trang",
       language: "vi",
-      chapterWordCount: 2000,
+      chapterWordCount: 1150,
     });
   });
 

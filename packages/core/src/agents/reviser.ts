@@ -637,6 +637,23 @@ function resolveAutoOutputMode(issues: ReadonlyArray<AuditIssue>): AutoOutputMod
     return "allow-full";
   }
   const scopedBlocking = issues.filter((issue) => issue.severity !== "info" && issue.repairScope);
+  const blocking = issues.filter((issue) => issue.severity !== "info");
+  const verifiedSpelling = blocking.some((issue) =>
+    issue.category === "vi-known-spelling"
+      && issue.verification === "verified"
+      && issue.repairHint !== undefined,
+  );
+  const verifiedNonLocal = blocking.some((issue) =>
+    issue.verification === "verified"
+      && issue.category !== "vi-known-spelling"
+      && issue.repairScope !== "local",
+  );
+  // A deterministic spelling blocker is safest as an exact patch even when
+  // the same audit also contains unverified model diagnostics. Do not let an
+  // unverified prose suggestion escalate into a whole-chapter rewrite.
+  if (verifiedSpelling && !verifiedNonLocal) {
+    return "patch-only";
+  }
   if (scopedBlocking.length > 0) {
     if (scopedBlocking.some((issue) => issue.repairScope === "structural")) {
       return "rewrite-only";
@@ -649,7 +666,6 @@ function resolveAutoOutputMode(issues: ReadonlyArray<AuditIssue>): AutoOutputMod
     }
   }
 
-  const blocking = issues.filter((issue) => issue.severity !== "info");
   if (blocking.length === 0) {
     return "patch-only"; // only hints / info — at most local polish
   }

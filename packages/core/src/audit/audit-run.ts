@@ -35,7 +35,7 @@ const AuditIssueSchema = z.object({
   repairHint: z.object({
     kind: z.literal("exact-replacement"),
     targetText: z.string().min(1).max(200),
-    replacementText: z.string().max(200),
+    replacementText: z.string().min(1).max(200),
     occurrenceIndexes: z.array(z.number().int().positive()).min(1).max(100),
     context: z.string().max(500),
   }).strict().optional(),
@@ -100,8 +100,17 @@ export function createAuditRunIdentity(run: Pick<AuditRunV1, "attemptId" | "phas
 }
 
 function truncateIssue(issue: AuditIssue): AuditIssue {
-  return issue.evidence?.excerpt && issue.evidence.excerpt.length > 500
-    ? { ...issue, evidence: { ...issue.evidence, excerpt: issue.evidence.excerpt.slice(0, 500) } }
+  const evidence = issue.evidence?.excerpt && issue.evidence.excerpt.length > 500
+    ? { ...issue.evidence, excerpt: issue.evidence.excerpt.slice(0, 500) }
+    : issue.evidence;
+  const repairHint = issue.repairHint
+    ? {
+        ...issue.repairHint,
+        context: issue.repairHint.context.slice(0, 500),
+      }
+    : undefined;
+  return evidence !== issue.evidence || repairHint !== issue.repairHint
+    ? { ...issue, ...(evidence ? { evidence } : {}), ...(repairHint ? { repairHint } : {}) }
     : issue;
 }
 
