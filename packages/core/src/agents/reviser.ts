@@ -100,6 +100,19 @@ function buildTieredIssueList(
   return parts.join("\n\n");
 }
 
+/**
+ * Some models repeat the writer envelope inside REVISED_CONTENT. Those labels
+ * are transport metadata, not prose, and must never reach the canonical file.
+ */
+function sanitizeRevisedContentEnvelope(content: string): string {
+  const trimmed = content.trim();
+  if (!trimmed) return "";
+  const hasEnvelopeTitle = /(?:^|\n)(?:#{1,2}\s*)?CHAPTER_TITLE\s*:?/iu.test(trimmed);
+  if (!hasEnvelopeTitle) return trimmed;
+  const contentMarker = trimmed.match(/(?:^|\n)(?:#{1,2}\s*)?CHAPTER_CONTENT\s*:?\s*\n([\s\S]*)$/iu);
+  return contentMarker?.[1]?.trim() ?? trimmed;
+}
+
 const MODE_DESCRIPTIONS: Record<ReviseMode, string> = {
   auto: "", // auto mode uses buildAutoSystemPrompt instead
   polish: "润色：只改表达、节奏、段落呼吸，不改事实与剧情结论。禁止：增删段落、改变人名/地名/物品名、增加新情节或新对话、改变因果关系。只允许：替换用词、调整句序、修改标点节奏",
@@ -379,7 +392,7 @@ ${chapterContent}`;
       }
 
       if (autoOutputMode === "rewrite-only") {
-        const revisedContent = extract("REVISED_CONTENT");
+        const revisedContent = sanitizeRevisedContentEnvelope(extract("REVISED_CONTENT"));
         if (revisedContent) {
           return makeResult(revisedContent, true);
         }
@@ -388,7 +401,7 @@ ${chapterContent}`;
         return makeResult(originalChapter, false);
       }
 
-      const revisedContent = extract("REVISED_CONTENT");
+      const revisedContent = sanitizeRevisedContentEnvelope(extract("REVISED_CONTENT"));
       if (revisedContent) {
         return makeResult(revisedContent, true);
       }
@@ -414,7 +427,7 @@ ${chapterContent}`;
     }
 
     // Legacy rewrite/polish/rework/anti-detect: full content
-    const revisedContent = extract("REVISED_CONTENT");
+    const revisedContent = sanitizeRevisedContentEnvelope(extract("REVISED_CONTENT"));
     return makeResult(revisedContent || originalChapter, revisedContent.length > 0);
   }
 
@@ -472,7 +485,7 @@ Revision principles:
 1. Fix root causes — do not apply superficial polish${numericalRule}
 2. Hook status must stay in sync with the hooks board. If hook debt briefs are provided, preserve hook payoff scenes
 3. Do not alter the plot direction or core conflicts
-4. Preserve the original language style, rhythm, and pacing — do not compress transitional scenes or remove breathing room
+4. Preserve the original language style and causal beats; when hard length repair is required, preserve causal beats and compress redundant transitions and repeated interior beats instead of removing evidence or payoff scenes
 5. Emotion through action (never "he felt angry" — show it). Values through behavior, not slogans
 6. Different characters speak differently. No "everyone gasped in unison"
 7. Escalate: bad things stack, each worse than the last
@@ -516,7 +529,7 @@ REVISED_CONTENT——处理全章级问题（字数压缩、结构重组、节�
 1. 修根因，不做表面润色${numericalRule}
 2. 伏笔状态必须与伏笔池同步。如果提供了 Hook Debt 简报，必须保留伏笔兑现段落
 3. 不改变剧情走向和核心冲突
-4. 保持原文的语言风格、节奏和呼吸——不要压缩过渡段、不要删掉减速段
+4. 保持原文的语言风格和因果节拍；当硬性篇幅修复触发时，必须压缩重复的过渡、重复的心理回环和冗余说明，保留核心事实、冲突升级与伏笔兑现，不得只做表面润色
 5. 情绪用动作外化（不写"他感到愤怒"，写动作）。价值观通过行为传达
 6. 不同角色说话方式必须不同。禁止"众人齐声惊呼"
 7. 坏事叠坏事，每层比上一层过分

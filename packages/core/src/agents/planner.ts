@@ -3,7 +3,7 @@ import { join } from "node:path";
 import { BaseAgent } from "./base.js";
 import type { BookConfig } from "../models/book.js";
 import type { LengthSpec } from "../models/length-governance.js";
-import type { ScaffoldLanguage } from "../models/writing-language.js";
+import type { ScaffoldLanguage, WritingLanguage } from "../models/writing-language.js";
 import { buildLengthSpec } from "../utils/length-metrics.js";
 import {
   acceptanceCriteriaFromHookOps,
@@ -144,7 +144,7 @@ export class PlannerAgent extends BaseAgent {
       styleEmphasis,
     });
 
-    const isGoldenOpening = this.isGoldenOpeningChapter(scaffoldLanguage, input.chapterNumber);
+    const isGoldenOpening = this.isGoldenOpeningChapter(writingLanguage, input.chapterNumber);
     const lengthSpec = buildLengthSpec(
       input.book.chapterWordCount,
       writingLanguage,
@@ -363,6 +363,12 @@ export class PlannerAgent extends BaseAgent {
     readonly language: ScaffoldLanguage;
     readonly lengthSpec: LengthSpec;
   }): string {
+    const sceneOneBudget = Math.round(input.lengthSpec.target * 0.3);
+    const sceneTwoBudget = Math.round(input.lengthSpec.target * 0.4);
+    const sceneThreeBudget = Math.max(
+      1,
+      input.lengthSpec.target - sceneOneBudget - sceneTwoBudget,
+    );
     if (input.language === "en") {
       return [
         `# Chapter ${input.chapterNumber} memo`,
@@ -374,7 +380,7 @@ export class PlannerAgent extends BaseAgent {
         "none",
         "",
         "## Scene and length budget",
-        `Plan 2-5 concrete scenes whose combined draft length stays within ${input.lengthSpec.hardMin}-${input.lengthSpec.hardMax} words and aims for ${input.lengthSpec.target} words. Give each scene a distinct action, consequence, and approximate word budget.`,
+        `Plan three concrete scenes whose combined draft length stays within ${input.lengthSpec.hardMin}-${input.lengthSpec.hardMax} words and aims for ${input.lengthSpec.target} words: Scene 1 (${sceneOneBudget} words) establishes the immediate action; Scene 2 (${sceneTwoBudget} words) forces a consequential choice; Scene 3 (${sceneThreeBudget} words) closes on a concrete change.`,
         "",
         "## Current task",
         `Use the current chapter goal and authoritative book context to continue chapter ${input.chapterNumber} without inventing a new direction.`,
@@ -418,7 +424,7 @@ export class PlannerAgent extends BaseAgent {
       "无",
       "",
       "## 场景与篇幅预算",
-      `规划 2-5 个有明确行动与后果的真实场景，总篇幅控制在 ${input.lengthSpec.hardMin}-${input.lengthSpec.hardMax} 字，目标约 ${input.lengthSpec.target} 字；为每个场景分配动态字数预算，不靠总结和重复内心戏凑字数。`,
+      `规划三个有明确行动与后果的真实场景，总篇幅控制在 ${input.lengthSpec.hardMin}-${input.lengthSpec.hardMax} 字，目标约 ${input.lengthSpec.target} 字：场景一（${sceneOneBudget} 字）建立眼前行动；场景二（${sceneTwoBudget} 字）迫使人物作出带后果的选择；场景三（${sceneThreeBudget} 字）以信息、压力、关系、目标或风险的明确变化收束。不靠总结和重复内心戏凑字数。`,
       "",
       "## 当前任务",
       `沿用当前章节目标和权威设定推进第 ${input.chapterNumber} 章，不临时改方向，也不把章节写成泛泛过渡。`,
@@ -452,9 +458,13 @@ export class PlannerAgent extends BaseAgent {
     ].join("\n");
   }
 
-  private isGoldenOpeningChapter(language: ScaffoldLanguage | undefined, chapterNumber: number): boolean {
-    const isZh = (language ?? "zh").toLowerCase().startsWith("zh");
-    return isZh ? chapterNumber <= 3 : chapterNumber <= 5;
+  private isGoldenOpeningChapter(language: WritingLanguage | undefined, chapterNumber: number): boolean {
+    // Vietnamese books use the same three-chapter opening discipline as the
+    // Chinese policy. The scaffold language is English for VI, so deriving
+    // this from ScaffoldLanguage would incorrectly widen the opening window
+    // to five chapters.
+    if (language === "vi" || language === "zh") return chapterNumber <= 3;
+    return chapterNumber <= 5;
   }
 
   private buildArcContext(
@@ -862,6 +872,7 @@ export class PlannerAgent extends BaseAgent {
   private matchAnyRangeOutlineLine(line: string): RegExpMatchArray | undefined {
     const patterns = [
       /^(?:#+\s*)?(?:[-*]\s+)?(?:\*\*)?Chapter\s*(\d+)\s*[-~–—]\s*(\d+)\b(?:[:：-])?(?:\*\*)?\s*(.*)$/i,
+      /^(?:#+\s*)?(?:[-*]\s+)?(?:\*\*)?Volume\s+\d+\s*\(\s*Chapters?\s*(\d+)\s*[-~–—]\s*(\d+)\s*\)(?:[:：-])?(?:\*\*)?\s*(.*)$/i,
       /^(?:#+\s*)?(?:[-*]\s+)?(?:\*\*)?第\s*(\d+)\s*[-~–—]\s*(\d+)\s*章(?:[:：-])?(?:\*\*)?\s*(.*)$/i,
       /^(?:[-*]\s+)?(?:\*\*)?章节范围(?:\*\*)?[：:]\s*(\d+)\s*[-~–—]\s*(\d+)\s*章\s*(.*)$/,
       /^(?:[-*]\s+)?(?:\*\*)?Chapter\s*[Rr]ange(?:\*\*)?[：:]\s*(\d+)\s*[-~–—]\s*(\d+)\b\s*(.*)$/i,

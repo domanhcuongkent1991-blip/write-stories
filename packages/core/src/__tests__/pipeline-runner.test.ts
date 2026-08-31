@@ -4995,6 +4995,58 @@ describe("PipelineRunner", () => {
     await rm(root, { recursive: true, force: true });
   });
 
+  it("uses typed Vietnamese settlement for an accepted revised chapter", async () => {
+    const { root, runner, state, bookId } = await createRunnerFixture({});
+    const restoreVi = await enableViWriting(root);
+    try {
+      const storedBook = await state.loadBookConfig(bookId);
+      const book: BookConfig = { ...storedBook, language: "vi", chapterWordCount: 1150 };
+      await state.saveBookConfig(bookId, book);
+      const settled = createSettledRevisionOutput({
+        book,
+        bookDir: state.bookDir(bookId),
+        chapterNumber: 1,
+        title: "Revised Vietnamese Chapter",
+        content: "Nội dung đã sửa.",
+      });
+      const settleSpy = vi.spyOn(WriterAgent.prototype, "settleChapterState")
+        .mockResolvedValue(settled);
+      const analyzerSpy = vi.spyOn(ChapterAnalyzerAgent.prototype, "analyzeChapter");
+
+      const persistence = await (runner as unknown as {
+        buildPersistenceOutput: (
+          bookId: string,
+          book: BookConfig,
+          bookDir: string,
+          chapterNumber: number,
+          output: WriteChapterOutput,
+          finalContent: string,
+          countingMode: "vi_wordlike_tokens_v1",
+        ) => Promise<WriteChapterOutput>;
+      }).buildPersistenceOutput(
+        bookId,
+        book,
+        state.bookDir(bookId),
+        1,
+        createWriterOutput({ content: "Nội dung cũ.", wordCount: 13 }),
+        "Nội dung đã sửa.",
+        "vi_wordlike_tokens_v1",
+      );
+
+      expect(settleSpy).toHaveBeenCalledWith(expect.objectContaining({
+        book,
+        chapterNumber: 1,
+        content: "Nội dung đã sửa.",
+      }));
+      expect(analyzerSpy).not.toHaveBeenCalled();
+      expect(persistence.runtimeStateDelta).toBeDefined();
+      expect(persistence.runtimeStateSnapshot).toBeDefined();
+    } finally {
+      restoreVi();
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
   it("degrades to state-degraded when state validation errors instead of aborting", async () => {
     const { root, runner, state, bookId } = await createRunnerFixture({
     });

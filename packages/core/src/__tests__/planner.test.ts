@@ -345,6 +345,44 @@ describe("PlannerAgent.planChapter memo generation", () => {
     ]);
   });
 
+  it("resolves volume range headings written as `Volume X (Chapters N-M)`", async () => {
+    await writeFile(
+      join(bookDir, "story/volume_outline.md"),
+      [
+        "Volume 1 (Chapters 1-3): The Opening",
+        "Volume 2 (Chapters 4-5): The Drainage Breach",
+      ].join("\n"),
+      "utf-8",
+    );
+    vi.spyOn(llmProvider, "chatCompletion").mockResolvedValue({
+      content: validMemoRaw(4),
+      usage: ZERO_USAGE,
+    } as unknown as Awaited<ReturnType<typeof llmProvider.chatCompletion>>);
+
+    const result = await makePlanner().planChapter({
+      book: makeBook(),
+      bookDir,
+      chapterNumber: 4,
+    });
+
+    expect(result.intent.outlineNode).toBe("The Drainage Breach");
+  });
+
+  it("keeps Vietnamese golden-opening discipline to the first three chapters", async () => {
+    vi.spyOn(llmProvider, "chatCompletion").mockResolvedValue({
+      content: validMemoRaw(4),
+      usage: ZERO_USAGE,
+    } as unknown as Awaited<ReturnType<typeof llmProvider.chatCompletion>>);
+
+    const result = await makePlanner().planChapter({
+      book: { ...makeBook(), language: "vi" },
+      bookDir,
+      chapterNumber: 4,
+    });
+
+    expect(result.memo.isGoldenOpening).toBe(false);
+  });
+
   // Phase hotfix 4: English books must receive English system + user prompts
   // and English golden-opening guidance for chapters ≤ 3.
   it("uses English prompts end-to-end when book.language is en", async () => {
@@ -463,6 +501,8 @@ ${VALID_EN_BODY}
     expect(result.intent.pacingCode).toBe("bridge");
     expect(result.memo.body).toContain("## Planner warning");
     expect(result.intentMarkdown).toContain("Planner warning");
+    expect(result.memo.body).toContain("场景一");
+    expect(result.memo.body).toContain("场景二");
   });
 
   // Phase hotfix 5: planner.intent.mustAvoid must come from the Phase 5

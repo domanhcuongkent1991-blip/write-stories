@@ -26,11 +26,37 @@ export function normalizePostWriteSurface(
   content: string,
   languageOverride?: ScaffoldLanguage,
 ): string {
-  let normalized = stripPostWriteMetaLines(content);
+  let normalized = stripLeadingChapterHeading(stripPostWriteMetaLines(content));
   if (languageOverride !== "en") {
     normalized = normalized.replace(/——+/g, "，");
   }
   return normalized.trimEnd();
+}
+
+/**
+ * Chapter files receive their canonical heading from the persistence layer.
+ * Models occasionally repeat a `# Chương ...`/`# Chapter ...` heading in the
+ * returned prose, especially after a revision. Remove only leading chapter
+ * headings so an accidental envelope cannot become duplicate visible content;
+ * headings used inside the actual prose are left untouched.
+ */
+function stripLeadingChapterHeading(content: string): string {
+  const lines = content.split(/\r?\n/);
+  let firstContentLine = 0;
+  while (firstContentLine < lines.length && lines[firstContentLine]?.trim() === "") {
+    firstContentLine += 1;
+  }
+  while (
+    firstContentLine < lines.length
+    && /^\s*#{1,6}\s*(?:chương|chapter|第)\s*\d+\s*[:：].*$/iu.test(lines[firstContentLine] ?? "")
+  ) {
+    lines[firstContentLine] = "";
+    firstContentLine += 1;
+    while (firstContentLine < lines.length && lines[firstContentLine]?.trim() === "") {
+      firstContentLine += 1;
+    }
+  }
+  return lines.join("\n").replace(/^\s+/, "");
 }
 
 function stripPostWriteMetaLines(content: string): string {

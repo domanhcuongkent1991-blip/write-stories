@@ -413,7 +413,7 @@ export async function runChapterReviewCycle(params: {
 
       const reviser = params.createReviser();
       revisionAttempts = 1;
-      const reviseOutput = await reviser.reviseChapter(
+      let reviseOutput = await reviser.reviseChapter(
         params.bookDir,
         finalContent,
         params.chapterNumber,
@@ -430,7 +430,7 @@ export async function runChapterReviewCycle(params: {
         );
       }
 
-      const revisedContent = params.normalizePostWriteSurface?.(reviseOutput.revisedContent)
+      let revisedContent = params.normalizePostWriteSurface?.(reviseOutput.revisedContent)
         ?? reviseOutput.revisedContent;
       revisionCandidateProduced = revisedContent.length > 0 && revisedContent !== finalContent;
       if (!revisionCandidateProduced) {
@@ -450,6 +450,93 @@ export async function runChapterReviewCycle(params: {
       };
 
       params.assertChapterContentNotEmpty(revisedContent, `repair iteration ${iteration + 1}`);
+      let candidateWordCount = revisionCandidateIdentity.candidateWordCount;
+      const canonicalWordCount = countChapterLength(finalContent, params.lengthSpec.countingMode);
+      let candidateInHardRange = !isOutsideHardRange(candidateWordCount, params.lengthSpec);
+      // An overlong canonical draft must move back into the hard range before
+      // we spend state-settlement and re-audit budget on it. Rejecting a
+      // non-reducing or still-overlong candidate here keeps the durable
+      // chapter unchanged and makes the failure reason explicit.
+      if (
+        params.lengthSpec.countingMode === "vi_wordlike_tokens_v1"
+        && canonicalWordCount > params.lengthSpec.hardMax
+        && (!candidateInHardRange || candidateWordCount >= canonicalWordCount)
+      ) {
+        revisionRejectionReason = !candidateInHardRange
+          ? `revision candidate remains outside the hard length range (${candidateWordCount})`
+          : `revision candidate did not reduce the overlong draft (${candidateWordCount} >= ${canonicalWordCount})`;
+        params.logWarn({
+          zh: `修复候选仍未回到硬性篇幅范围（${candidateWordCount} 字），保留原章节`,
+          en: `revision candidate remains outside the hard length range (${candidateWordCount}); retaining the canonical chapter`,
+        });
+        await params.retainRejectedCandidate?.({
+          content: revisedContent,
+          contentHash: revisionCandidateIdentity.candidateContentHash,
+          wordCount: candidateWordCount,
+          reason: revisionRejectionReason,
+        });
+
+        // Gemini can acknowledge the length issue yet return a nearly
+        // unchanged chapter. Give Vietnamese hard-length repair one bounded
+        // rescue pass with an explicit measured deficit, while keeping the
+        // original canonical content untouched until the shared gate passes.
+        if (iteration === 0 && candidateWordCount < canonicalWordCount) {
+          const deficit = Math.max(1, candidateWordCount - params.lengthSpec.hardMax);
+          const rescueIssue: AuditIssue = {
+            severity: "critical",
+            category: "length",
+            description: `Previous revision measured ${candidateWordCount} Vietnamese words; remove at least ${deficit} more words and return a complete chapter safely below the hard ceiling. Aim for ${params.lengthSpec.softMin}-${Math.min(params.lengthSpec.softMax, params.lengthSpec.hardMax - 50)} Vietnamese words, never exceed ${params.lengthSpec.hardMax} words, and preserve the causal beats, evidence, hook payoffs, and ending hook.`,
+            suggestion: "Aggressively remove redundant transitions, repeated interior beats, and redundant explanations. Leave a safety margin below the hard ceiling while preserving causal beats, evidence, hook payoffs, and the ending hook.",
+            ruleId: "length.hard-range",
+            repairScope: "structural",
+            repairTarget: "prose",
+            verification: "verified",
+          };
+          const rescueOutput = await reviser.reviseChapter(
+            params.bookDir,
+            revisedContent,
+            params.chapterNumber,
+            [rescueIssue],
+            "auto",
+            params.book.genre,
+            { ...params.reducedControlInput, lengthSpec: params.lengthSpec },
+          );
+          reviseOutput = rescueOutput;
+          totalUsage = params.addUsage(totalUsage, rescueOutput.tokenUsage);
+          if (rescueOutput.tokenUsage) {
+            reviserTokenUsage = params.addUsage(
+              reviserTokenUsage ?? { promptTokens: 0, completionTokens: 0, totalTokens: 0 },
+              rescueOutput.tokenUsage,
+            );
+          }
+          const rescuedContent = params.normalizePostWriteSurface?.(rescueOutput.revisedContent)
+            ?? rescueOutput.revisedContent;
+          if (!rescuedContent || rescuedContent === revisedContent) {
+            revisionRejectionReason = "length rescue produced no new content";
+            break;
+          }
+          revisedContent = rescuedContent;
+          revisionCandidateProduced = revisedContent !== finalContent;
+          revisionCandidateIdentity = {
+            candidateContentHash: computeChapterContentHash(revisedContent),
+            candidateWordCount: countChapterLength(revisedContent, params.lengthSpec.countingMode),
+          };
+          candidateWordCount = revisionCandidateIdentity.candidateWordCount;
+          candidateInHardRange = !isOutsideHardRange(candidateWordCount, params.lengthSpec);
+          if (!candidateInHardRange) {
+            revisionRejectionReason = `length rescue remains outside the hard length range (${candidateWordCount})`;
+            await params.retainRejectedCandidate?.({
+              content: revisedContent,
+              contentHash: revisionCandidateIdentity.candidateContentHash,
+              wordCount: candidateWordCount,
+              reason: revisionRejectionReason,
+            });
+            break;
+          }
+        } else {
+          break;
+        }
+      }
       let candidateSettlement: RevisionCandidateSettlement = { valid: true };
       if (params.settleRevisionCandidate) {
         candidateSettlement = await params.settleRevisionCandidate(revisedContent, reviseOutput);
@@ -472,7 +559,7 @@ export async function runChapterReviewCycle(params: {
         });
         break;
       }
-      const revisedWordCount = countChapterLength(revisedContent, params.lengthSpec.countingMode);
+      const revisedWordCount = candidateWordCount;
 
       // Re-assess revised content. If REVISED_CONTENT drifted on length,
       // lengthInRange will be false → isPassed fails → bestSnapshot picks

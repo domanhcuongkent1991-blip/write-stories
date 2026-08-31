@@ -5,7 +5,10 @@ import type { BookRules } from "../models/book-rules.js";
 import { buildWriterSystemPrompt, type FanficContext } from "./writer-prompts.js";
 import { buildSettlerSystemPrompt, buildSettlerUserPrompt } from "./settler-prompts.js";
 import { buildObserverSystemPrompt, buildObserverUserPrompt } from "./observer-prompts.js";
-import { parseSettlerDeltaOutput } from "./settler-delta-parser.js";
+import {
+  parseSettlerDeltaOutput,
+  SettlerDeltaParseError,
+} from "./settler-delta-parser.js";
 import { parseSettlementOutput } from "./settler-parser.js";
 import { readGenreProfile, readBookRules } from "./rules-reader.js";
 import {
@@ -571,6 +574,7 @@ export class WriterAgent extends BaseAgent {
     const resolvedLang = resolveWritingLanguageProfile(
       params.book.language ?? params.genreProfile.language,
     ).scaffoldLanguage;
+    const writingLanguage = params.book.language ?? params.genreProfile.language;
     const observerSystem = buildObserverSystemPrompt(params.book, params.genreProfile, resolvedLang);
     const observerUser = buildObserverUserPrompt(params.chapterNumber, params.title, params.content, resolvedLang);
 
@@ -622,20 +626,73 @@ export class WriterAgent extends BaseAgent {
       validationFeedback: params.validationFeedback,
     });
 
-    const response = await this.chat(
-      [
-        { role: "system", content: settlerSystem },
-        { role: "user", content: settlerUser },
-      ],
-      { temperature: 0.3 },
-    );
+    const settlerMessages = [
+      { role: "system" as const, content: settlerSystem },
+      { role: "user" as const, content: settlerUser },
+    ];
+    let response = await this.chat(settlerMessages, { temperature: 0.3 });
+    let usage = response.usage;
 
-    let mergedSettlement: ReturnType<typeof parseSettlementOutput> & {
+    let mergedSettlement: (ReturnType<typeof parseSettlementOutput> & {
       runtimeStateDelta?: RuntimeStateDelta;
       runtimeStateSnapshot?: RuntimeStateSnapshot;
-    };
+    }) | undefined;
+    let deltaOutput: ReturnType<typeof parseSettlerDeltaOutput> | undefined;
     try {
-      const deltaOutput = parseSettlerDeltaOutput(response.content);
+      deltaOutput = parseSettlerDeltaOutput(response.content);
+    } catch (error) {
+      if (writingLanguage !== "vi" || !(error instanceof SettlerDeltaParseError)) {
+        const settlement = parseSettlementOutput(response.content, params.genreProfile);
+        mergedSettlement = governedControlBlock
+          ? {
+              ...settlement,
+              updatedHooks: mergeTableMarkdownByKey(params.originalHooks, settlement.updatedHooks, [0]),
+              updatedSubplots: settlement.updatedSubplots
+                ? mergeTableMarkdownByKey(params.originalSubplots, settlement.updatedSubplots, [0])
+                : settlement.updatedSubplots,
+              updatedEmotionalArcs: settlement.updatedEmotionalArcs
+                ? mergeTableMarkdownByKey(params.originalEmotionalArcs, settlement.updatedEmotionalArcs, [0, 1])
+                : settlement.updatedEmotionalArcs,
+              updatedCharacterMatrix: settlement.updatedCharacterMatrix
+                ? mergeCharacterMatrixMarkdown(params.originalCharacterMatrix, settlement.updatedCharacterMatrix)
+                : settlement.updatedCharacterMatrix,
+            }
+          : settlement;
+      } else {
+        const retryUser = [
+          settlerUser,
+          "",
+          "=== SETTLEMENT RETRY ===",
+          `The previous settlement response failed deterministic parsing (${error.reason}).`,
+          "Emit both exact marker blocks: POST_SETTLEMENT followed by RUNTIME_STATE_DELTA.",
+          "RUNTIME_STATE_DELTA must contain one raw JSON object valid against the schema, including chapter and hookOps arrays.",
+          "Do not use legacy UPDATED_STATE, UPDATED_HOOKS, or a prose explanation in place of the JSON block.",
+        ].join("\n");
+        this.log?.warn(`[writer] Vietnamese settlement retry: ${error.reason}`);
+        response = await this.chat([
+          { role: "system", content: settlerSystem },
+          { role: "user", content: retryUser },
+        ], { temperature: 0.3 });
+        usage = {
+          promptTokens: usage.promptTokens + response.usage.promptTokens,
+          completionTokens: usage.completionTokens + response.usage.completionTokens,
+          totalTokens: usage.totalTokens + response.usage.totalTokens,
+        };
+        try {
+          deltaOutput = parseSettlerDeltaOutput(response.content);
+        } catch (retryError) {
+          const reason = retryError instanceof SettlerDeltaParseError
+            ? `${retryError.reason}: ${retryError.message}`
+            : String(retryError);
+          throw new WritingLanguagePreflightError(
+            "STATE_PREFLIGHT_FAILED",
+            `Vietnamese settlement runtime-state delta remained invalid after one bounded retry (${reason}).`,
+          );
+        }
+      }
+    }
+
+    if (deltaOutput) {
       mergedSettlement = {
         postSettlement: deltaOutput.postSettlement,
         runtimeStateDelta: deltaOutput.runtimeStateDelta,
@@ -647,28 +704,18 @@ export class WriterAgent extends BaseAgent {
         updatedEmotionalArcs: "",
         updatedCharacterMatrix: "",
       };
-    } catch {
-      const settlement = parseSettlementOutput(response.content, params.genreProfile);
-      mergedSettlement = governedControlBlock
-        ? {
-            ...settlement,
-            updatedHooks: mergeTableMarkdownByKey(params.originalHooks, settlement.updatedHooks, [0]),
-            updatedSubplots: settlement.updatedSubplots
-              ? mergeTableMarkdownByKey(params.originalSubplots, settlement.updatedSubplots, [0])
-              : settlement.updatedSubplots,
-            updatedEmotionalArcs: settlement.updatedEmotionalArcs
-              ? mergeTableMarkdownByKey(params.originalEmotionalArcs, settlement.updatedEmotionalArcs, [0, 1])
-              : settlement.updatedEmotionalArcs,
-            updatedCharacterMatrix: settlement.updatedCharacterMatrix
-              ? mergeCharacterMatrixMarkdown(params.originalCharacterMatrix, settlement.updatedCharacterMatrix)
-              : settlement.updatedCharacterMatrix,
-          }
-        : settlement;
+    }
+
+    if (!mergedSettlement) {
+      throw new WritingLanguagePreflightError(
+        "STATE_PREFLIGHT_FAILED",
+        "Settlement produced no parseable state result.",
+      );
     }
 
     return {
       settlement: mergedSettlement,
-      usage: response.usage,
+      usage,
     };
   }
 

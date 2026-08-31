@@ -123,6 +123,70 @@ describe("ReviserAgent", () => {
       expect(combinedPrompt).toContain("vi_wordlike_tokens_v1");
       expect(combinedPrompt).toContain("1000-1500");
       expect(combinedPrompt).toContain("chapter memo/context");
+      expect(combinedPrompt).toContain("preserve causal beats and compress redundant transitions");
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("strips a repeated writer envelope from Vietnamese revised prose", async () => {
+    const root = await mkdtemp(join(tmpdir(), "inkos-reviser-vi-envelope-"));
+    const bookDir = join(root, "book");
+    await mkdir(join(bookDir, "story"), { recursive: true });
+    await writeFile(join(bookDir, "book.json"), JSON.stringify({
+      id: "vietnamese-book",
+      title: "Vietnamese Book",
+      genre: "xuanhuan",
+      platform: "other",
+      chapterWordCount: 1150,
+      targetChapters: 10,
+      status: "active",
+      language: "vi",
+      createdAt: "2026-03-23T00:00:00.000Z",
+      updatedAt: "2026-03-23T00:00:00.000Z",
+    }), "utf-8");
+    const agent = new ReviserAgent({
+      client: {
+        provider: "openai",
+        apiFormat: "chat",
+        stream: false,
+        defaults: { temperature: 0.7, maxTokens: 4096, thinkingBudget: 0, extra: {} },
+      },
+      model: "test-model",
+      projectRoot: root,
+    });
+    vi.spyOn(ReviserAgent.prototype as never, "chat" as never).mockResolvedValue({
+      content: [
+        "=== FIXED_ISSUES ===",
+        "- compressed",
+        "",
+        "=== REVISED_CONTENT ===",
+        "CHAPTER_TITLE: Đối chất",
+        "CHAPTER_CONTENT:",
+        "Minh đặt thẻ nhớ lên bàn.",
+      ].join("\n"),
+      usage: ZERO_USAGE,
+    });
+
+    try {
+      const out = await agent.reviseChapter(
+        bookDir,
+        "Bản gốc.",
+        5,
+        [{
+          severity: "critical",
+          category: "length",
+          description: "Vượt hard range",
+          suggestion: "Cắt gọn",
+          repairScope: "structural",
+          repairTarget: "prose",
+        }],
+        "auto",
+        "xuanhuan",
+        { lengthSpec: buildLengthSpec(1150, "vi") },
+      );
+
+      expect(out.revisedContent).toBe("Minh đặt thẻ nhớ lên bàn.");
     } finally {
       await rm(root, { recursive: true, force: true });
     }

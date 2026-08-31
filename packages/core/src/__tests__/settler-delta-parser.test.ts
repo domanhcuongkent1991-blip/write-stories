@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { parseSettlerDeltaOutput } from "../agents/settler-delta-parser.js";
+import { parseSettlerDeltaOutput, SettlerDeltaParseError } from "../agents/settler-delta-parser.js";
 
 describe("parseSettlerDeltaOutput", () => {
   it("parses a valid runtime-state delta block", () => {
@@ -75,6 +75,38 @@ describe("parseSettlerDeltaOutput", () => {
         "```",
       ].join("\n")),
     ).toThrow(/runtime state delta/i);
+  });
+
+  it("reports a missing marker separately from malformed JSON", () => {
+    expect(() => parseSettlerDeltaOutput("=== POST_SETTLEMENT ===\nNo delta."))
+      .toThrowError(expect.objectContaining({
+        name: "SettlerDeltaParseError",
+        reason: "missing-marker",
+      } satisfies Partial<SettlerDeltaParseError>));
+  });
+
+  it("reports invalid JSON with a typed diagnostic", () => {
+    expect(() => parseSettlerDeltaOutput([
+      "=== RUNTIME_STATE_DELTA ===",
+      "```json",
+      "{not-json}",
+      "```",
+    ].join("\n"))).toThrowError(expect.objectContaining({
+      name: "SettlerDeltaParseError",
+      reason: "invalid-json",
+    } satisfies Partial<SettlerDeltaParseError>));
+  });
+
+  it("reports schema-invalid JSON with a typed diagnostic", () => {
+    expect(() => parseSettlerDeltaOutput([
+      "=== RUNTIME_STATE_DELTA ===",
+      "```json",
+      JSON.stringify({ chapter: "twelve" }),
+      "```",
+    ].join("\n"))).toThrowError(expect.objectContaining({
+      name: "SettlerDeltaParseError",
+      reason: "schema-invalid",
+    } satisfies Partial<SettlerDeltaParseError>));
   });
 
   it("parses hook resolve and defer operations", () => {

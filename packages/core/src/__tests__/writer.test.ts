@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { WriterAgent } from "../agents/writer.js";
 import { buildLengthSpec } from "../utils/length-metrics.js";
+import { WritingLanguagePreflightError } from "../state/writing-language-preflight.js";
 
 const ZERO_USAGE = {
   promptTokens: 0,
@@ -588,6 +589,160 @@ describe("WriterAgent", () => {
     }
   });
 
+  it("retries Vietnamese settlement once with the concrete delta parse failure", async () => {
+    const agent = new WriterAgent({
+      client: {
+        provider: "openai",
+        apiFormat: "chat",
+        stream: false,
+        defaults: { temperature: 0.7, maxTokens: 4096, thinkingBudget: 0, extra: {} },
+      },
+      model: "test-model",
+      projectRoot: "/tmp/inkos-writer-vi-settlement-retry",
+    });
+    const validDelta = [
+      "=== POST_SETTLEMENT ===",
+      "- trạng thái đã cập nhật",
+      "",
+      "=== RUNTIME_STATE_DELTA ===",
+      "```json",
+      JSON.stringify({
+        chapter: 5,
+        hookOps: { upsert: [], mention: [], resolve: [], defer: [] },
+        notes: [],
+      }),
+      "```",
+    ].join("\n");
+    const chatSpy = vi.spyOn(WriterAgent.prototype as never, "chat" as never)
+      .mockResolvedValueOnce({ content: "=== OBSERVATIONS ===\n- observed", usage: ZERO_USAGE })
+      .mockResolvedValueOnce({ content: "=== POST_SETTLEMENT ===\n- missing delta", usage: ZERO_USAGE })
+      .mockResolvedValueOnce({ content: validDelta, usage: ZERO_USAGE });
+
+    const settle = (agent as unknown as {
+      settle: (params: unknown) => Promise<{
+        settlement: { runtimeStateDelta?: { chapter?: number } };
+        usage: typeof ZERO_USAGE;
+      }>;
+    }).settle;
+
+    const result = await settle.call(agent, {
+      book: {
+        id: "vi-book",
+        title: "Vietnamese Book",
+        platform: "other",
+        genre: "other",
+        status: "active",
+        targetChapters: 20,
+        chapterWordCount: 1150,
+        language: "vi",
+        createdAt: "2026-03-25T00:00:00.000Z",
+        updatedAt: "2026-03-25T00:00:00.000Z",
+      },
+      genreProfile: {
+        id: "other",
+        name: "Other",
+        language: "zh",
+        chapterTypes: ["主线推进"],
+        fatigueWords: [],
+        numericalSystem: false,
+        powerScaling: false,
+        eraResearch: false,
+        pacingRule: "",
+        satisfactionTypes: [],
+        auditDimensions: [],
+      },
+      bookRules: null,
+      chapterNumber: 5,
+      title: "Bản ghi",
+      content: "Khoa đối chiếu bản ghi trong đêm.",
+      currentState: "(none)",
+      ledger: "",
+      hooks: "(none)",
+      chapterSummaries: "(none)",
+      subplotBoard: "(none)",
+      emotionalArcs: "(none)",
+      characterMatrix: "(none)",
+      volumeOutline: "(none)",
+      originalHooks: "(none)",
+      originalSubplots: "(none)",
+      originalEmotionalArcs: "(none)",
+      originalCharacterMatrix: "(none)",
+    });
+
+    expect(chatSpy).toHaveBeenCalledTimes(3);
+    const retryMessages = (chatSpy.mock.calls[2]?.[0] ?? []) as ReadonlyArray<{ content: string }>;
+    const retryPrompt = retryMessages.map((message) => message.content).join("\n");
+    expect(retryPrompt).toContain("SETTLEMENT RETRY");
+    expect(retryPrompt).toContain("missing-marker");
+    expect(retryPrompt).toContain("RUNTIME_STATE_DELTA");
+    expect(result.settlement.runtimeStateDelta?.chapter).toBe(5);
+    expect(result.usage).toEqual(ZERO_USAGE);
+  });
+
+  it("does not synthesize Vietnamese state when the bounded settlement retry also fails", async () => {
+    const agent = new WriterAgent({
+      client: {
+        provider: "openai",
+        apiFormat: "chat",
+        stream: false,
+        defaults: { temperature: 0.7, maxTokens: 4096, thinkingBudget: 0, extra: {} },
+      },
+      model: "test-model",
+      projectRoot: "/tmp/inkos-writer-vi-settlement-retry-fail",
+    });
+    vi.spyOn(WriterAgent.prototype as never, "chat" as never)
+      .mockResolvedValueOnce({ content: "=== OBSERVATIONS ===\n- observed", usage: ZERO_USAGE })
+      .mockResolvedValueOnce({ content: "=== POST_SETTLEMENT ===\n- missing delta", usage: ZERO_USAGE })
+      .mockResolvedValueOnce({ content: "=== POST_SETTLEMENT ===\n- still missing delta", usage: ZERO_USAGE });
+
+    const settle = (agent as unknown as { settle: (params: unknown) => Promise<unknown> }).settle;
+    const base = {
+      book: {
+        id: "vi-book",
+        title: "Vietnamese Book",
+        platform: "other",
+        genre: "other",
+        status: "active",
+        targetChapters: 20,
+        chapterWordCount: 1150,
+        language: "vi" as const,
+        createdAt: "2026-03-25T00:00:00.000Z",
+        updatedAt: "2026-03-25T00:00:00.000Z",
+      },
+      genreProfile: {
+        id: "other",
+        name: "Other",
+        language: "zh" as const,
+        chapterTypes: ["主线推进"],
+        fatigueWords: [],
+        numericalSystem: false,
+        powerScaling: false,
+        eraResearch: false,
+        pacingRule: "",
+        satisfactionTypes: [],
+        auditDimensions: [],
+      },
+      bookRules: null,
+      chapterNumber: 5,
+      title: "Bản ghi",
+      content: "Khoa đối chiếu bản ghi trong đêm.",
+      currentState: "(none)",
+      ledger: "",
+      hooks: "(none)",
+      chapterSummaries: "(none)",
+      subplotBoard: "(none)",
+      emotionalArcs: "(none)",
+      characterMatrix: "(none)",
+      volumeOutline: "(none)",
+      originalHooks: "(none)",
+      originalSubplots: "(none)",
+      originalEmotionalArcs: "(none)",
+      originalCharacterMatrix: "(none)",
+    };
+
+    await expect(settle.call(agent, base)).rejects.toBeInstanceOf(WritingLanguagePreflightError);
+  });
+
   it("falls back to legacy settlement tags when runtime-state delta JSON is malformed", async () => {
     const root = await mkdtemp(join(tmpdir(), "inkos-writer-bad-delta-test-"));
     const bookDir = join(root, "book");
@@ -1151,23 +1306,24 @@ describe("WriterAgent", () => {
           "=== POST_SETTLEMENT ===",
           "- ledger trail advanced",
           "",
-          "=== UPDATED_STATE ===",
-          "state",
-          "",
-          "=== UPDATED_HOOKS ===",
-          "hooks",
-          "",
-          "=== CHAPTER_SUMMARY ===",
-          "| 1 | Ledger Trail | Mara | Follows the ledger | Trail advances | none | tense | setup |",
-          "",
-          "=== UPDATED_SUBPLOTS ===",
-          "subplots",
-          "",
-          "=== UPDATED_EMOTIONAL_ARCS ===",
-          "arcs",
-          "",
-          "=== UPDATED_CHARACTER_MATRIX ===",
-          "matrix",
+          "=== RUNTIME_STATE_DELTA ===",
+          "```json",
+          JSON.stringify({
+            chapter: 1,
+            hookOps: { upsert: [], mention: [], resolve: [], defer: [] },
+            chapterSummary: {
+              chapter: 1,
+              title: "Ledger Trail",
+              characters: "Mara",
+              events: "Mara follows the ledger",
+              stateChanges: "Trail advances",
+              hookActivity: "none",
+              mood: "tense",
+              chapterType: "setup",
+            },
+            notes: [],
+          }, null, 2),
+          "```",
         ].join("\n"),
         usage: ZERO_USAGE,
       });

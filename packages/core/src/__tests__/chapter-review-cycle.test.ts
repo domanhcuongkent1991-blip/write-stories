@@ -13,6 +13,15 @@ const LENGTH_SPEC: LengthSpec = {
   countingMode: "zh_chars",
 };
 
+const VI_LENGTH_SPEC: LengthSpec = {
+  target: 1150,
+  softMin: 1000,
+  softMax: 1300,
+  hardMin: 1000,
+  hardMax: 1500,
+  countingMode: "vi_wordlike_tokens_v1",
+};
+
 const ZERO_USAGE: { promptTokens: number; completionTokens: number; totalTokens: number } = {
   promptTokens: 0,
   completionTokens: 0,
@@ -213,6 +222,92 @@ describe("runChapterReviewCycle v9", () => {
     expect(result.auditResult.passed).toBe(true);
     expect(result.repairApplied).toBe(true);
     expect(result.auditResult.issues.filter((issue) => issue.ruleId === "length.hard-range")).toHaveLength(0);
+  });
+
+  it("rejects a revision candidate that does not reduce an overlong canonical draft before settlement", async () => {
+    const original = "nguyên bản ".repeat(1600);
+    const candidate = "bản sửa ".repeat(1600);
+    const auditChapter = vi.fn().mockResolvedValue(createAuditResult({ passed: true, overallScore: 95 }));
+    const reviseChapter = vi.fn().mockResolvedValue({
+      revisedContent: candidate,
+      wordCount: candidate.length,
+      fixedIssues: ["length-budget"],
+      updatedState: "",
+      updatedLedger: "",
+      updatedHooks: "",
+      tokenUsage: ZERO_USAGE,
+    });
+    const settleRevisionCandidate = vi.fn().mockResolvedValue({ valid: true });
+
+    const result = await runChapterReviewCycle({
+      ...baseParams,
+      lengthSpec: VI_LENGTH_SPEC,
+      initialOutput: { content: original, wordCount: original.length, postWriteErrors: [] },
+      createReviser: () => ({ reviseChapter }),
+      auditor: { auditChapter },
+      settleRevisionCandidate,
+    });
+
+    expect(reviseChapter).toHaveBeenCalledTimes(1);
+    expect(settleRevisionCandidate).not.toHaveBeenCalled();
+    expect(auditChapter).toHaveBeenCalledTimes(1);
+    expect(result.finalContent).toBe(original);
+    expect(result.revised).toBe(false);
+    expect(result.auditResult.issues).toEqual(expect.arrayContaining([
+      expect.objectContaining({ ruleId: "length.hard-range", severity: "critical" }),
+    ]));
+  });
+
+  it("uses one bounded Vietnamese length-rescue pass before settlement", async () => {
+    const words = (count: number, prefix: string) => Array.from(
+      { length: count },
+      (_, index) => `${prefix}${index}`,
+    ).join(" ");
+    const original = words(1800, "goc");
+    const firstCandidate = words(1550, "sua");
+    const rescuedCandidate = words(1200, "gon");
+    const auditChapter = vi.fn()
+      .mockResolvedValueOnce(createAuditResult({ passed: true, overallScore: 96 }))
+      .mockResolvedValueOnce(createAuditResult({ passed: true, overallScore: 95 }));
+    const reviseChapter = vi.fn()
+      .mockResolvedValueOnce({
+        revisedContent: firstCandidate,
+        wordCount: 1550,
+        fixedIssues: ["length-budget"],
+        tokenUsage: ZERO_USAGE,
+      })
+      .mockResolvedValueOnce({
+        revisedContent: rescuedCandidate,
+        wordCount: 1200,
+        fixedIssues: ["length-rescue"],
+        tokenUsage: ZERO_USAGE,
+      });
+    const settleRevisionCandidate = vi.fn().mockResolvedValue({ valid: true });
+
+    const result = await runChapterReviewCycle({
+      ...baseParams,
+      bookId: "book-vi-rescue",
+      lengthSpec: VI_LENGTH_SPEC,
+      initialOutput: { content: original, wordCount: 1800, postWriteErrors: [] },
+      createReviser: () => ({ reviseChapter }),
+      auditor: { auditChapter },
+      settleRevisionCandidate,
+    });
+
+    expect(reviseChapter).toHaveBeenCalledTimes(2);
+    expect(reviseChapter.mock.calls[1]?.[1]).toBe(firstCandidate);
+    expect(reviseChapter.mock.calls[1]?.[3]).toEqual([
+      expect.objectContaining({
+        category: "length",
+        description: expect.stringContaining("remove at least 50 more words"),
+        ruleId: "length.hard-range",
+      }),
+    ]);
+    expect(settleRevisionCandidate).toHaveBeenCalledWith(rescuedCandidate, expect.anything());
+    expect(result.finalContent).toBe(rescuedCandidate);
+    expect(result.finalWordCount).toBe(1200);
+    expect(result.revised).toBe(true);
+    expect(result.auditResult.passed).toBe(true);
   });
 
   it("returns initial and post-revision audit runs with one shared attempt identity", async () => {

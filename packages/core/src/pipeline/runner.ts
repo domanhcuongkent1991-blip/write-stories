@@ -4614,6 +4614,34 @@ ${matrix}`,
       return output;
     }
 
+    // Vietnamese chapters require the typed runtime delta + snapshot contract.
+    // A generic analyzer only emits legacy markdown fields, so using it for an
+    // accepted revision would make the final persistence preflight fail. Re-run
+    // the writer's typed settlement path for the exact revised prose instead.
+    if (await this.resolveExplicitBookLanguage(book) === "vi") {
+      const writer = new WriterAgent(this.agentCtxFor("writer", bookId));
+      const settled = await writer.settleChapterState({
+        book,
+        bookDir,
+        chapterNumber,
+        title: output.title,
+        content: finalContent,
+        chapterIntent: reducedControlInput?.chapterIntent,
+        contextPackage: reducedControlInput?.contextPackage,
+        ruleStack: reducedControlInput?.ruleStack,
+      });
+      return {
+        ...settled,
+        content: finalContent,
+        wordCount: countChapterLength(finalContent, countingMode),
+        preWriteCheck: output.preWriteCheck,
+        postWriteErrors: [],
+        postWriteWarnings: [],
+        hookHealthIssues: output.hookHealthIssues,
+        tokenUsage: output.tokenUsage,
+      };
+    }
+
     const analyzer = new ChapterAnalyzerAgent(this.agentCtxFor("chapter-analyzer", bookId));
     const analyzed = await analyzer.analyzeChapter({
       book,

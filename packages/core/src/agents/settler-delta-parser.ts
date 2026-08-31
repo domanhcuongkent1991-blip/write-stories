@@ -8,6 +8,26 @@ export interface SettlerDeltaOutput {
   readonly runtimeStateDelta: RuntimeStateDelta;
 }
 
+export type SettlerDeltaParseReason =
+  | "missing-marker"
+  | "invalid-json"
+  | "schema-invalid";
+
+/**
+ * A deterministic parser failure that callers can report and, for Vietnamese
+ * persistence, retry without confusing a malformed settlement with prose
+ * quality or provider transport failure.
+ */
+export class SettlerDeltaParseError extends Error {
+  readonly reason: SettlerDeltaParseReason;
+
+  constructor(reason: SettlerDeltaParseReason, message: string) {
+    super(message);
+    this.name = "SettlerDeltaParseError";
+    this.reason = reason;
+  }
+}
+
 function sanitizeJSON(str: string): string {
   return str
     .replace(/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]/g, "")
@@ -25,7 +45,10 @@ export function parseSettlerDeltaOutput(content: string): SettlerDeltaOutput {
 
   const rawDelta = extract("RUNTIME_STATE_DELTA");
   if (!rawDelta) {
-    throw new Error("runtime state delta block is missing");
+    throw new SettlerDeltaParseError(
+      "missing-marker",
+      "runtime state delta block is missing",
+    );
   }
 
   let parsed: unknown;
@@ -41,7 +64,10 @@ export function parseSettlerDeltaOutput(content: string): SettlerDeltaOutput {
   }
   if (parsed === undefined) {
     const error = parseError ?? new Error("no JSON object found");
-    throw new Error(`runtime state delta is not valid JSON: ${String(error)}`);
+    throw new SettlerDeltaParseError(
+      "invalid-json",
+      `runtime state delta is not valid JSON: ${String(error)}`,
+    );
   }
 
   try {
@@ -50,7 +76,10 @@ export function parseSettlerDeltaOutput(content: string): SettlerDeltaOutput {
       runtimeStateDelta: RuntimeStateDeltaSchema.parse(parsed),
     };
   } catch (error) {
-    throw new Error(`runtime state delta failed schema validation: ${String(error)}`);
+    throw new SettlerDeltaParseError(
+      "schema-invalid",
+      `runtime state delta failed schema validation: ${String(error)}`,
+    );
   }
 }
 
