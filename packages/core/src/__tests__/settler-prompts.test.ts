@@ -39,6 +39,19 @@ describe("settler hook identity contract", () => {
     expect(prompt).not.toContain("由系统决定它是映射到旧 hook");
   });
 
+  it("makes the runtime delta a non-optional persistence contract for the VI scaffold", () => {
+    const prompt = buildSettlerSystemPrompt(
+      { ...BOOK, language: "vi" },
+      GENRE,
+      null,
+      "en",
+    );
+
+    expect(prompt).toContain("RUNTIME_STATE_DELTA is mandatory");
+    expect(prompt).toContain("If there are no changes, still emit a complete JSON object");
+    expect(prompt).toContain("Do not replace it with legacy UPDATED_STATE");
+  });
+
   it("labels supplied hooks as active or semantically relevant dormant canon", () => {
     const prompt = buildSettlerUserPrompt({
       chapterNumber: 1,

@@ -38,6 +38,10 @@ export function buildSettlerSystemPrompt(
     ? `【LANGUAGE OVERRIDE】ALL output (state card, hooks, summaries, subplots, emotional arcs, character matrix) MUST be in English. The === TAG === markers remain unchanged.\n\n`
     : "";
 
+  const runtimeStateContract = isEnglish
+    ? `## Host persistence contract (mandatory)\n\n- RUNTIME_STATE_DELTA is mandatory for every settlement response; a response without it cannot be persisted.\n- If there are no changes, still emit a complete JSON object with the required empty arrays.\n- Put only the raw JSON object inside the RUNTIME_STATE_DELTA block. Do not replace it with legacy UPDATED_STATE, UPDATED_HOOKS, or a prose explanation.\n- Keep the exact marker names and output the POST_SETTLEMENT block followed by RUNTIME_STATE_DELTA.`
+    : `## 宿主持久化契约（强制）\n\n- 每次结算都必须输出 RUNTIME_STATE_DELTA；缺少该区块的响应不得落盘。\n- 如果没有变更，也必须输出包含必要空数组的完整 JSON 对象。\n- RUNTIME_STATE_DELTA 区块内只能放原始 JSON 对象，不要用旧版 UPDATED_STATE、UPDATED_HOOKS 或解释性文字替代。\n- 保持标记名称完全不变，先输出 POST_SETTLEMENT，再输出 RUNTIME_STATE_DELTA。`;
+
   return `${langPrefix}你是状态追踪分析师。给定新章节正文和当前 truth 文件，你的任务是产出更新后的 truth 文件。
 
 ## 工作模式
@@ -67,6 +71,8 @@ ${numericalBlock}
 ${hookRules}${fullCastBlock}
 
 ## 输出格式（必须严格遵循）
+
+${runtimeStateContract}
 
 ${buildSettlerOutputFormat(genreProfile)}
 

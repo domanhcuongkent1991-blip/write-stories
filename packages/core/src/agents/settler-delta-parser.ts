@@ -28,11 +28,19 @@ export function parseSettlerDeltaOutput(content: string): SettlerDeltaOutput {
     throw new Error("runtime state delta block is missing");
   }
 
-  const jsonPayload = stripCodeFence(rawDelta);
   let parsed: unknown;
-  try {
-    parsed = JSON.parse(sanitizeJSON(jsonPayload));
-  } catch (error) {
+  let parseError: unknown;
+  for (const candidate of jsonCandidates(rawDelta)) {
+    try {
+      parsed = JSON.parse(sanitizeJSON(candidate));
+      parseError = undefined;
+      break;
+    } catch (error) {
+      parseError = error;
+    }
+  }
+  if (parsed === undefined) {
+    const error = parseError ?? new Error("no JSON object found");
     throw new Error(`runtime state delta is not valid JSON: ${String(error)}`);
   }
 
@@ -46,8 +54,20 @@ export function parseSettlerDeltaOutput(content: string): SettlerDeltaOutput {
   }
 }
 
-function stripCodeFence(value: string): string {
+function jsonCandidates(value: string): string[] {
   const trimmed = value.trim();
-  const fenced = trimmed.match(/^```(?:json)?\s*([\s\S]*?)\s*```$/i);
-  return fenced?.[1]?.trim() ?? trimmed;
+  const candidates: string[] = [trimmed];
+  const fenced = trimmed.match(/```(?:json)?\s*([\s\S]*?)\s*```/i)?.[1]?.trim();
+  if (fenced) candidates.push(fenced);
+
+  // Some gateways/models add a one-line explanation around an otherwise valid
+  // object. Keep the recovery deliberately narrow: only the first `{` through
+  // the last `}` is considered, and the schema remains the final authority.
+  const objectStart = trimmed.indexOf("{");
+  const objectEnd = trimmed.lastIndexOf("}");
+  if (objectStart >= 0 && objectEnd > objectStart) {
+    candidates.push(trimmed.slice(objectStart, objectEnd + 1).trim());
+  }
+
+  return [...new Set(candidates.filter(Boolean))];
 }

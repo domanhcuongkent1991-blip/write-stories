@@ -99,6 +99,50 @@ describe("parseSettlerDeltaOutput", () => {
     expect(result.runtimeStateDelta.hookOps.defer).toEqual(["guild-route"]);
   });
 
+  it("accepts a fenced JSON payload when the model adds a short lead-in", () => {
+    const payload = JSON.stringify({
+      chapter: 22,
+      hookOps: {
+        upsert: [],
+        mention: [],
+        resolve: [],
+        defer: [],
+      },
+      notes: [],
+    });
+
+    const result = parseSettlerDeltaOutput([
+      "=== RUNTIME_STATE_DELTA ===",
+      "Dưới đây là delta trạng thái:",
+      "```json",
+      payload,
+      "```",
+      "Không thêm thay đổi nào khác.",
+    ].join("\n"));
+
+    expect(result.runtimeStateDelta.chapter).toBe(22);
+  });
+
+  it("accepts an unfenced JSON object surrounded by harmless prose", () => {
+    const result = parseSettlerDeltaOutput([
+      "=== RUNTIME_STATE_DELTA ===",
+      "Delta JSON:",
+      JSON.stringify({
+        chapter: 23,
+        hookOps: {
+          upsert: [],
+          mention: [],
+          resolve: [],
+          defer: [],
+        },
+        notes: [],
+      }),
+      "Kết thúc.",
+    ].join("\n"));
+
+    expect(result.runtimeStateDelta.chapter).toBe(23);
+  });
+
   it("parses new hook candidates separately from existing hook ops", () => {
     const result = parseSettlerDeltaOutput([
       "=== RUNTIME_STATE_DELTA ===",
