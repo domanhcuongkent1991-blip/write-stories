@@ -4,6 +4,7 @@ import type { GenreProfile } from "../models/genre-profile.js";
 import { LengthSpecSchema } from "../models/length-governance.js";
 import { buildWriterSystemPrompt, buildGoldenOpeningDiscipline } from "../agents/writer-prompts.js";
 import { BookRulesSchema } from "../models/book-rules.js";
+import { buildLengthSpec } from "../utils/length-metrics.js";
 
 const BOOK: BookConfig = {
   id: "prompt-book",
@@ -107,6 +108,33 @@ describe("buildWriterSystemPrompt", () => {
     expect(prompt).toContain("目标字数：2200");
     expect(prompt).toContain("允许区间：1900-2500");
     expect(prompt).not.toContain("正文不少于2200字");
+  });
+
+  it("gives Vietnamese writers a 1100-1300 generation target while preserving audit safety", () => {
+    const prompt = buildWriterSystemPrompt(
+      { ...BOOK, language: "vi" },
+      { ...GENRE, name: "综合" },
+      null,
+      "# Book Rules",
+      "# Genre Body",
+      "# Style Guide",
+      undefined,
+      1,
+      "creative",
+      undefined,
+      "vi",
+      "governed",
+      buildLengthSpec(1150, "vi"),
+    );
+
+    expect(prompt).toContain("1100-1300");
+    expect(prompt).toContain("vi_wordlike_tokens_v1");
+    expect(prompt).toContain("1000-1500");
+    expect(prompt).toContain("chapter memo/context");
+    expect(prompt).toContain("CHAPTER_CONTENT");
+    expect(prompt).toContain("mục tiêu viết");
+    expect(prompt).toContain("Độ dài khi viết tiếng Việt");
+    expect(prompt).not.toContain("## 字数治理");
   });
 
   it("keeps hard guardrails and book/style constraints in governed mode", () => {

@@ -86,6 +86,34 @@ export function buildLengthSpec(
   };
 }
 
+/**
+ * Shared writing guidance for Vietnamese chapter generation.
+ *
+ * The audit policy deliberately remains broader (1000-1500 tokens). This
+ * narrower target gives the writer room to finish a coherent chapter before
+ * the hard safety gate is reached, while keeping the counting mode explicit.
+ */
+export function formatWriterPromptLengthGuidance(
+  spec: LengthSpec,
+  language: WritingLanguage,
+): string | undefined {
+  if (
+    language !== "vi" ||
+    spec.target !== 1150 ||
+    spec.countingMode !== "vi_wordlike_tokens_v1"
+  ) {
+    return undefined;
+  }
+
+  return [
+    "ĐỘ DÀI KHI VIẾT (BẮT BUỘC): chỉ tính phần CHAPTER_CONTENT theo vi_wordlike_tokens_v1.",
+    "Mục tiêu viết: 1100-1300 từ tiếng Việt (mốc tham chiếu 1150 từ); hãy chủ động kết thúc trong khoảng này.",
+    "Đây là mục tiêu viết, không phải gợi ý: không thêm câu hoặc cảnh đệm; khi gần 1300 từ hãy khép cảnh và kết thúc hook.",
+    "Mọi hướng dẫn của chapter memo/context vẫn phải được đáp ứng. Nếu memo ghi khoảng khác, dùng mục tiêu viết 1100-1300 cho phần sáng tác.",
+    "Audit safety range vẫn là 1000-1500: 1301-1500 chỉ cảnh báo nếu các gate khác đạt; dưới 1000 hoặc trên 1500 bị chặn.",
+  ].join("\n");
+}
+
 function scaleRangeDelta(target: number, referenceDelta: number): number {
   return Math.max(1, Math.floor((target * referenceDelta) / REFERENCE_TARGET));
 }

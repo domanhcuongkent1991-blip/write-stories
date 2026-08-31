@@ -98,7 +98,7 @@ Expected: FAIL because the Vietnamese reviser currently exposes only the hard ra
 
 - [ ] **Step 3: Implement minimal alignment**
 
-When the spec is the Vietnamese 1,150-token profile, append the shared writer-target guidance after the existing hard structural repair instruction. Keep `hardMin=1000` and `hardMax=1500` visible so candidate acceptance remains unchanged.
+When the spec is the Vietnamese 1,150-token profile, append the shared writer-target guidance after the existing hard structural repair instruction in `buildAutoSystemPrompt`, and include it in the user prompt for every reviser mode (including `auto`). Keep `hardMin=1000` and `hardMax=1500` visible so candidate acceptance remains unchanged.
 
 - [ ] **Step 4: Verify green and commit**
 

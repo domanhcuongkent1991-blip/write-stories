@@ -2,10 +2,11 @@ import type { BookConfig, FanficMode } from "../models/book.js";
 import type { GenreProfile } from "../models/genre-profile.js";
 import type { BookRules } from "../models/book-rules.js";
 import type { LengthSpec } from "../models/length-governance.js";
-import type { ScaffoldLanguage } from "../models/writing-language.js";
+import type { ScaffoldLanguage, WritingLanguage } from "../models/writing-language.js";
 import { buildFanficCanonSection, buildCharacterVoiceProfiles, buildFanficModeInstructions } from "./fanfic-prompt-sections.js";
 import { buildEnglishGenreIntro } from "./en-prompt-sections.js";
-import { buildLengthSpec } from "../utils/length-metrics.js";
+import { buildLengthSpec, formatWriterPromptLengthGuidance } from "../utils/length-metrics.js";
+import { resolveWritingLanguageProfile } from "../utils/language.js";
 
 export interface FanficContext {
   readonly fanficCanon: string;
@@ -28,13 +29,14 @@ export function buildWriterSystemPrompt(
   chapterNumber?: number,
   mode: "full" | "creative" = "full",
   fanficContext?: FanficContext,
-  languageOverride?: ScaffoldLanguage,
+  languageOverride?: WritingLanguage,
   inputProfile: "legacy" | "governed" = "legacy",
   lengthSpec?: LengthSpec,
 ): string {
-  const isEnglish = (languageOverride ?? genreProfile.language) === "en";
+  const promptLanguage = languageOverride ?? genreProfile.language;
+  const isEnglish = resolveWritingLanguageProfile(promptLanguage).scaffoldLanguage === "en";
   const governed = inputProfile === "governed";
-  const resolvedLengthSpec = lengthSpec ?? buildLengthSpec(book.chapterWordCount, isEnglish ? "en" : "zh");
+  const resolvedLengthSpec = lengthSpec ?? buildLengthSpec(book.chapterWordCount, promptLanguage);
 
   const outputSection = isEnglish
     ? (mode === "creative"
@@ -49,7 +51,7 @@ export function buildWriterSystemPrompt(
         buildEnglishGenreIntro(book, genreProfile),
         buildGovernedInputContract("en", governed),
         buildChapterMemoContract("en", governed),
-        buildLengthGuidance(resolvedLengthSpec, "en"),
+        buildLengthGuidance(resolvedLengthSpec, promptLanguage),
         buildGoldenOpeningDiscipline(chapterNumber, "en"),
         buildGenreRules(genreProfile, genreBody),
         buildProtagonistRules(bookRules),
@@ -67,7 +69,7 @@ export function buildWriterSystemPrompt(
         buildGenreIntro(book, genreProfile),
         buildGovernedInputContract("zh", governed),
         buildChapterMemoContract("zh", governed),
-        buildLengthGuidance(resolvedLengthSpec, "zh"),
+        buildLengthGuidance(resolvedLengthSpec, promptLanguage),
         buildGoldenOpeningDiscipline(chapterNumber, "zh"),
         bookRules?.enableFullCastTracking ? buildFullCastTracking() : "",
         buildGenreRules(genreProfile, genreBody),
@@ -164,7 +166,7 @@ Address each section in order when drafting the chapter. Every section must leav
 写作时按段落顺序落实，每一段都要在正文里有对应的兑现痕迹。如果某一段没有体现到正文里，本章不算完成。**写完初稿后自检一遍 hook 账**：把 advance 和 resolve 的 hook_id 列下来，对照正文，确认每一个都能指到一段带具体动作/物件/对话的 prose。如果指不到，回去补写；不要提交"账本在 memo 里、正文里没落"的稿子——审稿会标记缺口并要求补出具体场景。`;
 }
 
-function buildLengthGuidance(lengthSpec: LengthSpec, language: ScaffoldLanguage): string {
+function buildLengthGuidance(lengthSpec: LengthSpec, language: WritingLanguage): string {
   if (language === "en") {
     return `## Length Guidance
 
@@ -173,11 +175,24 @@ function buildLengthGuidance(lengthSpec: LengthSpec, language: ScaffoldLanguage)
 - Hard range: ${lengthSpec.hardMin}-${lengthSpec.hardMax} words`;
   }
 
+  const vietnameseGuidance = formatWriterPromptLengthGuidance(lengthSpec, language);
+  if (vietnameseGuidance) {
+    return `## Độ dài khi viết tiếng Việt\n\n${vietnameseGuidance}`;
+  }
+
   return `## 字数治理
 
 - 目标字数：${lengthSpec.target}字
 - 允许区间：${lengthSpec.softMin}-${lengthSpec.softMax}字
 - 硬区间：${lengthSpec.hardMin}-${lengthSpec.hardMax}字`;
+}
+
+function buildChapterContentLengthLine(lengthSpec: LengthSpec): string {
+  if (formatWriterPromptLengthGuidance(lengthSpec, "vi")) {
+    return "(CHAPTER_CONTENT：mục tiêu viết 1100-1300 từ tiếng Việt; audit safety range 1000-1500)";
+  }
+
+  return `(正文内容，目标${lengthSpec.target}字，允许区间${lengthSpec.softMin}-${lengthSpec.softMax}字)`;
 }
 
 // ---------------------------------------------------------------------------
@@ -364,7 +379,7 @@ ${preWriteTable}
 (章节标题，不含"第X章"。标题必须与已有章节标题不同，不要重复使用相同或相似的标题；若提供了 recent title history 或高频标题词，必须主动避开重复词根和高频意象)
 
 === CHAPTER_CONTENT ===
-(正文内容，目标${lengthSpec.target}字，允许区间${lengthSpec.softMin}-${lengthSpec.softMax}字)
+${buildChapterContentLengthLine(lengthSpec)}
 
 【重要】本次只需输出以上三个区块（PRE_WRITE_CHECK、CHAPTER_TITLE、CHAPTER_CONTENT）。
 状态卡、伏笔池、摘要等追踪文件将由后续结算阶段处理，请勿输出。`;
@@ -422,7 +437,7 @@ ${preWriteTable}
 (章节标题，不含"第X章"。标题必须与已有章节标题不同，不要重复使用相同或相似的标题；若提供了 recent title history 或高频标题词，必须主动避开重复词根和高频意象)
 
 === CHAPTER_CONTENT ===
-(正文内容，目标${lengthSpec.target}字，允许区间${lengthSpec.softMin}-${lengthSpec.softMax}字)
+${buildChapterContentLengthLine(lengthSpec)}
 
 ${postSettlement}
 

@@ -2,11 +2,11 @@ import { BaseAgent } from "./base.js";
 import type { GenreProfile } from "../models/genre-profile.js";
 import type { BookRules } from "../models/book-rules.js";
 import type { LengthSpec } from "../models/length-governance.js";
-import type { ScaffoldLanguage } from "../models/writing-language.js";
+import type { ScaffoldLanguage, WritingLanguage } from "../models/writing-language.js";
 import type { AuditIssue } from "./continuity.js";
 import type { ChapterIntent, ChapterMemo, ContextPackage, RuleStack } from "../models/input-governance.js";
 import { readGenreProfile, readBookLanguage, readBookRules } from "./rules-reader.js";
-import { countChapterLength } from "../utils/length-metrics.js";
+import { countChapterLength, formatWriterPromptLengthGuidance } from "../utils/length-metrics.js";
 import { buildGovernedMemoryEvidenceBlocks } from "../utils/governed-context.js";
 import { filterSummaries } from "../utils/context-filter.js";
 import {
@@ -168,6 +168,7 @@ export class ReviserAgent extends BaseAgent {
       readGenreProfile(this.ctx.projectRoot, genreId),
       readBookLanguage(bookDir),
     ]);
+    const writingLanguage: WritingLanguage = bookLanguage ?? gp.language;
     const parsedRules = await readBookRules(bookDir);
     const bookRules = parsedRules?.rules ?? null;
 
@@ -235,7 +236,7 @@ export class ReviserAgent extends BaseAgent {
 
     const autoOutputMode = mode === "auto" ? resolveAutoOutputMode(issues) : "allow-full";
     const systemPromptBase = mode === "auto"
-      ? this.buildAutoSystemPrompt({ langPrefix, gp, protagonistBlock, numericalRule, lengthGuardrail, resolvedLanguage, lengthSpec: options?.lengthSpec, autoOutputMode })
+      ? this.buildAutoSystemPrompt({ langPrefix, gp, protagonistBlock, numericalRule, lengthGuardrail, resolvedLanguage, writingLanguage, lengthSpec: options?.lengthSpec, autoOutputMode })
       : this.buildLegacySystemPrompt({ langPrefix, gp, protagonistBlock, numericalRule, lengthGuardrail, mode, resolvedLanguage });
     const systemPrompt = await this.withPromptPackGuidance(systemPromptBase, "longform.reviser");
 
@@ -282,6 +283,12 @@ export class ReviserAgent extends BaseAgent {
           ? `\n## Hard length constraint\nCounting mode: ${options.lengthSpec.countingMode} (${lengthUnit(options.lengthSpec.countingMode)})\nTarget: ${options.lengthSpec.target}\nHard range: ${options.lengthSpec.hardMin}-${options.lengthSpec.hardMax}\nThis structural repair constraint is non-negotiable. Adjust the prose to fit without adding subplots or removing core facts.\n`
           : `\n## 篇幅硬性约束\n计数模式：${options.lengthSpec.countingMode}（${lengthUnit(options.lengthSpec.countingMode)}）\n目标：${options.lengthSpec.target}\n硬性区间：${options.lengthSpec.hardMin}-${options.lengthSpec.hardMax}\n这是不可协商的结构性修复约束；必须通过调整正文落入硬性区间，不得新增支线或删掉核心事实。\n`)
       : "";
+    const writerTargetLengthBlock = options?.lengthSpec
+      ? formatWriterPromptLengthGuidance(options.lengthSpec, writingLanguage)
+      : undefined;
+    const writerTargetLengthSection = writerTargetLengthBlock
+      ? `\n## Vietnamese writer target\n${writerTargetLengthBlock}\n`
+      : "";
     const styleGuideBlock = reducedControlBlock.length === 0
       ? `\n## 文风指南\n${styleGuide}`
       : "";
@@ -294,7 +301,7 @@ ${issueList}
 ## 当前状态卡
 ${currentState}
 ${ledgerBlock}
-${sanitizeNarrativeEvidenceBlock(hookDebtBlock, resolvedLanguage) ?? ""}${sanitizeNarrativeEvidenceBlock(hooksBlock, resolvedLanguage) ?? ""}${sanitizeNarrativeEvidenceBlock(volumeSummariesBlock, resolvedLanguage) ?? ""}${reducedControlBlock || outlineBlock}${bibleBlock}${matrixBlock}${sanitizeNarrativeEvidenceBlock(summariesBlock, resolvedLanguage) ?? ""}${canonBlock}${fanficCanonBlock}${styleGuideBlock}${lengthGuidanceBlock}
+${sanitizeNarrativeEvidenceBlock(hookDebtBlock, resolvedLanguage) ?? ""}${sanitizeNarrativeEvidenceBlock(hooksBlock, resolvedLanguage) ?? ""}${sanitizeNarrativeEvidenceBlock(volumeSummariesBlock, resolvedLanguage) ?? ""}${reducedControlBlock || outlineBlock}${bibleBlock}${matrixBlock}${sanitizeNarrativeEvidenceBlock(summariesBlock, resolvedLanguage) ?? ""}${canonBlock}${fanficCanonBlock}${styleGuideBlock}${lengthGuidanceBlock}${writerTargetLengthSection}
 
 ## 待修正章节
 ${chapterContent}`;
@@ -418,17 +425,24 @@ ${chapterContent}`;
     numericalRule: string;
     lengthGuardrail: string;
     resolvedLanguage: ScaffoldLanguage;
+    writingLanguage: WritingLanguage;
     lengthSpec?: LengthSpec;
     autoOutputMode: AutoOutputMode;
   }): string {
-    const { langPrefix, gp, protagonistBlock, numericalRule, resolvedLanguage, lengthSpec, autoOutputMode } = params;
+    const { langPrefix, gp, protagonistBlock, numericalRule, resolvedLanguage, writingLanguage, lengthSpec, autoOutputMode } = params;
     // lengthGuardrail intentionally not used in auto mode — length constraint is embedded in REVISED_CONTENT description
     const en = resolvedLanguage === "en";
+    const writerTargetGuidance = lengthSpec && writingLanguage === "vi"
+      ? formatWriterPromptLengthGuidance(lengthSpec, writingLanguage)
+      : undefined;
     const rewriteLengthConstraint = lengthSpec
       ? (en
           ? `\n  HARD STRUCTURAL REPAIR: Using counting mode ${lengthSpec.countingMode} (${lengthUnit(lengthSpec.countingMode)}), revised chapter length must stay within the hard range ${lengthSpec.hardMin}-${lengthSpec.hardMax} (target: ${lengthSpec.target}). This is non-negotiable — repair structure/prose to fit the range; do not exceed it.`
           : `\n  硬性结构修复：按计数模式 ${lengthSpec.countingMode}（${lengthUnit(lengthSpec.countingMode)}），重写后的章节长度必须控制在硬性区间 ${lengthSpec.hardMin}-${lengthSpec.hardMax} 内（目标 ${lengthSpec.target}）。这是不可突破的底线；请通过结构/正文修复落入区间。`)
       : "";
+    const rewriteLengthGuidance = writerTargetGuidance
+      ? `${rewriteLengthConstraint}\n\n${writerTargetGuidance}`
+      : rewriteLengthConstraint;
 
     const routingDirectiveEn = autoOutputMode === "rewrite-only"
       ? "\n\nROUTING: The reviewer's blocking issues are structural / semantic (character collapse, mainline drift, missing payoff, timeline break, unpaid hook, memo drift, etc.). You MUST output REVISED_CONTENT — do not emit PATCHES, they cannot fix this class of problem. If you cannot safely rewrite, say so in FIXED_ISSUES and leave REVISED_CONTENT empty."
@@ -450,7 +464,7 @@ PATCHES — for local text issues (wording, dialogue, AI-tell phrases, small con
   Each PATCH quotes the passage to change (a sentence, a paragraph, or multiple paragraphs) and provides a replacement. Untouched text stays exactly as-is.
 
 REVISED_CONTENT — for whole-chapter issues (length compression, structural rewrite, pacing restructure, major plot realignment).
-  Outputs the full revised chapter. When Critical issues include length or structural problems, you must use REVISED_CONTENT — patches cannot compress or restructure a chapter.${rewriteLengthConstraint}
+  Outputs the full revised chapter. When Critical issues include length or structural problems, you must use REVISED_CONTENT — patches cannot compress or restructure a chapter.${rewriteLengthGuidance}
 
 If Critical issues include both local and whole-chapter problems, use REVISED_CONTENT (it addresses everything in one pass).
 
@@ -494,7 +508,7 @@ PATCHES——处理局部文字问题（措辞、对话、AI痕迹、小的连�
   每个 PATCH 引用要修改的原文段落（一句、一段或多段皆可），给出替换文本。未涉及的内容保持原样。
 
 REVISED_CONTENT——处理全章级问题（字数压缩、结构重组、节奏重排、重大剧情偏离）。
-  输出修正后的完整正文。当 Critical 问题包含字数或结构性问题时，必须使用 REVISED_CONTENT——PATCHES 无法压缩或重构整章。${rewriteLengthConstraint}
+  输出修正后的完整正文。当 Critical 问题包含字数或结构性问题时，必须使用 REVISED_CONTENT——PATCHES 无法压缩或重构整章。${rewriteLengthGuidance}
 
 如果 Critical 同时包含局部问题和全章问题，使用 REVISED_CONTENT（一次性解决所有问题）。
 

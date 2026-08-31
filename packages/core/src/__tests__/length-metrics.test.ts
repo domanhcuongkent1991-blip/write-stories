@@ -4,6 +4,7 @@ import {
   countChapterLength,
   defaultChapterLength,
   formatLengthCount,
+  formatWriterPromptLengthGuidance,
   isOutsideHardRange,
   isOutsideSoftRange,
   resolveLengthCountingMode,
@@ -117,6 +118,18 @@ describe("length metrics", () => {
 
   it("formats Vietnamese length counts in words", () => {
     expect(formatLengthCount(7, "vi_wordlike_tokens_v1")).toBe("7 từ");
+  });
+
+  it("formats the Vietnamese writer target separately from the audit safety range", () => {
+    const guidance = formatWriterPromptLengthGuidance(buildLengthSpec(1150, "vi"), "vi");
+    expect(guidance).toContain("1100-1300");
+    expect(guidance).toContain("vi_wordlike_tokens_v1");
+    expect(guidance).toContain("1000-1500");
+    expect(guidance).toContain("chapter memo/context");
+  });
+
+  it("does not override non-Vietnamese prompt formatting", () => {
+    expect(formatWriterPromptLengthGuidance(buildLengthSpec(2200, "zh"), "zh")).toBeUndefined();
   });
 
 });

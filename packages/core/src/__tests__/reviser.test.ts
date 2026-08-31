@@ -76,6 +76,58 @@ describe("ReviserAgent", () => {
     }
   });
 
+  it("gives Vietnamese auto revision the 1100-1300 writer target without narrowing the audit gate", async () => {
+    const root = await mkdtemp(join(tmpdir(), "inkos-reviser-vi-target-"));
+    const bookDir = join(root, "book");
+    await mkdir(join(bookDir, "story"), { recursive: true });
+    await writeFile(join(bookDir, "book.json"), JSON.stringify({
+      id: "vietnamese-book",
+      title: "Vietnamese Book",
+      genre: "xuanhuan",
+      platform: "other",
+      chapterWordCount: 1150,
+      targetChapters: 10,
+      status: "active",
+      language: "vi",
+      createdAt: "2026-03-23T00:00:00.000Z",
+      updatedAt: "2026-03-23T00:00:00.000Z",
+    }), "utf-8");
+    const agent = new ReviserAgent({
+      client: {
+        provider: "openai",
+        apiFormat: "chat",
+        stream: false,
+        defaults: { temperature: 0.7, maxTokens: 4096, thinkingBudget: 0, extra: {} },
+      },
+      model: "test-model",
+      projectRoot: root,
+    });
+    const chatSpy = vi.spyOn(ReviserAgent.prototype as never, "chat" as never).mockResolvedValue({
+      content: "=== FIXED_ISSUES ===\n\n=== REVISED_CONTENT ===\nBản đã sửa.",
+      usage: ZERO_USAGE,
+    });
+
+    try {
+      await agent.reviseChapter(
+        bookDir,
+        "Bản thảo ban đầu.",
+        1,
+        [CRITICAL_ISSUE],
+        "auto",
+        "xuanhuan",
+        { lengthSpec: buildLengthSpec(1150, "vi") },
+      );
+      const messages = (chatSpy.mock.calls[0]?.[0] ?? []) as ReadonlyArray<{ content: string }>;
+      const combinedPrompt = messages.map((message) => message.content).join("\n");
+      expect(combinedPrompt).toContain("1100-1300");
+      expect(combinedPrompt).toContain("vi_wordlike_tokens_v1");
+      expect(combinedPrompt).toContain("1000-1500");
+      expect(combinedPrompt).toContain("chapter memo/context");
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
   it.each([
     { language: "zh", mode: "zh_chars", unit: "字", source: "原始正文。" },
     { language: "en", mode: "en_words", unit: "words", source: "Original draft." },

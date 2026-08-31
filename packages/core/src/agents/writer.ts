@@ -26,6 +26,7 @@ import type { RuntimeStateDelta } from "../models/runtime-state.js";
 import {
   buildLengthSpec,
   countChapterLength,
+  formatWriterPromptLengthGuidance,
   resolveLengthCountingMode,
 } from "../utils/length-metrics.js";
 import { resolveWritingLanguageProfile } from "../utils/language.js";
@@ -236,7 +237,7 @@ export class WriterAgent extends BaseAgent {
     // ── Phase 1: Creative writing (temperature 0.7) ──
     const creativeSystemPrompt = await this.withPromptPackGuidance(buildWriterSystemPrompt(
       book, genreProfile, bookRules, bookRulesBody, genreBody, styleGuide, styleFingerprint,
-      chapterNumber, "creative", fanficContext, resolvedLanguage,
+      chapterNumber, "creative", fanficContext, writingLanguage,
       "governed",
       resolvedLengthSpec,
     ), "longform.writer");
@@ -1012,6 +1013,11 @@ ${overrides}\n`;
   }
 
   private buildLengthRequirementBlock(lengthSpec: LengthSpec, language: ScaffoldLanguage): string {
+    const vietnameseGuidance = formatWriterPromptLengthGuidance(lengthSpec, "vi");
+    if (vietnameseGuidance) {
+      return `${language === "en" ? "Requirements:" : "要求："}\n${vietnameseGuidance}`;
+    }
+
     if (language === "en") {
       return `Requirements:
 - Target length: ${lengthSpec.target} words

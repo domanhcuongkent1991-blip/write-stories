@@ -146,7 +146,7 @@ describe("WriterAgent", () => {
           readonly activeOverrides: readonly [];
         };
         readonly lengthSpec: ReturnType<typeof buildLengthSpec>;
-        readonly language?: "zh" | "en";
+        readonly language?: "zh" | "en" | "vi";
         readonly externalContext?: string;
       }): string;
     }).buildGovernedUserPrompt({
@@ -173,6 +173,64 @@ describe("WriterAgent", () => {
     expect(prompt).toContain("本章用户指令");
     expect(prompt).toContain("本章标题：雨夜账本");
     expect(prompt).toContain("当面对质");
+  });
+
+  it("injects the Vietnamese generation target into the governed user prompt", () => {
+    const agent = new WriterAgent({
+      client: {
+        provider: "openai",
+        apiFormat: "chat",
+        stream: false,
+        defaults: { temperature: 0.7, maxTokens: 4096, thinkingBudget: 0, extra: {} },
+      },
+      model: "test-model",
+      projectRoot: "/tmp/inkos-writer-vi-length-test",
+    });
+
+    const prompt = (agent as unknown as {
+      buildGovernedUserPrompt(params: {
+        readonly chapterNumber: number;
+        readonly chapterMemo: {
+          readonly chapter: number;
+          readonly goal: string;
+          readonly isGoldenOpening: boolean;
+          readonly body: string;
+          readonly threadRefs: readonly string[];
+        };
+        readonly contextPackage: { readonly chapter: number; readonly selectedContext: readonly [] };
+        readonly ruleStack: {
+          readonly layers: readonly [];
+          readonly sections: { readonly hard: readonly string[]; readonly soft: readonly string[]; readonly diagnostic: readonly string[] };
+          readonly overrideEdges: readonly [];
+          readonly activeOverrides: readonly [];
+        };
+        readonly lengthSpec: ReturnType<typeof buildLengthSpec>;
+        readonly language?: "zh" | "en" | "vi";
+      }): string;
+    }).buildGovernedUserPrompt({
+      chapterNumber: 1,
+      chapterMemo: {
+        chapter: 1,
+        goal: "Đẩy xung đột hiện tại",
+        isGoldenOpening: true,
+        body: "## 当前任务\nĐẩy xung đột hiện tại.",
+        threadRefs: [],
+      },
+      contextPackage: { chapter: 1, selectedContext: [] },
+      ruleStack: {
+        layers: [],
+        sections: { hard: [], soft: [], diagnostic: [] },
+        overrideEdges: [],
+        activeOverrides: [],
+      },
+      lengthSpec: buildLengthSpec(1150, "vi"),
+      language: "en",
+    });
+
+    expect(prompt).toContain("1100-1300");
+    expect(prompt).toContain("vi_wordlike_tokens_v1");
+    expect(prompt).toContain("1000-1500");
+    expect(prompt).toContain("chapter memo/context");
   });
 
   it("uses compact summary context plus selected long-range evidence during governed settlement", async () => {
