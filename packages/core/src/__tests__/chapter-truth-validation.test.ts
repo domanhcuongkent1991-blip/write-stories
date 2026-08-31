@@ -98,6 +98,79 @@ describe("validateChapterTruthPersistence", () => {
     expect(result.persistenceOutput.updatedState).toBe("码头");
   });
 
+  it("retries settlement when runtime hook state contradicts the governed hook intent", async () => {
+    const expectedHook = {
+      hookId: "mystery-ngu-xung-ghi-sync",
+      startChapter: 1,
+      type: "mystery",
+      status: "progressing" as const,
+      lastAdvancedChapter: 2,
+      expectedPayoff: "move the sealed NVRAM card to the lab",
+      notes: "",
+    };
+    const openHook = { ...expectedHook, status: "open" as const, lastAdvancedChapter: 1 };
+    const runtimeOutput = (hook: typeof expectedHook | typeof openHook) => createWriterOutput({
+      runtimeStateDelta: {
+        chapter: 2,
+        hookOps: { upsert: [hook], mention: [], resolve: [], defer: [] },
+        newHookCandidates: [],
+        subplotOps: [],
+        emotionalArcOps: [],
+        characterMatrixOps: [],
+        notes: [],
+      },
+      runtimeStateSnapshot: {
+        manifest: {
+          schemaVersion: 2,
+          language: "vi",
+          lastAppliedChapter: 2,
+          projectionVersion: 1,
+          migrationWarnings: [],
+        },
+        currentState: { chapter: 2, facts: [] },
+        hooks: { hooks: [hook] },
+        chapterSummaries: { rows: [] },
+      },
+    });
+    const validator = {
+      validate: vi.fn().mockResolvedValue(createValidationResult()),
+    };
+    const writer = {
+      settleChapterState: vi.fn().mockResolvedValue(runtimeOutput(expectedHook)),
+    };
+
+    const result = await validateChapterTruthPersistence({
+      writer,
+      validator,
+      book: { ...BOOK, language: "vi" },
+      bookDir: "/tmp/book",
+      chapterNumber: 2,
+      title: "Niêm phong NVRAM",
+      content: "Thẻ NVRAM niêm phong được chuyển lên xe chuyên dụng để đưa về phòng lab.",
+      persistenceOutput: runtimeOutput(openHook),
+      auditResult: createAuditResult(),
+      previousTruth: { oldState: "chapter 1", oldHooks: "open hook", oldLedger: "ledger" },
+      expectedHookOps: {
+        upsert: [expectedHook],
+        mention: [],
+        resolve: [],
+        defer: [],
+      },
+      acceptanceCriteria: [
+        "Hook mystery-ngu-xung-ghi-sync is advanced through an advancing runtime upsert.",
+      ],
+      language: "en",
+      logWarn: vi.fn(),
+    });
+
+    expect(writer.settleChapterState).toHaveBeenCalledTimes(1);
+    expect(writer.settleChapterState).toHaveBeenCalledWith(expect.objectContaining({
+      validationFeedback: expect.stringContaining("mystery-ngu-xung-ghi-sync"),
+    }));
+    expect(result.chapterStatus).toBeNull();
+    expect(result.persistenceOutput.runtimeStateSnapshot?.hooks.hooks[0]?.status).toBe("progressing");
+  });
+
   it("uses recovered settlement output when retry succeeds", async () => {
     const validator = {
       validate: vi.fn()

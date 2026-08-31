@@ -136,6 +136,23 @@ describe("persisted-governed-plan round trip", () => {
     expect(await readFile(path, "utf-8")).toBe(legacy);
   });
 
+  it("does not reuse a planner fallback on the next chapter attempt", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "inkos-plan-fallback-"));
+    await mkdir(join(dir, "story", "runtime"), { recursive: true });
+    const fallbackPlan = buildPlan(1);
+    await savePersistedPlan(dir, {
+      ...fallbackPlan,
+      memo: {
+        ...fallbackPlan.memo,
+        body: `${fallbackPlan.memo.body}\n\n## Planner warning\nThe model failed to produce a valid chapter memo after 3 attempts.`,
+      },
+    });
+
+    const loaded = await loadPersistedPlan(dir, 1);
+
+    expect(loaded).toBeNull();
+  });
+
   it("returns null when plan file does not exist", async () => {
     const dir = await mkdtemp(join(tmpdir(), "inkos-plan-"));
     await mkdir(join(dir, "story", "runtime"), { recursive: true });

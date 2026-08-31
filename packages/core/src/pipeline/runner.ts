@@ -3348,6 +3348,8 @@ export class PipelineRunner {
                 bookRules: authorityBookRules,
                 chapterSummaries: authorityChapterSummaries,
               },
+              expectedHookOps: writeInput.chapterIntentData?.expectedHookOps,
+              acceptanceCriteria: writeInput.chapterIntentData?.acceptanceCriteria,
               normalizeSettledOutput: (candidateOutput) => this.promotePersistenceHooks(
                 bookDir,
                 chapterNumber,
@@ -3553,6 +3555,8 @@ export class PipelineRunner {
           bookRules: authorityBookRules,
           chapterSummaries: authorityChapterSummaries,
         },
+        expectedHookOps: writeInput.chapterIntentData?.expectedHookOps,
+        acceptanceCriteria: writeInput.chapterIntentData?.acceptanceCriteria,
         normalizeSettledOutput: (settledOutput) => this.promotePersistenceHooks(
           bookDir,
           chapterNumber,
@@ -3576,7 +3580,11 @@ export class PipelineRunner {
         ...issue,
         source: "state" as const,
         verification: validationUnavailable ? "unverified" as const : "verified" as const,
-        evidence: { contentHash, stateRef: "chapter-truth-validation" },
+        evidence: {
+          ...issue.evidence,
+          contentHash,
+          stateRef: issue.evidence?.stateRef ?? "chapter-truth-validation",
+        },
         repairTarget: issue.repairTarget ?? "runtime-state",
       }));
       auditResult = {
@@ -5273,10 +5281,12 @@ ${matrix}`,
       ),
     });
     const hasBlockedWords = sensitiveResult.found.some((f) => f.severity === "block");
+    const hostFindings = llmAudit.hostFindings ?? [];
     const deterministicFindings: ReadonlyArray<AuditIssue> = [
       ...aiTells.issues,
       ...sensitiveResult.issues,
       ...longSpanFatigue.issues,
+      ...hostFindings,
     ];
     const evaluation = decideAudit({
       content: params.chapterContent,
@@ -5301,6 +5311,7 @@ ${matrix}`,
     // construction (not by category name) so that an LLM-reported issue
     // sharing a category label with a long-span issue is still counted.
     const revisionBlockingIssues: ReadonlyArray<AuditIssue> = [
+      ...hostFindings,
       ...llmAudit.issues,
       ...aiTells.issues,
       ...sensitiveResult.issues,

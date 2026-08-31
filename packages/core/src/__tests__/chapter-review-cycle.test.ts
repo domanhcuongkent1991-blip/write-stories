@@ -15,10 +15,10 @@ const LENGTH_SPEC: LengthSpec = {
 
 const VI_LENGTH_SPEC: LengthSpec = {
   target: 1150,
-  softMin: 1000,
+  softMin: 1100,
   softMax: 1300,
   hardMin: 1000,
-  hardMax: 1500,
+  hardMax: 1800,
   countingMode: "vi_wordlike_tokens_v1",
 };
 
@@ -224,9 +224,9 @@ describe("runChapterReviewCycle v9", () => {
     expect(result.auditResult.issues.filter((issue) => issue.ruleId === "length.hard-range")).toHaveLength(0);
   });
 
-  it("rejects a revision candidate that does not reduce an overlong canonical draft before settlement", async () => {
-    const original = "nguyên bản ".repeat(1600);
-    const candidate = "bản sửa ".repeat(1600);
+  it("rejects an overlong revision after a bounded canonical rescue before settlement", async () => {
+    const original = "nguyên bản ".repeat(1900);
+    const candidate = "bản sửa ".repeat(1900);
     const auditChapter = vi.fn().mockResolvedValue(createAuditResult({ passed: true, overallScore: 95 }));
     const reviseChapter = vi.fn().mockResolvedValue({
       revisedContent: candidate,
@@ -248,7 +248,8 @@ describe("runChapterReviewCycle v9", () => {
       settleRevisionCandidate,
     });
 
-    expect(reviseChapter).toHaveBeenCalledTimes(1);
+    expect(reviseChapter).toHaveBeenCalledTimes(2);
+    expect(reviseChapter.mock.calls[1]?.[1]).toBe(original);
     expect(settleRevisionCandidate).not.toHaveBeenCalled();
     expect(auditChapter).toHaveBeenCalledTimes(1);
     expect(result.finalContent).toBe(original);
@@ -263,8 +264,8 @@ describe("runChapterReviewCycle v9", () => {
       { length: count },
       (_, index) => `${prefix}${index}`,
     ).join(" ");
-    const original = words(1800, "goc");
-    const firstCandidate = words(1550, "sua");
+    const original = words(2100, "goc");
+    const firstCandidate = words(1850, "sua");
     const rescuedCandidate = words(1200, "gon");
     const auditChapter = vi.fn()
       .mockResolvedValueOnce(createAuditResult({ passed: true, overallScore: 96 }))
@@ -288,7 +289,7 @@ describe("runChapterReviewCycle v9", () => {
       ...baseParams,
       bookId: "book-vi-rescue",
       lengthSpec: VI_LENGTH_SPEC,
-      initialOutput: { content: original, wordCount: 1800, postWriteErrors: [] },
+      initialOutput: { content: original, wordCount: 2100, postWriteErrors: [] },
       createReviser: () => ({ reviseChapter }),
       auditor: { auditChapter },
       settleRevisionCandidate,
@@ -308,6 +309,264 @@ describe("runChapterReviewCycle v9", () => {
     expect(result.finalWordCount).toBe(1200);
     expect(result.revised).toBe(true);
     expect(result.auditResult.passed).toBe(true);
+  });
+
+  it("rescues from the canonical draft when the first Vietnamese revision gets longer", async () => {
+    const words = (count: number, prefix: string) => Array.from(
+      { length: count },
+      (_, index) => `${prefix}${index}`,
+    ).join(" ");
+    const original = words(1859, "goc");
+    const worseCandidate = words(1891, "dai");
+    const rescuedCandidate = words(1200, "gon");
+    const auditChapter = vi.fn()
+      .mockResolvedValueOnce(createAuditResult({ passed: true, overallScore: 96 }))
+      .mockResolvedValueOnce(createAuditResult({ passed: true, overallScore: 95 }));
+    const reviseChapter = vi.fn()
+      .mockResolvedValueOnce({
+        revisedContent: worseCandidate,
+        wordCount: 1691,
+        fixedIssues: ["length-budget"],
+        tokenUsage: ZERO_USAGE,
+      })
+      .mockResolvedValueOnce({
+        revisedContent: rescuedCandidate,
+        wordCount: 1200,
+        fixedIssues: ["length-rescue"],
+        tokenUsage: ZERO_USAGE,
+      });
+    const settleRevisionCandidate = vi.fn().mockResolvedValue({ valid: true });
+
+    const result = await runChapterReviewCycle({
+      ...baseParams,
+      bookId: "book-vi-worse-revision-rescue",
+      lengthSpec: VI_LENGTH_SPEC,
+      initialOutput: { content: original, wordCount: 1859, postWriteErrors: [] },
+      createReviser: () => ({ reviseChapter }),
+      auditor: { auditChapter },
+      settleRevisionCandidate,
+    });
+
+    expect(reviseChapter).toHaveBeenCalledTimes(2);
+    expect(reviseChapter.mock.calls[1]?.[1]).toBe(original);
+    expect(reviseChapter.mock.calls[1]?.[3]).toEqual([
+      expect.objectContaining({
+        category: "length",
+        description: expect.stringContaining("remove at least 59 more words"),
+        ruleId: "length.hard-range",
+      }),
+    ]);
+    expect(settleRevisionCandidate).toHaveBeenCalledWith(rescuedCandidate, expect.anything());
+    expect(result.finalContent).toBe(rescuedCandidate);
+    expect(result.finalWordCount).toBe(1200);
+    expect(result.revised).toBe(true);
+    expect(result.auditResult.passed).toBe(true);
+  });
+
+  it("accepts a 1533-word Vietnamese chapter with a warning and no length repair", async () => {
+    const draft = Array.from({ length: 1533 }, (_, index) => `tu${index}`).join(" ");
+    const auditChapter = vi.fn().mockResolvedValue(createAuditResult({ passed: true, overallScore: 92 }));
+    const reviseChapter = vi.fn();
+
+    const result = await runChapterReviewCycle({
+      ...baseParams,
+      lengthSpec: VI_LENGTH_SPEC,
+      initialOutput: { content: draft, wordCount: 1533, postWriteErrors: [] },
+      createReviser: () => ({ reviseChapter }),
+      auditor: { auditChapter },
+    });
+
+    expect(reviseChapter).not.toHaveBeenCalled();
+    expect(result.finalWordCount).toBe(1533);
+    expect(result.auditResult.decision).toBe("pass");
+    expect(result.auditResult.issues).toEqual(expect.arrayContaining([
+      expect.objectContaining({ ruleId: "length.soft-range", severity: "warning" }),
+    ]));
+  });
+
+  it("binds an exact auditor spelling report and repairs it as a verified local blocker", async () => {
+    const filler = Array.from({ length: 1428 }, (_, index) => `tu${index}`).join(" ");
+    const original = `${filler} cụm từ sai`;
+    const candidate = `${filler} cụm từ đúng`;
+    const spellingIssue: AuditIssue = {
+      severity: "info",
+      category: "Style Check",
+      description: "Xuất hiện lỗi đánh máy: 'cụm từ sai'.",
+      suggestion: "Thay bằng 'cụm từ đúng'.",
+      repairScope: "local",
+      repairHint: {
+        kind: "exact-replacement",
+        targetText: "cụm từ sai",
+        replacementText: "cụm từ đúng",
+        occurrenceIndexes: [1],
+        context: "... cụm từ sai ...",
+      },
+    };
+    const auditChapter = vi.fn()
+      .mockResolvedValueOnce(createAuditResult({ passed: true, overallScore: 94, issues: [spellingIssue] }))
+      .mockResolvedValueOnce(createAuditResult({ passed: true, overallScore: 95, issues: [] }));
+    const reviseChapter = vi.fn().mockResolvedValue({
+      revisedContent: candidate,
+      wordCount: 1431,
+      fixedIssues: ["spelling"],
+      tokenUsage: ZERO_USAGE,
+    });
+
+    const result = await runChapterReviewCycle({
+      ...baseParams,
+      lengthSpec: VI_LENGTH_SPEC,
+      initialOutput: { content: original, wordCount: 1431, postWriteErrors: [] },
+      createReviser: () => ({ reviseChapter }),
+      auditor: { auditChapter },
+      settleRevisionCandidate: async () => ({ valid: true }),
+    });
+
+    expect(reviseChapter.mock.calls[0]?.[3]).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        category: "vi-known-spelling",
+        severity: "critical",
+        verification: "verified",
+        repairHint: expect.objectContaining({
+          targetText: "cụm từ sai",
+          replacementText: "cụm từ đúng",
+        }),
+      }),
+    ]));
+    expect(reviseChapter.mock.calls[0]?.[3]).not.toEqual(expect.arrayContaining([
+      expect.objectContaining({ ruleId: "length.soft-range" }),
+    ]));
+    expect(result.finalContent).toBe(candidate);
+    expect(result.auditResult.decision).toBe("pass");
+  });
+
+  it("routes a host-bound transition contradiction through the bounded revision cycle", async () => {
+    const original = Array.from({ length: 1150 }, (_, index) => `goc${index}`).join(" ");
+    const candidate = Array.from({ length: 1150 }, (_, index) => `sua${index}`).join(" ");
+    const transitionFinding: AuditIssue = {
+      severity: "critical",
+      category: "Transition Continuity",
+      description: "Mực nước đổi từ 1,22m sang 1,34m mà không có nguyên nhân.",
+      suggestion: "Giữ mốc đã chốt hoặc mô tả nguyên nhân thay đổi.",
+      ruleId: "continuity.transition",
+      source: "deterministic",
+      verification: "verified",
+      repairScope: "structural",
+      repairTarget: "prose",
+      lifecycle: "open",
+    };
+    const auditChapter = vi.fn()
+      .mockResolvedValueOnce(createAuditResult({
+        passed: false,
+        overallScore: 92,
+        hostFindings: [transitionFinding],
+      }))
+      .mockResolvedValueOnce(createAuditResult({
+        passed: true,
+        overallScore: 95,
+        hostFindings: [],
+      }));
+    const reviseChapter = vi.fn().mockResolvedValue({
+      revisedContent: candidate,
+      wordCount: 1150,
+      fixedIssues: ["transition"],
+      tokenUsage: ZERO_USAGE,
+    });
+
+    const result = await runChapterReviewCycle({
+      ...baseParams,
+      lengthSpec: VI_LENGTH_SPEC,
+      initialOutput: { content: original, wordCount: 1150, postWriteErrors: [] },
+      createReviser: () => ({ reviseChapter }),
+      auditor: { auditChapter },
+      settleRevisionCandidate: async () => ({ valid: true }),
+    });
+
+    expect(reviseChapter.mock.calls[0]?.[3]).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        ruleId: "continuity.transition",
+        verification: "verified",
+        repairScope: "structural",
+      }),
+    ]));
+    expect(auditChapter).toHaveBeenCalledTimes(2);
+    expect(result.finalContent).toBe(candidate);
+    expect(result.auditResult.decision).toBe("pass");
+  });
+
+  it("does not accept a revision while the host-bound transition contradiction remains", async () => {
+    const original = Array.from({ length: 1150 }, (_, index) => `goc${index}`).join(" ");
+    const candidate = Array.from({ length: 1150 }, (_, index) => `sua${index}`).join(" ");
+    const transitionFinding: AuditIssue = {
+      severity: "critical",
+      category: "Transition Continuity",
+      description: "Trạng thái chuyển tiếp vẫn mâu thuẫn.",
+      suggestion: "Sửa nguyên nhân hoặc giữ trạng thái trước.",
+      ruleId: "continuity.transition",
+      source: "deterministic",
+      verification: "verified",
+      repairScope: "structural",
+      repairTarget: "prose",
+    };
+    const auditChapter = vi.fn().mockResolvedValue(createAuditResult({
+      passed: false,
+      overallScore: 92,
+      hostFindings: [transitionFinding],
+    }));
+    const reviseChapter = vi.fn().mockResolvedValue({
+      revisedContent: candidate,
+      wordCount: 1150,
+      fixedIssues: [],
+      tokenUsage: ZERO_USAGE,
+    });
+
+    const result = await runChapterReviewCycle({
+      ...baseParams,
+      lengthSpec: VI_LENGTH_SPEC,
+      initialOutput: { content: original, wordCount: 1150, postWriteErrors: [] },
+      createReviser: () => ({ reviseChapter }),
+      auditor: { auditChapter },
+      settleRevisionCandidate: async () => ({ valid: true }),
+    });
+
+    expect(reviseChapter).toHaveBeenCalledTimes(1);
+    expect(auditChapter).toHaveBeenCalledTimes(2);
+    expect(result.finalContent).toBe(original);
+    expect(result.auditResult.decision).toBe("repair-required");
+  });
+
+  it("returns inconclusive instead of rewriting when an auditor spelling target is not in the chapter", async () => {
+    const original = Array.from({ length: 1150 }, (_, index) => `tu${index}`).join(" ");
+    const auditChapter = vi.fn().mockResolvedValue(createAuditResult({
+      passed: true,
+      overallScore: 94,
+      issues: [{
+        severity: "info",
+        category: "Style Check",
+        description: "Xuất hiện lỗi đánh máy.",
+        suggestion: "Sửa cụm từ.",
+        repairScope: "local",
+        repairHint: {
+          kind: "exact-replacement",
+          targetText: "không tồn tại",
+          replacementText: "cụm đúng",
+          occurrenceIndexes: [1],
+          context: "không tồn tại",
+        },
+      }],
+    }));
+    const reviseChapter = vi.fn();
+
+    const result = await runChapterReviewCycle({
+      ...baseParams,
+      lengthSpec: VI_LENGTH_SPEC,
+      initialOutput: { content: original, wordCount: 1150, postWriteErrors: [] },
+      createReviser: () => ({ reviseChapter }),
+      auditor: { auditChapter },
+    });
+
+    expect(reviseChapter).not.toHaveBeenCalled();
+    expect(result.auditResult.decision).toBe("inconclusive");
+    expect(result.finalContent).toBe(original);
   });
 
   it("returns initial and post-revision audit runs with one shared attempt identity", async () => {

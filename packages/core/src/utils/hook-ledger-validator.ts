@@ -246,7 +246,10 @@ function toAdvancingHookRecord(hook: StoredHook, chapterNumber: number): HookRec
     ...(hook.coreHook !== undefined ? { coreHook: hook.coreHook } : {}),
     ...(hook.halfLifeChapters !== undefined ? { halfLifeChapters: hook.halfLifeChapters } : {}),
     advancedCount: (hook.advancedCount ?? 0) + 1,
-    ...(hook.promoted !== undefined ? { promoted: hook.promoted } : {}),
+    // Advancing a selected dormant architect seed is the explicit activation
+    // event. Keeping promoted=false would make the hook disappear from active
+    // governance again on the next chapter.
+    promoted: true,
   };
   const parsed = HookRecordSchema.safeParse(candidate);
   if (!parsed.success) {
@@ -276,7 +279,10 @@ function extractLedgerEntry(line: string): HookLedgerEntry | undefined {
   const firstWord = cleaned.split(/\s+/)[0] ?? "";
   if (PLACEHOLDER_TOKENS.test(firstWord)) return undefined;
 
-  const idMatch = cleaned.match(/^([A-Za-z\u4e00-\u9fff][A-Za-z0-9_\-\u4e00-\u9fff]{0,19})/);
+  // Stable IDs created by the runtime can be descriptive slugs longer than
+  // 20 characters. Parse the complete token; truncating it changes identity
+  // and makes an authoritative hook look fabricated.
+  const idMatch = cleaned.match(/^([A-Za-z\u4e00-\u9fff][A-Za-z0-9_\-\u4e00-\u9fff]*)/);
   if (!idMatch) return undefined;
 
   const candidate = idMatch[1]!;

@@ -108,10 +108,10 @@ describe("length metrics", () => {
   it("builds the approved Vietnamese short-chapter policy", () => {
     expect(buildLengthSpec(1150, "vi")).toEqual({
       target: 1150,
-      softMin: 1000,
+      softMin: 1100,
       softMax: 1300,
       hardMin: 1000,
-      hardMax: 1500,
+      hardMax: 1800,
       countingMode: "vi_wordlike_tokens_v1",
     });
   });
@@ -124,7 +124,8 @@ describe("length metrics", () => {
     const guidance = formatWriterPromptLengthGuidance(buildLengthSpec(1150, "vi"), "vi");
     expect(guidance).toContain("1100-1300");
     expect(guidance).toContain("vi_wordlike_tokens_v1");
-    expect(guidance).toContain("1000-1500");
+    expect(guidance).toContain("1000-1800");
+    expect(guidance).not.toContain("1000-1500");
     expect(guidance).toContain("chapter memo/context");
   });
 

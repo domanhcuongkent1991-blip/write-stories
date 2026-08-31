@@ -47,6 +47,51 @@ export interface ReviseOutput {
 
 type AutoOutputMode = "patch-only" | "rewrite-only" | "allow-full";
 
+function applyVerifiedVietnameseSpellingRepairs(
+  originalChapter: string,
+  issues: ReadonlyArray<AuditIssue>,
+): ReviseOutput | undefined {
+  const verifiedBlockers = issues.filter((issue) =>
+    issue.severity === "critical" && issue.verification === "verified");
+  if (verifiedBlockers.length === 0 || verifiedBlockers.some((issue) =>
+    issue.category !== "vi-known-spelling"
+    || issue.repairScope !== "local"
+    || issue.repairHint?.kind !== "exact-replacement")) {
+    return undefined;
+  }
+
+  const uniquePatches = new Map<string, {
+    readonly targetText: string;
+    readonly replacementText: string;
+    readonly occurrenceIndex: number;
+  }>();
+  for (const issue of verifiedBlockers) {
+    const hint = issue.repairHint!;
+    for (const occurrenceIndex of hint.occurrenceIndexes) {
+      const key = `${hint.targetText}\u0000${hint.replacementText}\u0000${occurrenceIndex}`;
+      uniquePatches.set(key, {
+        targetText: hint.targetText,
+        replacementText: hint.replacementText,
+        occurrenceIndex,
+      });
+    }
+  }
+
+  const patchResult = applySpotFixPatches(originalChapter, [...uniquePatches.values()], {
+    exactOnly: true,
+    requireAll: true,
+  });
+  if (!patchResult.applied || patchResult.appliedPatchCount !== uniquePatches.size) {
+    return undefined;
+  }
+
+  return {
+    revisedContent: patchResult.revisedContent,
+    wordCount: patchResult.revisedContent.length,
+    fixedIssues: [...new Set(verifiedBlockers.map((issue) => issue.description))],
+  };
+}
+
 function lengthUnit(countingMode: LengthSpec["countingMode"]): "字" | "words" | "từ" {
   switch (countingMode) {
     case "zh_chars":
@@ -155,6 +200,18 @@ export class ReviserAgent extends BaseAgent {
       baselineChapter?: number;
     },
   ): Promise<ReviseOutput> {
+    if (mode === "auto") {
+      const deterministicRepair = applyVerifiedVietnameseSpellingRepairs(chapterContent, issues);
+      if (deterministicRepair) {
+        return {
+          ...deterministicRepair,
+          wordCount: options?.lengthSpec
+            ? countChapterLength(deterministicRepair.revisedContent, options.lengthSpec.countingMode)
+            : deterministicRepair.wordCount,
+        };
+      }
+    }
+
     const baselineStoryDir = options?.baselineChapter === undefined
       ? join(bookDir, "story")
       : join(bookDir, "story", "snapshots", String(options.baselineChapter));

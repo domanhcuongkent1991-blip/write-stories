@@ -1,5 +1,8 @@
 # Vietnamese Writer Prompt Length Guidance Implementation Plan
 
+> **Superseded:** Do not execute this former 1,500-word plan. Use
+> `2026-08-31-inkos-vi-phase-b-safe-canary.md`.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Make Vietnamese writer and reviser prompts target 1,100–1,300 word-like tokens while preserving the approved 1,000–1,500 audit policy and existing safety gates.

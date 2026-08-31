@@ -1,5 +1,8 @@
 # Vietnamese Repair Feedback and Progress Gate Implementation Plan
 
+> **Superseded in part:** Do not execute its former 1,500-word range. The
+> current implementation plan is `2026-08-31-inkos-vi-phase-b-safe-canary.md`.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax.
 
 **Goal:** Implement the approved Vietnamese spelling-repair contract, deterministic length gate, and non-advancing recovery path without changing provider configuration, the historical baseline book, or zh/en behavior.

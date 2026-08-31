@@ -137,7 +137,8 @@ describe("decideAudit", () => {
     });
 
     expect(result.decision).toBe("pass");
-    expect(result.findings[0]?.verification).toBe("unverified");
+    expect(result.findings.find((finding) => finding.ruleId === "continuity.character")?.verification)
+      .toBe("unverified");
   });
 });
 
@@ -164,6 +165,36 @@ describe("revision acceptance", () => {
       maxRevisionAttempts: 1,
     });
 
+    expect(evaluateRevisionCandidate({
+      before,
+      after,
+      beforeContentHash: before.contentHash,
+      afterContentHash: after.contentHash,
+      stateSettlementValid: true,
+    })).toEqual({ accepted: true });
+  });
+
+  it("accepts a hard-length repair when the passing audit score dips within the quality floor", () => {
+    const overlongContent = Array.from({ length: 16 }, (_, index) => `từ${index}`).join(" ");
+    const before = decideAudit(input({
+      content: overlongContent,
+      llmAudit: { passed: true, overallScore: 98, summary: "ok", issues: [] },
+    }), { operation: "write", autoRevisionAllowed: true, revisionAttempts: 0, maxRevisionAttempts: 1 });
+    const repairedContent = "Nội dung chương đã được rút gọn và vẫn đầy đủ nguyên nhân kết quả.\n";
+    const after = decideAudit(input({
+      content: repairedContent,
+      operation: "re-audit",
+      llmAudit: { passed: true, overallScore: 92, summary: "ok", issues: [] },
+    }), {
+      operation: "re-audit",
+      autoRevisionAllowed: false,
+      revisionAttempts: 1,
+      maxRevisionAttempts: 1,
+    });
+
+    expect(before.findings).toEqual(expect.arrayContaining([
+      expect.objectContaining({ ruleId: "length.hard-range", severity: "critical", verification: "verified" }),
+    ]));
     expect(evaluateRevisionCandidate({
       before,
       after,

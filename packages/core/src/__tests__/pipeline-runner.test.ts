@@ -21,7 +21,7 @@ import {
 } from "../agents/foundation-reviewer.js";
 import { PolisherAgent } from "../agents/polisher.js";
 import type { BookConfig } from "../models/book.js";
-import type { ChapterMeta } from "../models/chapter.js";
+import { ChapterMetaSchema, type ChapterMeta } from "../models/chapter.js";
 import { MemoryDB } from "../state/memory-db.js";
 import * as memoryDbModule from "../state/memory-db.js";
 import { buildLengthSpec, countChapterLength } from "../utils/length-metrics.js";
@@ -4163,7 +4163,7 @@ describe("PipelineRunner", () => {
 
       expect(warnings).toHaveLength(1);
       expect(warnings[0]).toContain("preferred length range");
-      expect(warnings[0]).toContain("1000-1300");
+      expect(warnings[0]).toContain("1100-1300");
     } finally {
       await rm(root, { recursive: true, force: true });
     }
@@ -8055,6 +8055,7 @@ describe("PipelineRunner", () => {
       await expect(readFile(join(storyDir, "pending_hooks.md"), "utf-8")).resolves.toBe(latestHooks);
       expect(savedIndex[0]?.status).toBe("ready-for-review");
       expect(savedIndex[1]?.status).toBe("needs-revision");
+      expect(ChapterMetaSchema.array().safeParse(savedIndex).success).toBe(true);
       expect(snapshotState).not.toHaveBeenCalled();
     } finally {
       await rm(root, { recursive: true, force: true });
@@ -8229,6 +8230,71 @@ describe("PipelineRunner", () => {
     await rm(root, { recursive: true, force: true });
   });
 
+  it("merges host-bound transition findings into manual audit and revision blockers", async () => {
+    const { root, runner, state, bookId } = await createRunnerFixture();
+    const bookDir = state.bookDir(bookId);
+    const book = await state.loadBookConfig(bookId);
+    const transitionFinding: AuditIssue = {
+      severity: "critical",
+      category: "Transition Continuity",
+      description: "The current state reverses the previous chapter without a cause.",
+      suggestion: "Keep the prior state or depict the causal change.",
+      ruleId: "continuity.transition",
+      source: "deterministic",
+      verification: "verified",
+      repairScope: "structural",
+      repairTarget: "prose",
+    };
+
+    const result = await (
+      runner as unknown as {
+        evaluateMergedAudit: (params: {
+          auditor: Pick<ContinuityAuditor, "auditChapter">;
+          book: BookConfig;
+          bookDir: string;
+          chapterContent: string;
+          chapterNumber: number;
+          language: "zh" | "en";
+        }) => Promise<{
+          auditResult: AuditResult;
+          blockingCount: number;
+          criticalCount: number;
+          revisionBlockingIssues: ReadonlyArray<AuditIssue>;
+        }>;
+      }
+    ).evaluateMergedAudit({
+      auditor: {
+        auditChapter: vi.fn().mockResolvedValue(
+          createAuditResult({
+            passed: false,
+            issues: [],
+            hostFindings: [transitionFinding],
+            summary: "transition contradiction",
+            overallScore: 92,
+          }),
+        ),
+      },
+      book,
+      bookDir,
+      chapterContent: "The next scene silently restores the old measurement.",
+      chapterNumber: 4,
+      language: "en",
+    });
+
+    expect(result.auditResult.decision).toBe("fail");
+    expect(result.auditResult.passed).toBe(false);
+    expect(result.auditResult.issues).toEqual(expect.arrayContaining([
+      expect.objectContaining({ ruleId: "continuity.transition", verification: "verified" }),
+    ]));
+    expect(result.revisionBlockingIssues).toEqual(expect.arrayContaining([
+      expect.objectContaining({ ruleId: "continuity.transition" }),
+    ]));
+    expect(result.blockingCount).toBe(1);
+    expect(result.criticalCount).toBe(1);
+
+    await rm(root, { recursive: true, force: true });
+  });
+
   it("keeps chapter-level blockers even when sequence-level fatigue shares the same category label", async () => {
     const { root, runner, state, bookId } = await createRunnerFixture();
     const bookDir = state.bookDir(bookId);
@@ -8342,7 +8408,7 @@ describe("PipelineRunner", () => {
     }
   });
 
-  it("fails closed when typed runtime hook evidence contradicts the governed hook intent", async () => {
+  it("degrades state when governed hook evidence still contradicts intent after settlement retry", async () => {
     const { root, runner, state, bookId } = await createRunnerFixture();
     const storyDir = join(state.bookDir(bookId), "story");
     const hook = {
@@ -8386,7 +8452,7 @@ describe("PipelineRunner", () => {
       plannerInputs: [],
       runtimePath: join(storyDir, "runtime", "chapter-0001.intent.md"),
     });
-    vi.spyOn(WriterAgent.prototype, "writeChapter").mockResolvedValue(createWriterOutput({
+    const contradictoryOutput = createWriterOutput({
       runtimeStateDelta: {
         chapter: 1,
         hookOps: { upsert: [], mention: [], resolve: [], defer: ["mentor-debt"] },
@@ -8419,7 +8485,10 @@ describe("PipelineRunner", () => {
         chapterSummaries: { rows: [] },
       },
       updatedHooks: "# Pending Hooks\n",
-    }));
+    });
+    vi.spyOn(WriterAgent.prototype, "writeChapter").mockResolvedValue(contradictoryOutput);
+    const settleChapterState = vi.mocked(WriterAgent.prototype.settleChapterState);
+    settleChapterState.mockResolvedValue(contradictoryOutput);
     vi.spyOn(ContinuityAuditor.prototype, "auditChapter").mockResolvedValue(createAuditResult({
       passed: true,
       issues: [],
@@ -8433,13 +8502,14 @@ describe("PipelineRunner", () => {
         (issue) => issue.category === "hook-runtime-contradiction",
       );
 
-      expect(result.status).toBe("audit-failed");
+      expect(result.status).toBe("state-degraded");
       expect(contradiction).toEqual(expect.objectContaining({
         severity: "critical",
         verification: "verified",
         acceptanceCriteria: ["Hook mentor-debt must be resolved in typed runtime state."],
         evidence: expect.objectContaining({ stateRef: "runtime:hook:mentor-debt" }),
       }));
+      expect(settleChapterState).toHaveBeenCalledTimes(1);
     } finally {
       await rm(root, { recursive: true, force: true });
     }

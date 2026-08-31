@@ -121,7 +121,8 @@ describe("ReviserAgent", () => {
       const combinedPrompt = messages.map((message) => message.content).join("\n");
       expect(combinedPrompt).toContain("1100-1300");
       expect(combinedPrompt).toContain("vi_wordlike_tokens_v1");
-      expect(combinedPrompt).toContain("1000-1500");
+      expect(combinedPrompt).toContain("1000-1800");
+      expect(combinedPrompt).not.toContain("1000-1500");
       expect(combinedPrompt).toContain("chapter memo/context");
       expect(combinedPrompt).toContain("preserve causal beats and compress redundant transitions");
     } finally {
@@ -1107,25 +1108,8 @@ describe("ReviserAgent", () => {
       projectRoot: root,
     });
     const original = "Âm thanh vang lên; mười mốn bước chân rồi mười mốn nhịp thở.";
-    const chatSpy = vi.spyOn(ReviserAgent.prototype as never, "chat" as never).mockResolvedValue({
-      content: [
-        "=== FIXED_ISSUES ===",
-        "- Đã sửa hai lỗi chính tả.",
-        "",
-        "=== PATCHES ===",
-        "--- PATCH 1 ---",
-        "TARGET_TEXT: mười mốn",
-        "REPLACEMENT_TEXT: mười bốn",
-        "OCCURRENCE_INDEX: 1",
-        "--- END PATCH ---",
-        "--- PATCH 2 ---",
-        "TARGET_TEXT: mười mốn",
-        "REPLACEMENT_TEXT: mười bốn",
-        "OCCURRENCE_INDEX: 2",
-        "--- END PATCH ---",
-      ].join("\n"),
-      usage: ZERO_USAGE,
-    });
+    const chatSpy = vi.spyOn(ReviserAgent.prototype as never, "chat" as never)
+      .mockRejectedValue(new Error("verified exact spelling repairs must not call the provider"));
 
     try {
       const out = await agent.reviseChapter(
@@ -1165,19 +1149,22 @@ describe("ReviserAgent", () => {
               context: "... mười mốn nhịp thở ...",
             },
           },
+          {
+            severity: "warning",
+            category: "Chronicle Drift Check",
+            description: "Cảnh báo chưa được xác minh.",
+            suggestion: "Chỉ dùng làm dữ liệu tham khảo.",
+            repairScope: "local",
+            verification: "unverified",
+          },
         ],
         "auto",
         "other",
       );
 
-      const prompt = ((chatSpy.mock.calls[0]?.[0] ?? []) as ReadonlyArray<{ content: string }>)
-        .map((message) => message.content)
-        .join("\n");
-      expect(prompt).toContain("TARGET_TEXT");
-      expect(prompt).toContain("mười mốn");
-      expect(prompt).toContain("OCCURRENCES");
+      expect(chatSpy).not.toHaveBeenCalled();
       expect(out.revisedContent).toBe("Âm thanh vang lên; mười bốn bước chân rồi mười bốn nhịp thở.");
-      expect(out.fixedIssues).toEqual(["- Đã sửa hai lỗi chính tả."]);
+      expect(out.fixedIssues).toEqual(["Phát hiện lỗi chính tả mười mốn"]);
     } finally {
       await rm(root, { recursive: true, force: true });
     }

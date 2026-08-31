@@ -66,6 +66,10 @@ export async function loadPersistedPlan(
     const memoBlock = extractMarkedBlock(raw, "MEMO");
     if (!memoBlock) return null;
     memo = parseMemo(memoBlock, chapterNumber, readBooleanField(raw, "Golden Opening") ?? false);
+    // A planner fallback is safe for the attempt that created it, but it is
+    // not a durable plan. Reusing it would prevent a later retry from
+    // benefiting from recovered provider output or planner fixes.
+    if (/^##\s+Planner warning\s*$/im.test(memo.body)) return null;
   } catch (error) {
     if (error instanceof PlannerParseError) return null;
     throw error;

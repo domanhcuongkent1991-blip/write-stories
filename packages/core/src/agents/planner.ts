@@ -120,6 +120,14 @@ export class PlannerAgent extends BaseAgent {
       seed: seedMaterials,
     });
     const memorySelection = materials.memorySelection;
+    // The memo may reference any authoritative hook that retrieval explicitly
+    // exposed to it, including a dormant architect seed selected for this
+    // chapter. Active hooks alone are too narrow and make a visible valid ID
+    // fail governance as "unknown".
+    const authoritativeMemoHooks = [...new Map([
+      ...memorySelection.activeHooks,
+      ...memorySelection.hooks,
+    ].map((hook) => [hook.hookId, hook] as const)).values()];
     const activeHookCount = memorySelection.activeHooks.filter(
       (hook) => hook.status !== "resolved" && hook.status !== "deferred",
     ).length;
@@ -161,7 +169,7 @@ export class PlannerAgent extends BaseAgent {
       chapterContext: input.externalContext,
       relevantHooks: memorySelection.hooks,
       recyclableHooks: memorySelection.recyclableHooks,
-      authoritativeActiveHooks: memorySelection.activeHooks,
+      authoritativeActiveHooks: authoritativeMemoHooks,
       // Phase hotfix 4: thread book language through so the planner uses
       // English prompts (system + user template + golden opening guidance)
       // for English books instead of always-Chinese.
@@ -171,7 +179,7 @@ export class PlannerAgent extends BaseAgent {
 
     const memo = memoResult.memo;
     intent.expectedHookOps = hookOpsFromLedger(memo.body, {
-      activeHooks: memorySelection.activeHooks,
+      activeHooks: authoritativeMemoHooks,
       chapterNumber: input.chapterNumber,
     });
     intent.acceptanceCriteria = acceptanceCriteriaFromHookOps(

@@ -251,6 +251,43 @@ describe("chatCompletion via pi-ai", () => {
     expect(opts.maxTokens).toBe(256);
   });
 
+  it("forwards non-reserved extra payload fields through pi-ai", async () => {
+    mockStreamSimple.mockReturnValue(makeTextStream("ok"));
+
+    const client = makeClient(0.7, {
+      defaults: {
+        temperature: 0.7,
+        maxTokens: 512,
+        thinkingBudget: 0,
+        extra: {
+          reasoning_effort: "none",
+          provider_hint: "stable",
+          max_tokens: 999,
+          temperature: 99,
+        },
+      },
+    });
+    await chatCompletion(client, "test-model", [{ role: "user", content: "hi" }]);
+
+    const opts = mockStreamSimple.mock.calls[0]?.[2] as {
+      onPayload?: (payload: unknown) => unknown;
+    };
+    expect(opts.onPayload).toEqual(expect.any(Function));
+    const payload = opts.onPayload?.({
+      model: "test-model",
+      messages: [],
+      stream: true,
+      max_tokens: 512,
+      temperature: 0.7,
+    }) as Record<string, unknown>;
+    expect(payload).toMatchObject({
+      reasoning_effort: "none",
+      provider_hint: "stable",
+      max_tokens: 512,
+      temperature: 0.7,
+    });
+  });
+
   it("propagates caller aborts through the guarded signal passed to pi-ai", async () => {
     mockStreamSimple.mockReturnValue(makeTextStream("ok"));
     const controller = new AbortController();

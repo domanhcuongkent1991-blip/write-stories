@@ -11,6 +11,24 @@ describe("Vietnamese surface validator", () => {
     expect(spelling[1]?.repairHint?.occurrenceIndexes).toEqual([2]);
     expect(validateVietnameseSurface("mười bốn, khô khốc, Âm thanh tivi").filter((issue) => issue.rule === "vi-known-spelling")).toEqual([]);
   });
+
+  it("blocks the observed duplicated seal phrase with an exact local replacement", () => {
+    const spelling = validateVietnameseSurface("Tuấn bảo phải xé niêm phong niêm nhựa ngay.")
+      .find((issue) => issue.rule === "vi-known-spelling");
+
+    expect(spelling).toMatchObject({
+      severity: "error",
+      repairScope: "local",
+      repairTarget: "prose",
+      verification: "verified",
+      repairHint: {
+        kind: "exact-replacement",
+        targetText: "xé niêm phong niêm nhựa",
+        replacementText: "xé niêm phong nhựa",
+        occurrenceIndexes: [1],
+      },
+    });
+  });
   it("accepts clean Vietnamese prose", () => {
     expect(validateVietnameseSurface("Trời mưa. Cô bước qua sân ga và nhìn về phía bắc.")).toEqual([]);
   });

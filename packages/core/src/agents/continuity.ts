@@ -17,6 +17,20 @@ import {
 } from "../utils/outline-paths.js";
 import { join } from "node:path";
 import { resolveWritingLanguageProfile } from "../utils/language.js";
+import { computeChapterContentHash } from "../audit/chapter-audit-evaluator.js";
+
+export type TransitionDimension = "time" | "location" | "physical-state" | "device-state" | "possession";
+
+export interface TransitionCheck {
+  readonly status: "consistent" | "contradiction";
+  readonly dimensionsChecked: ReadonlyArray<TransitionDimension>;
+}
+
+export interface TransitionEvidence {
+  readonly dimension: TransitionDimension;
+  readonly previousText: string;
+  readonly currentText: string;
+}
 
 export interface AuditResult {
   readonly passed: boolean;
@@ -34,6 +48,10 @@ export interface AuditResult {
   readonly decision?: "pass" | "repair-required" | "fail" | "inconclusive";
   readonly contentHash?: string;
   readonly provenance?: AuditProvenance;
+  /** Structured cross-chapter checklist returned by the Vietnamese auditor. */
+  readonly transitionCheck?: TransitionCheck;
+  /** Findings whose quoted evidence was bound to the supplied chapter texts by the host. */
+  readonly hostFindings?: ReadonlyArray<AuditIssue>;
 }
 
 export interface AuditProvenance {
@@ -67,24 +85,115 @@ export interface AuditIssue {
   readonly lifecycle?: "open" | "resolved" | "superseded" | "expired";
   readonly ttlChapters?: number;
   readonly confidence?: number;
+  /** Raw cross-chapter excerpts awaiting exact host-side binding. */
+  readonly transitionEvidence?: TransitionEvidence;
 }
 
 type PromptLanguage = ScaffoldLanguage;
+
+const REQUIRED_TRANSITION_DIMENSIONS: ReadonlyArray<TransitionDimension> = [
+  "time",
+  "location",
+  "physical-state",
+  "device-state",
+  "possession",
+];
+
+function isTransitionDimension(value: unknown): value is TransitionDimension {
+  return REQUIRED_TRANSITION_DIMENSIONS.includes(value as TransitionDimension);
+}
+
+function normalizeTransitionCheck(value: unknown): TransitionCheck | undefined {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
+  const raw = value as Record<string, unknown>;
+  const dimensions = raw.dimensions_checked ?? raw.dimensionsChecked;
+  if (
+    (raw.status !== "consistent" && raw.status !== "contradiction")
+    || !Array.isArray(dimensions)
+    || dimensions.length !== REQUIRED_TRANSITION_DIMENSIONS.length
+    || dimensions.some((dimension) => !isTransitionDimension(dimension))
+    || new Set(dimensions).size !== REQUIRED_TRANSITION_DIMENSIONS.length
+    || REQUIRED_TRANSITION_DIMENSIONS.some((dimension) => !dimensions.includes(dimension))
+  ) {
+    return undefined;
+  }
+  return {
+    status: raw.status,
+    dimensionsChecked: dimensions as TransitionDimension[],
+  };
+}
+
+function normalizeTransitionEvidence(value: unknown): TransitionEvidence | undefined {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
+  const raw = value as Record<string, unknown>;
+  const previousText = raw.previous_text ?? raw.previousText;
+  const currentText = raw.current_text ?? raw.currentText;
+  if (
+    !isTransitionDimension(raw.dimension)
+    || typeof previousText !== "string"
+    || typeof currentText !== "string"
+    || previousText.length < 3
+    || previousText.length > 500
+    || currentText.length < 3
+    || currentText.length > 500
+    || previousText.trim() !== previousText
+    || currentText.trim() !== currentText
+  ) {
+    return undefined;
+  }
+  return { dimension: raw.dimension, previousText, currentText };
+}
 
 function normalizeRepairScope(value: unknown): AuditIssue["repairScope"] {
   if (value === "local" || value === "structural" || value === "unknown") return value;
   return undefined;
 }
 
+function normalizeRepairHint(value: unknown): RepairHint | undefined {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
+  const raw = value as Record<string, unknown>;
+  const targetText = raw.target_text ?? raw.targetText;
+  const replacementText = raw.replacement_text ?? raw.replacementText;
+  const occurrenceIndexes = raw.occurrence_indexes ?? raw.occurrenceIndexes;
+  const context = raw.context;
+  if (
+    raw.kind !== "exact-replacement"
+    || typeof targetText !== "string"
+    || targetText.length < 1
+    || targetText.length > 200
+    || typeof replacementText !== "string"
+    || replacementText.length < 1
+    || replacementText.length > 200
+    || targetText === replacementText
+    || !Array.isArray(occurrenceIndexes)
+    || occurrenceIndexes.length < 1
+    || occurrenceIndexes.length > 100
+    || occurrenceIndexes.some((index) => !Number.isInteger(index) || (index as number) < 1)
+    || typeof context !== "string"
+    || context.length > 500
+  ) {
+    return undefined;
+  }
+  return {
+    kind: "exact-replacement",
+    targetText,
+    replacementText,
+    occurrenceIndexes: occurrenceIndexes as number[],
+    context,
+  };
+}
+
 function normalizeParsedIssue(issue: Record<string, unknown>, language: PromptLanguage): AuditIssue {
   const evidence = issue.evidence && typeof issue.evidence === "object"
     ? issue.evidence as Record<string, unknown>
     : undefined;
+  const transitionEvidence = normalizeTransitionEvidence(issue.transition_evidence ?? issue.transitionEvidence);
   return {
     severity: (issue.severity as AuditIssue["severity"]) ?? "warning",
     category: (issue.category as string) ?? (language === "en" ? "Uncategorized" : "未分类"),
     description: (issue.description as string) ?? "",
     suggestion: (issue.suggestion as string) ?? "",
+    repairHint: normalizeRepairHint(issue.repair_hint ?? issue.repairHint),
     repairScope: normalizeRepairScope(issue.repair_scope ?? issue.repairScope),
     ruleId: typeof issue.ruleId === "string" ? issue.ruleId : undefined,
     findingId: typeof issue.findingId === "string" ? issue.findingId : undefined,
@@ -101,6 +210,101 @@ function normalizeParsedIssue(issue: Record<string, unknown>, language: PromptLa
       ? issue.ttlChapters
       : undefined,
     confidence: typeof issue.confidence === "number" && Number.isFinite(issue.confidence) ? Math.max(0, Math.min(1, issue.confidence)) : undefined,
+    ...(transitionEvidence ? { transitionEvidence } : {}),
+  };
+}
+
+function bindVietnameseTransitionReview(
+  previousChapter: string,
+  currentChapter: string,
+  result: AuditResult,
+): AuditResult {
+  const issuesWithoutRawEvidence = result.issues.map((issue): AuditIssue => {
+    const { transitionEvidence: _rawEvidence, ...issueWithoutRawEvidence } = issue;
+    void _rawEvidence;
+    return issueWithoutRawEvidence;
+  });
+  const transitionCheck = result.transitionCheck;
+  if (!transitionCheck || result.parseFailed) {
+    return {
+      ...result,
+      passed: false,
+      parseFailed: true,
+      issues: issuesWithoutRawEvidence,
+      hostFindings: [],
+    };
+  }
+
+  const evidenceIssues = result.issues.filter((issue) => issue.transitionEvidence !== undefined);
+  if (transitionCheck.status === "consistent") {
+    if (evidenceIssues.length > 0) {
+      return {
+        ...result,
+        passed: false,
+        parseFailed: true,
+        issues: issuesWithoutRawEvidence,
+        hostFindings: [],
+      };
+    }
+    return { ...result, issues: issuesWithoutRawEvidence, hostFindings: [] };
+  }
+
+  if (evidenceIssues.length === 0) {
+    return {
+      ...result,
+      passed: false,
+      parseFailed: true,
+      issues: issuesWithoutRawEvidence,
+      hostFindings: [],
+    };
+  }
+
+  const invalidEvidence = evidenceIssues.some((issue) => {
+    const evidence = issue.transitionEvidence!;
+    return !previousChapter.includes(evidence.previousText) || !currentChapter.includes(evidence.currentText);
+  });
+  if (invalidEvidence) {
+    return {
+      ...result,
+      passed: false,
+      parseFailed: true,
+      issues: issuesWithoutRawEvidence,
+      hostFindings: [],
+    };
+  }
+
+  const contentHash = computeChapterContentHash(currentChapter);
+  const hostFindings = evidenceIssues.map((issue): AuditIssue => {
+    const transitionEvidence = issue.transitionEvidence!;
+    const { transitionEvidence: _rawEvidence, ...issueWithoutRawEvidence } = issue;
+    void _rawEvidence;
+    const excerpt = [
+      `previous: ${transitionEvidence.previousText.slice(0, 220)}`,
+      `current: ${transitionEvidence.currentText.slice(0, 220)}`,
+    ].join("\n");
+    return {
+      ...issueWithoutRawEvidence,
+      severity: "critical",
+      category: "Transition Continuity",
+      ruleId: "continuity.transition",
+      source: "deterministic",
+      verification: "verified",
+      evidence: {
+        contentHash,
+        stateRef: `previous-chapter-transition:${transitionEvidence.dimension}`,
+        excerpt,
+      },
+      repairScope: "structural",
+      repairTarget: "prose",
+      lifecycle: "open",
+    };
+  });
+
+  return {
+    ...result,
+    passed: false,
+    issues: result.issues.filter((issue) => issue.transitionEvidence === undefined),
+    hostFindings,
   };
 }
 
@@ -503,12 +707,61 @@ export class ContinuityAuditor extends BaseAgent {
       bookLanguage ?? gp.language,
     ).scaffoldLanguage;
     const isEnglish = resolvedLanguage === "en";
+    const isVietnamese = bookLanguage === "vi";
     const fanficMode = hasFanficCanon ? (bookRules?.fanficMode as FanficMode | undefined) : undefined;
     const dimensions = buildDimensionList(gp, bookRules, resolvedLanguage, hasParentCanon, fanficMode);
     const dimList = dimensions
       .map((d) => `${d.id}. ${d.name}${d.note ? (isEnglish ? ` (${d.note})` : `（${d.note}）`) : ""}`)
       .join("\n");
     const genreLabel = resolveGenreLabel(genreId, gp.name, resolvedLanguage);
+    const vietnameseSpellingContract = isVietnamese
+      ? `
+
+## Vietnamese spelling exception
+
+A concrete Vietnamese spelling or typing error is an objective correctness issue, not prose-style advice. It is the only prose-surface exception to your structural scope. Report it as severity "critical", repair_scope "local", category "Vietnamese Spelling", and include this exact structured field:
+
+"repair_hint": {
+  "kind": "exact-replacement",
+  "target_text": "the exact wrong text copied from the chapter",
+  "replacement_text": "the exact corrected text",
+  "occurrence_indexes": [1],
+  "context": "a short excerpt containing the exact wrong text"
+}
+
+Never estimate or paraphrase the target. If you cannot copy an exact target and replacement, do not claim a spelling error. A reported spelling error makes passed=false.`
+      : "";
+    const vietnameseTransitionContract = isVietnamese && previousChapter
+      ? `
+
+## Vietnamese cross-chapter transition contract
+
+Before scoring, compare the previous chapter's final state with this chapter's opening and ongoing state across exactly these five dimensions: time, location, physical-state (including quantities), device-state, and possession. A changed state is consistent only when the elapsed time or causal event is depicted in the supplied prose. Do not treat a historical reference as the present state.
+
+Your top-level JSON MUST include this checklist:
+
+"transition_check": {
+  "status": "consistent|contradiction",
+  "dimensions_checked": ["time", "location", "physical-state", "device-state", "possession"]
+}
+
+If any transition contradicts, add a critical structural issue and copy exact, unmodified excerpts from both supplied chapters:
+
+"transition_evidence": {
+  "dimension": "time|location|physical-state|device-state|possession",
+  "previous_text": "exact excerpt from Previous Chapter Full Text",
+  "current_text": "exact excerpt from Chapter Content Under Review"
+}
+
+Never paraphrase these excerpts. If the evidence cannot be copied exactly, return a contradiction checklist but do not invent evidence.`
+      : "";
+    const vietnameseTransitionSchemaField = isVietnamese && previousChapter
+      ? `  "transition_check": {
+    "status": "consistent|contradiction",
+    "dimensions_checked": ["time", "location", "physical-state", "device-state", "possession"]
+  },
+`
+      : "";
 
     const protagonistBlock = bookRules?.protagonist
       ? isEnglish
@@ -527,7 +780,7 @@ export class ContinuityAuditor extends BaseAgent {
 
 ## Reviewer Scope (hard constraints)
 
-You audit completion and structure only. Your job is to decide whether the chapter delivers the plan, keeps characters and timelines intact, and moves the book forward. Wording, sentence rhythm, paragraph shape, punctuation, imagery, and other prose-surface choices are NOT yours — those belong to the Polisher pass that runs after you. If you notice prose-surface issues, you may flag them with severity "info" so the Polisher can see them, but they do not count toward passed / overall_score and they must never be critical.
+You audit completion and structure only. Your job is to decide whether the chapter delivers the plan, keeps characters and timelines intact, and moves the book forward. Wording, sentence rhythm, paragraph shape, punctuation, imagery, and other prose-surface choices are NOT yours — those belong to the Polisher pass that runs after you. If you notice prose-surface issues, you may flag them with severity "info" so the Polisher can see them, but they do not count toward passed / overall_score and they must never be critical.${vietnameseSpellingContract}${vietnameseTransitionContract}
 
 You audit twelve structural reader-pain patterns: dragging / flat openings, blurry worldbuilding disconnected from reality, contradictory character setup, tangled POV, mainline drift or stagnation, weak conflict with missing payoff, pacing loss of control and abrupt transitions, character inconsistency across the arc, thin/one-note characters without contrast, stiff emotion expression and abrupt relationship jumps, imbalanced cheats/power gifts, and settings that never land in concrete action. Alongside these, keep the engineering dimensions listed below (OOC, timeline coherence, information boundary, hook debt, cross-chapter repetition, lexical fatigue, length band, title fatigue, paragraph shape).
 
@@ -544,7 +797,7 @@ Output format MUST be JSON:
 {
   "passed": true/false,
   "overall_score": 0-100,
-  "issues": [
+${vietnameseTransitionSchemaField}  "issues": [
 	    {
 	      "severity": "critical|warning|info",
 	      "repair_scope": "local|structural|unknown",
@@ -719,7 +972,10 @@ ${chapterContent}`;
       ? await this.chatWithSearch(chatMessages, chatOptions)
       : await this.chat(chatMessages, chatOptions);
 
-    const result = this.parseAuditResult(response.content, resolvedLanguage);
+    const parsedResult = this.parseAuditResult(response.content, resolvedLanguage);
+    const result = isVietnamese && previousChapter
+      ? bindVietnameseTransitionReview(previousChapter, chapterContent, parsedResult)
+      : parsedResult;
     return { ...result, tokenUsage: response.usage };
   }
 
@@ -861,6 +1117,7 @@ ${overrides}\n`;
           : [],
         summary: String(parsed.summary ?? ""),
         overallScore,
+        transitionCheck: normalizeTransitionCheck(parsed.transition_check ?? parsed.transitionCheck),
       };
     } catch {
       return null;

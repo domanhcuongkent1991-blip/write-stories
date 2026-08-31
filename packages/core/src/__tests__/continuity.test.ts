@@ -118,9 +118,211 @@ describe("ContinuityAuditor", () => {
 
     expect(result.issues[0]).toMatchObject({ ruleId: "state.fact", findingId: "finding-1", repairTarget: "runtime-state", confidence: 0.9 });
     expect(result.issues[1]).toMatchObject({ category: "legacy" });
+    expect(result.issues[1]).not.toHaveProperty("transitionEvidence");
   });
 
-  it("prefers book language override when building audit prompts", async () => {
+  it("parses a structured exact-replacement hint from auditor JSON", () => {
+    const auditor = new ContinuityAuditor({
+      client: {
+        provider: "openai",
+        apiFormat: "chat",
+        stream: false,
+        defaults: { temperature: 0.7, maxTokens: 4096, thinkingBudget: 0, extra: {} },
+      },
+      model: "test-model",
+      projectRoot: "/tmp/inkos-auditor-spelling-hint-test",
+    });
+    const result = (auditor as any).parseAuditResult(JSON.stringify({
+      passed: false,
+      overall_score: 94,
+      issues: [{
+        severity: "critical",
+        repair_scope: "local",
+        category: "Vietnamese Spelling",
+        description: "Lỗi đánh máy có vị trí xác định.",
+        suggestion: "Sửa đúng cụm từ.",
+        repair_hint: {
+          kind: "exact-replacement",
+          target_text: "cụm từ sai",
+          replacement_text: "cụm từ đúng",
+          occurrence_indexes: [1],
+          context: "... cụm từ sai ...",
+        },
+      }],
+      summary: "needs local repair",
+    }), "en");
+
+    expect(result.issues[0]).toMatchObject({
+      repairScope: "local",
+      repairHint: {
+        kind: "exact-replacement",
+        targetText: "cụm từ sai",
+        replacementText: "cụm từ đúng",
+        occurrenceIndexes: [1],
+        context: "... cụm từ sai ...",
+      },
+    });
+  });
+
+  it("parses the Vietnamese transition checklist and exact cross-chapter evidence", () => {
+    const auditor = new ContinuityAuditor({
+      client: {
+        provider: "openai",
+        apiFormat: "chat",
+        stream: false,
+        defaults: { temperature: 0.7, maxTokens: 4096, thinkingBudget: 0, extra: {} },
+      },
+      model: "test-model",
+      projectRoot: "/tmp/inkos-auditor-transition-parser-test",
+    });
+    const result = (auditor as any).parseAuditResult(JSON.stringify({
+      passed: false,
+      overall_score: 92,
+      transition_check: {
+        status: "contradiction",
+        dimensions_checked: ["time", "location", "physical-state", "device-state", "possession"],
+      },
+      issues: [{
+        severity: "critical",
+        repair_scope: "structural",
+        category: "Transition Continuity",
+        description: "The water level reverses without a causal event.",
+        suggestion: "Keep the accepted level or depict the rise.",
+        transition_evidence: {
+          dimension: "physical-state",
+          previous_text: "Vạch mực nước chạm đúng mốc 1,22m",
+          current_text: "mặt nước thực tế cuồn cuộn ở mốc 1,34m",
+        },
+      }],
+      summary: "transition contradiction",
+    }), "en");
+
+    expect((result as any).transitionCheck).toEqual({
+      status: "contradiction",
+      dimensionsChecked: ["time", "location", "physical-state", "device-state", "possession"],
+    });
+    expect((result.issues[0] as any).transitionEvidence).toEqual({
+      dimension: "physical-state",
+      previousText: "Vạch mực nước chạm đúng mốc 1,22m",
+      currentText: "mặt nước thực tế cuồn cuộn ở mốc 1,34m",
+    });
+  });
+
+  it("host-binds exact Vietnamese transition evidence into a verified blocker", async () => {
+    const { root, bookDir } = await createVietnameseTransitionFixture();
+    const currentBody = "Trong đêm, mặt nước thực tế cuồn cuộn ở mốc 1,34m mà không có trận mưa mới.";
+    const auditor = createTestAuditor(root);
+    const chatSpy = vi.spyOn(ContinuityAuditor.prototype as never, "chat" as never).mockResolvedValue({
+      content: JSON.stringify({
+        passed: false,
+        overall_score: 92,
+        transition_check: {
+          status: "contradiction",
+          dimensions_checked: ["time", "location", "physical-state", "device-state", "possession"],
+        },
+        issues: [{
+          severity: "critical",
+          repair_scope: "structural",
+          category: "Transition Continuity",
+          description: "Mực nước đảo ngược mà không có nguyên nhân.",
+          suggestion: "Giữ mốc 1,22m hoặc mô tả nguyên nhân nước dâng.",
+          transition_evidence: {
+            dimension: "physical-state",
+            previous_text: "Vạch mực nước chạm đúng mốc 1,22m lúc 08:40.",
+            current_text: "mặt nước thực tế cuồn cuộn ở mốc 1,34m",
+          },
+        }],
+        summary: "transition contradiction",
+      }),
+      usage: ZERO_USAGE,
+    });
+
+    try {
+      const result = await auditor.auditChapter(bookDir, currentBody, 2, "other");
+      const messages = chatSpy.mock.calls[0]?.[0] as ReadonlyArray<{ content: string }> | undefined;
+      const systemPrompt = messages?.[0]?.content ?? "";
+
+      expect(systemPrompt).toContain("Vietnamese cross-chapter transition contract");
+      expect(systemPrompt).toContain('"dimensions_checked": ["time", "location", "physical-state", "device-state", "possession"]');
+      expect(systemPrompt).toContain('"transition_evidence"');
+      expect(systemPrompt.match(/"transition_check"/gu)).toHaveLength(2);
+      expect((result as any).hostFindings).toEqual([
+        expect.objectContaining({
+          severity: "critical",
+          ruleId: "continuity.transition",
+          verification: "verified",
+          repairScope: "structural",
+          repairTarget: "prose",
+          evidence: expect.objectContaining({
+            excerpt: expect.stringContaining("1,22m"),
+          }),
+        }),
+      ]);
+      expect(result.issues).toEqual([]);
+      expect(result.parseFailed).not.toBe(true);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("marks a Vietnamese transition audit inconclusive when exact evidence does not bind", async () => {
+    const { root, bookDir } = await createVietnameseTransitionFixture();
+    const auditor = createTestAuditor(root);
+    vi.spyOn(ContinuityAuditor.prototype as never, "chat" as never).mockResolvedValue({
+      content: JSON.stringify({
+        passed: false,
+        overall_score: 92,
+        transition_check: {
+          status: "contradiction",
+          dimensions_checked: ["time", "location", "physical-state", "device-state", "possession"],
+        },
+        issues: [{
+          severity: "critical",
+          repair_scope: "structural",
+          category: "Transition Continuity",
+          description: "Mực nước đảo ngược.",
+          suggestion: "Sửa mốc nước.",
+          transition_evidence: {
+            dimension: "physical-state",
+            previous_text: "Mốc không tồn tại trong chương trước.",
+            current_text: "mặt nước trở lại 1,34m",
+          },
+        }],
+        summary: "transition contradiction",
+      }),
+      usage: ZERO_USAGE,
+    });
+
+    try {
+      const result = await auditor.auditChapter(bookDir, "Trong đêm, mặt nước trở lại 1,34m.", 2, "other");
+
+      expect(result.parseFailed).toBe(true);
+      expect((result as any).hostFindings).toEqual([]);
+      expect(result.issues.some((issue) => Object.prototype.hasOwnProperty.call(issue, "transitionEvidence"))).toBe(false);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("marks a Vietnamese chapter-2 audit inconclusive when transition_check is missing", async () => {
+    const { root, bookDir } = await createVietnameseTransitionFixture();
+    const auditor = createTestAuditor(root);
+    vi.spyOn(ContinuityAuditor.prototype as never, "chat" as never).mockResolvedValue({
+      content: JSON.stringify({ passed: true, overall_score: 95, issues: [], summary: "ok" }),
+      usage: ZERO_USAGE,
+    });
+
+    try {
+      const result = await auditor.auditChapter(bookDir, "Mực nước giữ ở 1,22m.", 2, "other");
+
+      expect(result.parseFailed).toBe(true);
+      expect((result as any).hostFindings).toEqual([]);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("uses the English scaffold plus exact spelling contract for Vietnamese audit prompts", async () => {
     const root = await mkdtemp(join(tmpdir(), "inkos-auditor-lang-test-"));
     const bookDir = join(root, "book");
     const storyDir = join(bookDir, "story");
@@ -132,14 +334,14 @@ describe("ContinuityAuditor", () => {
       writeFile(
         join(bookDir, "book.json"),
         JSON.stringify({
-          id: "english-book",
-          title: "English Book",
+          id: "vietnamese-book",
+          title: "Vietnamese Book",
           genre: "xuanhuan",
           platform: "royalroad",
           chapterWordCount: 800,
           targetChapters: 60,
           status: "active",
-          language: "en",
+          language: "vi",
           createdAt: "2026-03-23T00:00:00.000Z",
           updatedAt: "2026-03-23T00:00:00.000Z",
         }, null, 2),
@@ -190,6 +392,10 @@ describe("ContinuityAuditor", () => {
 
       expect(systemPrompt).toContain("ALL OUTPUT MUST BE IN ENGLISH");
       expect(systemPrompt).toContain("PROJECT AUDITOR OVERRIDE");
+      expect(systemPrompt).toContain("Vietnamese spelling or typing error");
+      expect(systemPrompt).toContain('"repair_hint"');
+      expect(systemPrompt).toContain('"target_text"');
+      expect(systemPrompt).toContain('"replacement_text"');
     } finally {
       await rm(root, { recursive: true, force: true });
     }
@@ -497,3 +703,55 @@ describe("ContinuityAuditor", () => {
     }
   });
 });
+
+function createTestAuditor(projectRoot: string): ContinuityAuditor {
+  return new ContinuityAuditor({
+    client: {
+      provider: "openai",
+      apiFormat: "chat",
+      stream: false,
+      defaults: { temperature: 0.7, maxTokens: 4096, thinkingBudget: 0, extra: {} },
+    },
+    model: "test-model",
+    projectRoot,
+  });
+}
+
+async function createVietnameseTransitionFixture(): Promise<{ root: string; bookDir: string }> {
+  const root = await mkdtemp(join(tmpdir(), "inkos-auditor-transition-test-"));
+  const bookDir = join(root, "book");
+  const storyDir = join(bookDir, "story");
+  const chaptersDir = join(bookDir, "chapters");
+  await Promise.all([
+    mkdir(storyDir, { recursive: true }),
+    mkdir(chaptersDir, { recursive: true }),
+  ]);
+  await Promise.all([
+    writeFile(join(bookDir, "book.json"), JSON.stringify({
+      id: "vietnamese-transition-book",
+      title: "Vietnamese Transition Book",
+      genre: "other",
+      platform: "other",
+      chapterWordCount: 1150,
+      targetChapters: 10,
+      status: "active",
+      language: "vi",
+      createdAt: "2026-08-31T00:00:00.000Z",
+      updatedAt: "2026-08-31T00:00:00.000Z",
+    }, null, 2), "utf-8"),
+    writeFile(join(chaptersDir, "0001_Moc_Nuoc.md"), [
+      "# Chương 1: Mốc Nước",
+      "",
+      "Vạch mực nước chạm đúng mốc 1,22m lúc 08:40.",
+    ].join("\n"), "utf-8"),
+    writeFile(join(storyDir, "current_state.md"), "# Trạng thái hiện tại\n", "utf-8"),
+    writeFile(join(storyDir, "pending_hooks.md"), "# Tình tiết cài cắm\n", "utf-8"),
+    writeFile(join(storyDir, "chapter_summaries.md"), "# Tóm tắt chương\n", "utf-8"),
+    writeFile(join(storyDir, "subplot_board.md"), "# Tuyến phụ\n", "utf-8"),
+    writeFile(join(storyDir, "emotional_arcs.md"), "# Cung cảm xúc\n", "utf-8"),
+    writeFile(join(storyDir, "character_matrix.md"), "# Nhân vật\n", "utf-8"),
+    writeFile(join(storyDir, "volume_outline.md"), "# Dàn ý\n", "utf-8"),
+    writeFile(join(storyDir, "style_guide.md"), "# Phong cách\n", "utf-8"),
+  ]);
+  return { root, bookDir };
+}

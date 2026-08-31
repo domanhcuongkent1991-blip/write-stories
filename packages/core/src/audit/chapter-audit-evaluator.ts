@@ -1,7 +1,12 @@
 import { createHash } from "node:crypto";
 import type { LengthSpec } from "../models/length-governance.js";
 import type { AuditIssue, AuditProvenance, AuditResult } from "../agents/continuity.js";
-import { countChapterLength, formatLengthCount, isOutsideHardRange } from "../utils/length-metrics.js";
+import {
+  countChapterLength,
+  formatLengthCount,
+  isOutsideHardRange,
+  isOutsideSoftRange,
+} from "../utils/length-metrics.js";
 
 export type AuditDecision = "pass" | "repair-required" | "fail" | "inconclusive";
 export type AuditOperation = "write" | "audit" | "revise" | "re-audit";
@@ -144,11 +149,15 @@ export function evaluateChapterAudit(input: ChapterAuditEvaluationInput): Chapte
   if (input.lengthSpec) {
     const count = countChapterLength(input.content, input.lengthSpec.countingMode);
     const isVietnamese = input.lengthSpec.countingMode === "vi_wordlike_tokens_v1";
-    if (isVietnamese && count > input.lengthSpec.softMax && count <= input.lengthSpec.hardMax) {
+    if (
+      isVietnamese
+      && isOutsideSoftRange(count, input.lengthSpec)
+      && !isOutsideHardRange(count, input.lengthSpec)
+    ) {
       suppliedDeterministic.unshift({
         severity: "warning",
         category: "length",
-        description: `Chapter length ${formatLengthCount(count, input.lengthSpec.countingMode)} is above the preferred range ${input.lengthSpec.softMin}-${input.lengthSpec.softMax}.`,
+        description: `Chapter length ${formatLengthCount(count, input.lengthSpec.countingMode)} is outside the preferred range ${input.lengthSpec.softMin}-${input.lengthSpec.softMax}.`,
         suggestion: "Prefer the chapter's target range unless the additional length is required for continuity.",
         ruleId: "length.soft-range",
         repairScope: "structural",

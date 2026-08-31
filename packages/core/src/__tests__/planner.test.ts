@@ -345,6 +345,78 @@ describe("PlannerAgent.planChapter memo generation", () => {
     ]);
   });
 
+  it("accepts an authoritative hook ID longer than 20 characters without truncating it", async () => {
+    const chatSpy = vi.spyOn(llmProvider, "chatCompletion").mockResolvedValue({
+      content: validMemoRaw(4).replaceAll("H03", "world-state-minh-ecoapi-can"),
+      usage: ZERO_USAGE,
+    } as unknown as Awaited<ReturnType<typeof llmProvider.chatCompletion>>);
+
+    const memo = await makePlanner().planChapterMemo({
+      storyDir: join(bookDir, "story"),
+      bookDir,
+      chapterNumber: 4,
+      isGoldenOpening: false,
+      fallbackGoal: "advance the seventh-gate evidence",
+      chapterSummariesRaw: "",
+      authoritativeActiveHooks: [{
+        hookId: "world-state-minh-ecoapi-can",
+        startChapter: 1,
+        type: "world_state",
+        status: "open",
+        lastAdvancedChapter: 1,
+        expectedPayoff: "seventh-gate anomaly",
+        notes: "verify the seventh-gate lock scratch",
+      }, {
+        hookId: "S004",
+        startChapter: 1,
+        type: "mystery",
+        status: "open",
+        lastAdvancedChapter: 1,
+        expectedPayoff: "lock scratch",
+        notes: "",
+      }, {
+        hookId: "H07",
+        startChapter: 1,
+        type: "mystery",
+        status: "open",
+        lastAdvancedChapter: 1,
+        expectedPayoff: "mastermind",
+        notes: "",
+      }],
+      lengthSpec: { target: 3000, softMin: 2700, softMax: 3300, hardMin: 2400, hardMax: 3600, countingMode: "zh_chars" },
+    });
+
+    expect(memo.body).not.toContain("Planner warning");
+    expect(chatSpy).toHaveBeenCalledTimes(1);
+    expect(memo.body).toContain("world-state-minh-ecoapi-can");
+  });
+
+  it("accepts and promotes a selected dormant hook exposed to the memo planner", async () => {
+    await writeFile(join(bookDir, "story/pending_hooks.md"), [
+      "| hook_id | start_chapter | type | status | last_advanced | expected_payoff | payoff_timing | depends_on | pays_off_in_arc | core_hook | half_life | promoted | notes |",
+      "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |",
+      "| H03 | 1 | mystery | progressing | 3 | 七号门异常 | near-term | none | Volume 1 | false | 10 | false | 七号门锁芯刮痕待核验 |",
+      "| S004 | 1 | mystery | open | 1 | lock scratch | near-term | none | Volume 1 | false | 10 | true | |",
+      "| H07 | 1 | mystery | open | 1 | mastermind | mid-arc | none | Volume 2 | false | 10 | true | |",
+    ].join("\n"), "utf-8");
+    const chatSpy = vi.spyOn(llmProvider, "chatCompletion").mockResolvedValue({
+      content: validMemoRaw(4),
+      usage: ZERO_USAGE,
+    } as unknown as Awaited<ReturnType<typeof llmProvider.chatCompletion>>);
+
+    const result = await makePlanner().planChapter({
+      book: makeBook(),
+      bookDir,
+      chapterNumber: 4,
+    });
+
+    expect(chatSpy).toHaveBeenCalledTimes(1);
+    expect(result.intent.pacingCode).toBe("reveal");
+    expect(result.intent.expectedHookOps.upsert).toEqual([
+      expect.objectContaining({ hookId: "H03", promoted: true }),
+    ]);
+  });
+
   it("resolves volume range headings written as `Volume X (Chapters N-M)`", async () => {
     await writeFile(
       join(bookDir, "story/volume_outline.md"),

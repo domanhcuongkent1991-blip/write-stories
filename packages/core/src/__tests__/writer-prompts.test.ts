@@ -129,7 +129,8 @@ describe("buildWriterSystemPrompt", () => {
 
     expect(prompt).toContain("1100-1300");
     expect(prompt).toContain("vi_wordlike_tokens_v1");
-    expect(prompt).toContain("1000-1500");
+    expect(prompt).toContain("1000-1800");
+    expect(prompt).not.toContain("1000-1500");
     expect(prompt).toContain("chapter memo/context");
     expect(prompt).toContain("CHAPTER_CONTENT");
     expect(prompt).toContain("mục tiêu viết");

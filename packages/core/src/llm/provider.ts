@@ -2095,12 +2095,23 @@ async function chatCompletionViaPiAi(
 ): Promise<LLMResponse> {
   const piModel = resolvePiModel(client, model);
   const context = toPiContext(messages);
+  const extraPayload = stripReservedKeys(resolved.extra);
+  const onPayload = Object.keys(extraPayload).length > 0
+    ? (payload: unknown) => {
+        if (!payload || typeof payload !== "object" || Array.isArray(payload)) return payload;
+        return {
+          ...(payload as Record<string, unknown>),
+          ...extraPayload,
+        };
+      }
+    : undefined;
   const streamOpts = {
     temperature: resolved.temperature,
     maxTokens: resolved.maxTokens,
     apiKey: client._apiKey,
     headers: mergeUserAgent({ ...(piModel.headers ?? {}), ...traceHeaders }),
     signal,
+    ...(onPayload ? { onPayload } : {}),
   };
 
   if (!client.stream) {

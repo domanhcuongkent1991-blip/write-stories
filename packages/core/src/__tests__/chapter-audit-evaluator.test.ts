@@ -17,10 +17,10 @@ const lengthSpec = {
 
 const viShortLengthSpec = {
   target: 1150,
-  softMin: 1000,
+  softMin: 1100,
   softMax: 1300,
   hardMin: 1000,
-  hardMax: 1500,
+  hardMax: 1800,
   countingMode: "vi_wordlike_tokens_v1" as const,
 };
 
@@ -43,7 +43,7 @@ describe("chapter audit canonicalization", () => {
 describe("evaluateChapterAudit", () => {
   function evaluateVietnameseLength(count: number) {
     return evaluateChapterAudit({
-      content: `${"Một ".repeat(count)}câu.`,
+      content: Array.from({ length: count }, (_, index) => `t${index}`).join(" "),
       lengthSpec: viShortLengthSpec,
       operation: "audit",
       revisionAttempts: 0,
@@ -62,22 +62,24 @@ describe("evaluateChapterAudit", () => {
     expect(result.findings).toEqual([]);
   });
 
-  it("warns but does not fail Vietnamese chapters above the preferred range", () => {
-    const result = evaluateVietnameseLength(1350);
+  it("warns but does not fail Vietnamese chapters outside the preferred range and inside hard bounds", () => {
+    for (const count of [1050, 1500]) {
+      const result = evaluateVietnameseLength(count);
 
-    expect(result.decision).toBe("pass");
-    expect(result.passed).toBe(true);
-    expect(result.findings).toEqual(expect.arrayContaining([
-      expect.objectContaining({
-        ruleId: "length.soft-range",
-        severity: "warning",
-        verification: "verified",
-      }),
-    ]));
+      expect(result.decision).toBe("pass");
+      expect(result.passed).toBe(true);
+      expect(result.findings).toEqual(expect.arrayContaining([
+        expect.objectContaining({
+          ruleId: "length.soft-range",
+          severity: "warning",
+          verification: "verified",
+        }),
+      ]));
+    }
   });
 
   it("blocks Vietnamese chapters below the lower bound or above the safety ceiling", () => {
-    for (const count of [950, 1550]) {
+    for (const count of [950, 1801]) {
       const result = evaluateVietnameseLength(count);
 
       expect(result.decision).toBe("repair-required");
@@ -96,7 +98,6 @@ describe("evaluateChapterAudit", () => {
     const content = "Một câu chuyện.\n";
     const result = evaluateChapterAudit({
       content,
-      lengthSpec,
       operation: "audit",
       revisionAttempts: 0,
       maxRevisionAttempts: 1,
@@ -151,7 +152,6 @@ describe("evaluateChapterAudit", () => {
     const staleHash = "f".repeat(64);
     const result = evaluateChapterAudit({
       content: "current",
-      lengthSpec,
       operation: "audit",
       revisionAttempts: 0,
       maxRevisionAttempts: 1,

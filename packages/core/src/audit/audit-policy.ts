@@ -58,7 +58,15 @@ export function evaluateRevisionCandidate(input: {
   if (input.after.decision !== "pass" || input.after.passed !== true || (input.after.overallScore ?? 0) < 85) {
     return { accepted: false, rejectionReason: "candidate did not pass the acceptance gate" };
   }
-  if ((input.after.overallScore ?? 0) < (input.before.overallScore ?? 0) - 3) {
+  const beforeHasHardLengthBlocker = input.before.findings.some((finding) =>
+    finding.ruleId === "length.hard-range"
+    && finding.verification === "verified"
+    && finding.severity === "critical",
+  );
+  if (
+    !beforeHasHardLengthBlocker
+    && (input.after.overallScore ?? 0) < (input.before.overallScore ?? 0) - 3
+  ) {
     return { accepted: false, rejectionReason: "candidate score regressed by more than three points" };
   }
   if (input.after.findings.some((finding) => finding.verification === "verified" && finding.severity === "critical")) {

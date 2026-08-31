@@ -1,5 +1,9 @@
 # Vietnamese Short-Chapter Policy Design
 
+> **Superseded:** This document records the former 1,500-word safety ceiling.
+> The current approved contract is
+> `2026-08-31-vi-phase-b-length-1800-design.md`; do not execute this design.
+
 ## Goal
 
 Reduce prompt and output pressure for the Vietnamese Ecoapi qualification run while preserving narrative continuity, language quality, and atomic state safety.

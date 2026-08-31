@@ -41,6 +41,61 @@ export interface ChapterReviewCycleResult {
 
 const DEFAULT_MAX_REVIEW_ITERATIONS = 1;
 const PASS_SCORE_THRESHOLD = 85;
+const VIETNAMESE_SPELLING_SIGNAL_RE = /(?:vietnamese spelling|spelling|typo|orthograph|chính tả|lỗi\s+(?:lặp từ\s+)?đánh máy|đánh máy)/iu;
+
+function bindVietnameseAuditorSpellingFindings(
+  content: string,
+  issues: ReadonlyArray<AuditIssue>,
+): { readonly findings: ReadonlyArray<AuditIssue>; readonly invalid: boolean } {
+  const findings: AuditIssue[] = [];
+  let invalid = false;
+
+  for (const issue of issues) {
+    const signal = `${issue.ruleId ?? ""} ${issue.category} ${issue.description}`;
+    if (!VIETNAMESE_SPELLING_SIGNAL_RE.test(signal)) continue;
+
+    const hint = issue.repairHint;
+    if (!hint || hint.kind !== "exact-replacement" || hint.targetText === hint.replacementText) {
+      invalid = true;
+      continue;
+    }
+
+    const occurrenceOffsets: number[] = [];
+    let from = 0;
+    while (true) {
+      const offset = content.indexOf(hint.targetText, from);
+      if (offset < 0) break;
+      occurrenceOffsets.push(offset);
+      from = offset + hint.targetText.length;
+    }
+    if (
+      occurrenceOffsets.length === 0
+      || hint.occurrenceIndexes.some((index) => index < 1 || index > occurrenceOffsets.length)
+    ) {
+      invalid = true;
+      continue;
+    }
+
+    const firstOffset = occurrenceOffsets[hint.occurrenceIndexes[0]! - 1]!;
+    const contextStart = Math.max(0, firstOffset - 40);
+    const contextEnd = Math.min(content.length, firstOffset + hint.targetText.length + 40);
+    findings.push({
+      ...issue,
+      severity: "critical",
+      category: "vi-known-spelling",
+      ruleId: "vi-auditor-spelling",
+      repairScope: "local",
+      repairTarget: "prose",
+      verification: "verified",
+      repairHint: {
+        ...hint,
+        context: content.slice(contextStart, contextEnd),
+      },
+    });
+  }
+
+  return { findings, invalid };
+}
 
 function asEvaluation(result: AuditResult, content: string): ChapterAuditEvaluation {
   const decision = result.decision ?? (result.passed ? "pass" : "fail");
@@ -203,7 +258,7 @@ export async function runChapterReviewCycle(params: {
       attemptId: auditRunAttemptId,
       phase: assessmentCount === 0 ? "initial" : "post-revision",
     };
-    const llmAudit = await params.auditor.auditChapter(
+    const rawLlmAudit = await params.auditor.auditChapter(
       params.bookDir,
       content,
       params.chapterNumber,
@@ -212,6 +267,17 @@ export async function runChapterReviewCycle(params: {
         ? { ...params.reducedControlInput, ...(options ?? {}) }
         : options,
     );
+    const spellingBinding = params.lengthSpec.countingMode === "vi_wordlike_tokens_v1"
+      ? bindVietnameseAuditorSpellingFindings(content, rawLlmAudit.issues)
+      : { findings: [] as ReadonlyArray<AuditIssue>, invalid: false };
+    const llmAudit: AuditResult = spellingBinding.invalid
+      ? {
+          ...rawLlmAudit,
+          passed: false,
+          parseFailed: true,
+          summary: `${rawLlmAudit.summary} Vietnamese spelling finding lacked a valid exact content binding.`.trim(),
+        }
+      : rawLlmAudit;
     totalUsage = params.addUsage(totalUsage, llmAudit.tokenUsage);
     if (llmAudit.tokenUsage) {
       auditorTokenUsage = params.addUsage(
@@ -230,7 +296,13 @@ export async function runChapterReviewCycle(params: {
       ? params.runPostWriteChecks(content)
       : initialPostWriteIssues;
 
-    const deterministicFindings = [...aiTellsResult.issues, ...sensitiveResult.issues, ...postWriteIssues]
+    const deterministicFindings = [
+      ...aiTellsResult.issues,
+      ...sensitiveResult.issues,
+      ...postWriteIssues,
+      ...(rawLlmAudit.hostFindings ?? []),
+      ...spellingBinding.findings,
+    ]
       .map((issue) => issue.repairTarget ? issue : { ...issue, repairTarget: "prose" as const });
     const evaluation = decideAudit({
       content,
@@ -286,9 +358,12 @@ export async function runChapterReviewCycle(params: {
   const initial = await assess(finalContent);
 
   const filterRepairIssues = (issues: ReadonlyArray<AuditIssue>): ReadonlyArray<AuditIssue> => {
-    const hasLocalHardLength = issues.some((issue) => issue.ruleId === "length.hard-range" && issue.verification === "verified");
-    if (!hasLocalHardLength) return issues;
-    return issues.filter((issue) => !(issue.source === "llm" && /length|字数|长度|word|độ dài|số từ|word count/i.test(`${issue.category} ${issue.description}`)));
+    // Preferred-range drift is telemetry only. Passing it to the reviser can
+    // turn an exact local repair into an unnecessary full-chapter rewrite.
+    const actionableIssues = issues.filter((issue) => issue.ruleId !== "length.soft-range");
+    const hasLocalHardLength = actionableIssues.some((issue) => issue.ruleId === "length.hard-range" && issue.verification === "verified");
+    if (!hasLocalHardLength) return actionableIssues;
+    return actionableIssues.filter((issue) => !(issue.source === "llm" && /length|字数|长度|word|độ dài|số từ|word count/i.test(`${issue.category} ${issue.description}`)));
   };
 
   const snapshots: ReviewSnapshot[] = [{
@@ -480,12 +555,18 @@ export async function runChapterReviewCycle(params: {
         // unchanged chapter. Give Vietnamese hard-length repair one bounded
         // rescue pass with an explicit measured deficit, while keeping the
         // original canonical content untouched until the shared gate passes.
-        if (iteration === 0 && candidateWordCount < canonicalWordCount) {
-          const deficit = Math.max(1, candidateWordCount - params.lengthSpec.hardMax);
+        if (iteration === 0) {
+          // If the first revision made the chapter longer, do not compound that
+          // bad candidate. Start the bounded rescue from the canonical draft;
+          // otherwise keep the shorter candidate as the rescue baseline.
+          const rescueFromCanonical = candidateWordCount >= canonicalWordCount;
+          const rescueBaseContent = rescueFromCanonical ? finalContent : revisedContent;
+          const rescueBaseWordCount = rescueFromCanonical ? canonicalWordCount : candidateWordCount;
+          const deficit = Math.max(1, rescueBaseWordCount - params.lengthSpec.hardMax);
           const rescueIssue: AuditIssue = {
             severity: "critical",
             category: "length",
-            description: `Previous revision measured ${candidateWordCount} Vietnamese words; remove at least ${deficit} more words and return a complete chapter safely below the hard ceiling. Aim for ${params.lengthSpec.softMin}-${Math.min(params.lengthSpec.softMax, params.lengthSpec.hardMax - 50)} Vietnamese words, never exceed ${params.lengthSpec.hardMax} words, and preserve the causal beats, evidence, hook payoffs, and ending hook.`,
+            description: `Previous revision measured ${candidateWordCount} Vietnamese words; ${rescueFromCanonical ? `the canonical draft measures ${canonicalWordCount} words; ` : ""}remove at least ${deficit} more words and return a complete chapter safely below the hard ceiling. Aim for ${params.lengthSpec.softMin}-${Math.min(params.lengthSpec.softMax, params.lengthSpec.hardMax - 50)} Vietnamese words, never exceed ${params.lengthSpec.hardMax} words, and preserve the causal beats, evidence, hook payoffs, and ending hook.`,
             suggestion: "Aggressively remove redundant transitions, repeated interior beats, and redundant explanations. Leave a safety margin below the hard ceiling while preserving causal beats, evidence, hook payoffs, and the ending hook.",
             ruleId: "length.hard-range",
             repairScope: "structural",
@@ -494,7 +575,7 @@ export async function runChapterReviewCycle(params: {
           };
           const rescueOutput = await reviser.reviseChapter(
             params.bookDir,
-            revisedContent,
+            rescueBaseContent,
             params.chapterNumber,
             [rescueIssue],
             "auto",
@@ -511,7 +592,7 @@ export async function runChapterReviewCycle(params: {
           }
           const rescuedContent = params.normalizePostWriteSurface?.(rescueOutput.revisedContent)
             ?? rescueOutput.revisedContent;
-          if (!rescuedContent || rescuedContent === revisedContent) {
+          if (!rescuedContent || rescuedContent === rescueBaseContent) {
             revisionRejectionReason = "length rescue produced no new content";
             break;
           }

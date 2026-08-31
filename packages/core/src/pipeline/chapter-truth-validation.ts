@@ -3,9 +3,13 @@ import type { StateValidationAuthorityContext, ValidationResult, StateValidatorA
 import type { WriteChapterOutput, WriterAgent } from "../agents/writer.js";
 import type { BookConfig } from "../models/book.js";
 import type { ContextPackage, RuleStack } from "../models/input-governance.js";
+import type { HookOps } from "../models/runtime-state.js";
 import type { Logger } from "../utils/logger.js";
 import type { ScaffoldLanguage } from "../models/writing-language.js";
+import { computeChapterContentHash } from "../audit/chapter-audit-evaluator.js";
+import { validateExpectedHookOps } from "../utils/hook-intent-validator.js";
 import {
+  buildStateDegradedIssues,
   buildStateDegradedPersistenceOutput,
   retrySettlementAfterValidationFailure,
 } from "./chapter-state-recovery.js";
@@ -26,6 +30,8 @@ export async function validateChapterTruthPersistence(params: {
     readonly oldLedger: string;
   };
   readonly authorityContext?: StateValidationAuthorityContext;
+  readonly expectedHookOps?: HookOps;
+  readonly acceptanceCriteria?: ReadonlyArray<string>;
   readonly normalizeSettledOutput?: (
     output: WriteChapterOutput,
   ) => WriteChapterOutput | Promise<WriteChapterOutput>;
@@ -101,6 +107,8 @@ export async function validateChapterTruthPersistence(params: {
     }
   }
 
+  validation = applyGovernedHookValidation(params, validation, persistenceOutput);
+
   if (!validation.passed || validation.repairRequired) {
     const recovery = await retrySettlementAfterValidationFailure({
       writer: params.writer,
@@ -122,8 +130,39 @@ export async function validateChapterTruthPersistence(params: {
     });
 
     if (recovery.kind === "recovered") {
-      persistenceOutput = recovery.output;
-      validation = recovery.validation;
+      const recoveredHookContradictions = governedHookContradictions(
+        params,
+        recovery.output,
+      );
+      const recoveredValidation = applyGovernedHookValidation(
+        params,
+        recovery.validation,
+        recovery.output,
+        recoveredHookContradictions,
+      );
+      if (recoveredValidation.passed && !recoveredValidation.repairRequired) {
+        persistenceOutput = recovery.output;
+        validation = recoveredValidation;
+      } else {
+        chapterStatus = "state-degraded";
+        validation = recoveredValidation;
+        degradedIssues = recoveredHookContradictions.length > 0
+          ? recoveredHookContradictions
+          : buildStateDegradedIssues(
+            recoveredValidation.warnings,
+            params.book.language ?? params.language,
+          );
+        persistenceOutput = buildStateDegradedPersistenceOutput({
+          output: recovery.output,
+          oldState: params.previousTruth.oldState,
+          oldHooks: params.previousTruth.oldHooks,
+          oldLedger: params.previousTruth.oldLedger,
+        });
+        auditResult = {
+          ...auditResult,
+          issues: [...auditResult.issues, ...degradedIssues],
+        };
+      }
     } else {
       chapterStatus = "state-degraded";
       degradedIssues = recovery.issues;
@@ -147,4 +186,48 @@ export async function validateChapterTruthPersistence(params: {
     persistenceOutput,
     auditResult,
   };
+}
+
+function applyGovernedHookValidation(
+  params: {
+    readonly content: string;
+    readonly expectedHookOps?: HookOps;
+    readonly acceptanceCriteria?: ReadonlyArray<string>;
+  },
+  validation: ValidationResult,
+  output: WriteChapterOutput,
+  criticalContradictions = governedHookContradictions(params, output),
+): ValidationResult {
+  if (criticalContradictions.length === 0) return validation;
+
+  return {
+    passed: false,
+    repairRequired: true,
+    warnings: [
+      ...validation.warnings,
+      ...criticalContradictions.map((issue) => ({
+        category: issue.category,
+        description: issue.description,
+      })),
+    ],
+  };
+}
+
+function governedHookContradictions(
+  params: {
+    readonly content: string;
+    readonly expectedHookOps?: HookOps;
+    readonly acceptanceCriteria?: ReadonlyArray<string>;
+  },
+  output: WriteChapterOutput,
+): ReadonlyArray<AuditIssue> {
+  if (!params.expectedHookOps) return [];
+  return validateExpectedHookOps({
+    expected: params.expectedHookOps,
+    actual: output.runtimeStateDelta?.hookOps
+      ?? { upsert: [], mention: [], resolve: [], defer: [] },
+    runtimeHooks: output.runtimeStateSnapshot?.hooks.hooks ?? [],
+    acceptanceCriteria: params.acceptanceCriteria ?? [],
+    contentHash: computeChapterContentHash(params.content),
+  }).filter((issue) => issue.severity === "critical" && issue.verification === "verified");
 }

@@ -189,7 +189,7 @@ function buildLengthGuidance(lengthSpec: LengthSpec, language: WritingLanguage):
 
 function buildChapterContentLengthLine(lengthSpec: LengthSpec): string {
   if (formatWriterPromptLengthGuidance(lengthSpec, "vi")) {
-    return "(CHAPTER_CONTENT：mục tiêu viết 1100-1300 từ tiếng Việt; audit safety range 1000-1500)";
+    return `(CHAPTER_CONTENT：mục tiêu viết ${lengthSpec.softMin}-${lengthSpec.softMax} từ tiếng Việt; audit safety range ${lengthSpec.hardMin}-${lengthSpec.hardMax})`;
   }
 
   return `(正文内容，目标${lengthSpec.target}字，允许区间${lengthSpec.softMin}-${lengthSpec.softMax}字)`;

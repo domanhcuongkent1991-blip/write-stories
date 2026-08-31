@@ -61,10 +61,10 @@ export function buildLengthSpec(
   if (language === "vi" && target === 1150) {
     return {
       target,
-      softMin: 1000,
+      softMin: 1100,
       softMax: 1300,
       hardMin: 1000,
-      hardMax: 1500,
+      hardMax: 1800,
       countingMode: "vi_wordlike_tokens_v1",
     };
   }
@@ -89,7 +89,7 @@ export function buildLengthSpec(
 /**
  * Shared writing guidance for Vietnamese chapter generation.
  *
- * The audit policy deliberately remains broader (1000-1500 tokens). This
+ * The audit policy deliberately remains broader than the writer target. This
  * narrower target gives the writer room to finish a coherent chapter before
  * the hard safety gate is reached, while keeping the counting mode explicit.
  */
@@ -107,10 +107,10 @@ export function formatWriterPromptLengthGuidance(
 
   return [
     "ĐỘ DÀI KHI VIẾT (BẮT BUỘC): chỉ tính phần CHAPTER_CONTENT theo vi_wordlike_tokens_v1.",
-    "Mục tiêu viết: 1100-1300 từ tiếng Việt (mốc tham chiếu 1150 từ); hãy chủ động kết thúc trong khoảng này.",
-    "Đây là mục tiêu viết, không phải gợi ý: không thêm câu hoặc cảnh đệm; khi gần 1300 từ hãy khép cảnh và kết thúc hook.",
-    "Mọi hướng dẫn của chapter memo/context vẫn phải được đáp ứng. Nếu memo ghi khoảng khác, dùng mục tiêu viết 1100-1300 cho phần sáng tác.",
-    "Audit safety range vẫn là 1000-1500: 1301-1500 chỉ cảnh báo nếu các gate khác đạt; dưới 1000 hoặc trên 1500 bị chặn.",
+    `Mục tiêu viết: ${spec.softMin}-${spec.softMax} từ tiếng Việt (mốc tham chiếu ${spec.target} từ); hãy chủ động kết thúc trong khoảng này.`,
+    `Đây là mục tiêu viết, không phải gợi ý: không thêm câu hoặc cảnh đệm; khi gần ${spec.softMax} từ hãy khép cảnh và kết thúc hook.`,
+    `Mọi hướng dẫn của chapter memo/context vẫn phải được đáp ứng. Nếu memo ghi khoảng khác, dùng mục tiêu viết ${spec.softMin}-${spec.softMax} cho phần sáng tác.`,
+    `Audit safety range vẫn là ${spec.hardMin}-${spec.hardMax}: ngoài ${spec.softMin}-${spec.softMax} nhưng còn trong safety range chỉ cảnh báo nếu các gate khác đạt; dưới ${spec.hardMin} hoặc trên ${spec.hardMax} bị chặn.`,
   ].join("\n");
 }
 

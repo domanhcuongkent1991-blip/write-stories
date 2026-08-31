@@ -1,5 +1,8 @@
 # Vietnamese Short-Chapter Policy Implementation Plan
 
+> **Superseded:** Do not execute this former 1,500-word plan. Use
+> `2026-08-31-inkos-vi-phase-b-safe-canary.md`.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Add a Vietnamese 1,150-token chapter policy with a 1,000–1,300 preferred range, warning-only overflow up to a technical safety ceiling, deterministic surface lint, and regression coverage.

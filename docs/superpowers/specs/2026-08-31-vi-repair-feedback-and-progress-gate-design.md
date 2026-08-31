@@ -1,5 +1,9 @@
 # Vietnamese Repair Feedback and Progress Gate Design
 
+> **Superseded in part:** Its repair and recovery invariants remain historical
+> context, but every 1,500-word bound is replaced by the approved policy in
+> `2026-08-31-vi-phase-b-length-1800-design.md`. Do not execute its old range.
+
 **Date:** 2026-08-31  
 **Status:** Approved design  
 **Scope:** Vietnamese long-fiction qualification pipeline only; no provider configuration change and no baseline-book mutation.
