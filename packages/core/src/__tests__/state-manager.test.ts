@@ -765,6 +765,74 @@ describe("StateManager", () => {
       expect(await manager.getNextChapterNumber(bookId)).toBe(1);
     });
 
+    it("restores the previous Vietnamese truth snapshot before retrying a failed chapter", async () => {
+      const bookId = "vi-progress-retry-state";
+      await manager.saveBookConfig(bookId, {
+        id: bookId,
+        title: "Vi retry state",
+        platform: "tomato",
+        genre: "other",
+        language: "vi",
+        status: "active",
+        targetChapters: 10,
+        chapterWordCount: 1150,
+        createdAt: "2026-01-01T00:00:00Z",
+        updatedAt: "2026-01-01T00:00:00Z",
+      });
+      const bookDir = manager.bookDir(bookId);
+      const storyDir = join(bookDir, "story");
+      const chaptersDir = join(bookDir, "chapters");
+      const stateDir = manager.stateDir(bookId);
+      await mkdir(chaptersDir, { recursive: true });
+      await mkdir(storyDir, { recursive: true });
+
+      await writeFile(join(storyDir, "current_state.md"), "# State\n\n- seed truth", "utf-8");
+      await writeFile(join(storyDir, "pending_hooks.md"), "- seed hook", "utf-8");
+      await manager.snapshotState(bookId, 0);
+
+      await writeFile(join(storyDir, "current_state.md"), "# State\n\n| Field | Value |\n| --- | --- |\n| Current chapter | 1 |\n| Goal | failed chapter truth |", "utf-8");
+      await writeFile(join(storyDir, "pending_hooks.md"), "- failed chapter hook", "utf-8");
+      await mkdir(stateDir, { recursive: true });
+      await writeFile(join(stateDir, "manifest.json"), JSON.stringify({
+        schemaVersion: 2,
+        language: "vi",
+        lastAppliedChapter: 1,
+        projectionVersion: 1,
+        migrationWarnings: [],
+      }), "utf-8");
+      await writeFile(join(stateDir, "current_state.json"), JSON.stringify({
+        chapter: 1,
+        facts: [{
+          subject: "protagonist",
+          predicate: "Goal",
+          object: "failed chapter truth",
+          validFromChapter: 1,
+          validUntilChapter: null,
+          sourceChapter: 1,
+        }],
+      }), "utf-8");
+      await writeFile(join(stateDir, "hooks.json"), JSON.stringify({ hooks: [] }), "utf-8");
+      await writeFile(join(stateDir, "chapter_summaries.json"), JSON.stringify({ rows: [] }), "utf-8");
+      await writeFile(join(chaptersDir, "0001_failed.md"), "# Chương 1\n\nNội dung lỗi.", "utf-8");
+      const now = "2026-01-01T00:00:00Z";
+      await manager.saveChapterIndex(bookId, [{
+        number: 1,
+        title: "Một",
+        status: "audit-failed",
+        auditDecision: "repair-required",
+        wordCount: 3,
+        createdAt: now,
+        updatedAt: now,
+        auditIssues: ["failed"],
+        lengthWarnings: [],
+      }]);
+
+      expect(await manager.getNextChapterNumber(bookId)).toBe(1);
+      expect(await readFile(join(storyDir, "current_state.md"), "utf-8")).toContain("seed truth");
+      expect(JSON.parse(await readFile(join(stateDir, "manifest.json"), "utf-8"))).toMatchObject({ lastAppliedChapter: 0 });
+      expect(JSON.parse(await readFile(join(stateDir, "current_state.json"), "utf-8"))).toMatchObject({ chapter: 0 });
+    });
+
     it.each(["rejected", "state-degraded", "drafting", "auditing", "revising", "drafted"] as const)(
       "keeps Vietnamese progress at the retry target for %s chapters",
       async (status) => {

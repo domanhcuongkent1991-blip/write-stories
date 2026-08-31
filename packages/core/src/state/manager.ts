@@ -474,6 +474,35 @@ export class StateManager {
     const durableChapter = await resolveDurableStoryProgress({
       bookDir: this.bookDir(bookId),
     });
+    const book = await this.loadBookConfig(bookId).catch(() => undefined);
+    if (book?.language === "vi") {
+      const index = await this.loadChapterIndex(bookId);
+      const hasNonDurableChapter = index.some((chapter) => chapter.number > durableChapter);
+      // Only repair a retry when the persisted structured truth is actually
+      // ahead of the durable artifact chain. A chapter index can legitimately
+      // contain failed/drafting entries without having a stale runtime state;
+      // those legacy/fixture books must continue to resolve the retry target
+      // without requiring a snapshot.
+      const currentStateChapter = await this.readPersistedCurrentStateChapter(bookId);
+      const hasAheadRuntimeState = currentStateChapter !== undefined
+        && currentStateChapter > durableChapter;
+      if (hasNonDurableChapter && hasAheadRuntimeState) {
+        const restored = await this.restoreState(bookId, durableChapter);
+        if (!restored) {
+          throw new Error(
+            `Cannot restore Vietnamese retry snapshot for chapter ${durableChapter} in "${bookId}"`,
+          );
+        }
+        // The sqlite store is only an acceleration index. Once canonical truth
+        // rolls back, retaining facts from the failed chapter would contaminate
+        // planning for the retry even though durable progress is correct.
+        await Promise.all([
+          rm(join(this.bookDir(bookId), "story", "memory.db"), { force: true }),
+          rm(join(this.bookDir(bookId), "story", "memory.db-shm"), { force: true }),
+          rm(join(this.bookDir(bookId), "story", "memory.db-wal"), { force: true }),
+        ]);
+      }
+    }
     // Ensure structured state is bootstrapped (side-effect: creates missing
     // JSON files), but do NOT trust its chapter number for progress — only
     // the contiguous durable artifact chain is authoritative.
@@ -482,6 +511,26 @@ export class StateManager {
       fallbackChapter: durableChapter,
     });
     return durableChapter + 1;
+  }
+
+  private async readPersistedCurrentStateChapter(bookId: string): Promise<number | undefined> {
+    try {
+      const parsed: unknown = JSON.parse(
+        await readFile(join(this.stateDir(bookId), "current_state.json"), "utf-8"),
+      );
+      if (
+        typeof parsed !== "object"
+        || parsed === null
+        || typeof (parsed as { chapter?: unknown }).chapter !== "number"
+        || !Number.isInteger((parsed as { chapter: number }).chapter)
+        || (parsed as { chapter: number }).chapter < 0
+      ) {
+        return undefined;
+      }
+      return (parsed as { chapter: number }).chapter;
+    } catch {
+      return undefined;
+    }
   }
 
   async getPersistedChapterCount(bookId: string): Promise<number> {
