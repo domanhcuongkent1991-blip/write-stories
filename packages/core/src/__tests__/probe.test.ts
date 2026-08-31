@@ -1,5 +1,9 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { probeModelsFromUpstream } from "../llm/providers/probe.js";
+import {
+  probeChatContract,
+  probeModelsFromUpstream,
+  type ChatProbeResult,
+} from "../llm/providers/probe.js";
 
 describe("probeModelsFromUpstream", () => {
   const origFetch = globalThis.fetch;
@@ -73,5 +77,112 @@ describe("probeModelsFromUpstream", () => {
     });
     const result = await probeModelsFromUpstream("https://api.example.com/v1", "sk-test");
     expect(result).toEqual([{ id: "valid", name: "valid", contextWindow: 0 }]);
+  });
+});
+
+describe("probeChatContract", () => {
+  const originalFetch = globalThis.fetch;
+
+  beforeEach(() => {
+    globalThis.fetch = vi.fn();
+  });
+
+  afterEach(() => {
+    globalThis.fetch = originalFetch;
+  });
+
+  it("reports a non-stream final answer without retaining response text", async () => {
+    (globalThis.fetch as any).mockResolvedValue(new Response(JSON.stringify({
+      id: "response-1",
+      choices: [{ message: { content: "OK" }, finish_reason: "stop" }],
+    }), { status: 200, headers: { "content-type": "application/json" } }));
+
+    const result = await probeChatContract("https://api.example.com/v1", "sk-test", "gemini-test");
+
+    expect(result).toMatchObject<Partial<ChatProbeResult>>({
+      ok: true,
+      outcome: "final-answer",
+      stream: false,
+      contentPresent: true,
+      reasoningPresent: false,
+      httpStatus: 200,
+      finishReason: "stop",
+    });
+    expect(result).not.toHaveProperty("content");
+    expect(result).not.toHaveProperty("response");
+    expect(globalThis.fetch).toHaveBeenCalledWith(
+      "https://api.example.com/v1/chat/completions",
+      expect.objectContaining({
+        method: "POST",
+        body: expect.stringContaining('"stream":false'),
+      }),
+    );
+  });
+
+  it("classifies reasoning-only non-stream output as an external contract failure", async () => {
+    (globalThis.fetch as any).mockResolvedValue(new Response(JSON.stringify({
+      choices: [{ message: { content: "", reasoning_content: "internal reasoning" }, finish_reason: "stop" }],
+    }), { status: 200, headers: { "content-type": "application/json" } }));
+
+    await expect(probeChatContract("https://api.example.com/v1", "sk-test", "gemini-test"))
+      .resolves.toMatchObject({
+        ok: false,
+        outcome: "reasoning-only",
+        contentPresent: false,
+        reasoningPresent: true,
+        httpStatus: 200,
+      });
+  });
+
+  it("classifies stream final and reasoning deltas without returning their text", async () => {
+    const payload = [
+      `data: ${JSON.stringify({ choices: [{ delta: { reasoning_content: "think" } }] })}\n\n`,
+      `data: ${JSON.stringify({ choices: [{ delta: { content: "OK" } }] })}\n\n`,
+      `data: ${JSON.stringify({ choices: [{ delta: {}, finish_reason: "stop" }] })}\n\n`,
+      "data: [DONE]\n\n",
+    ].join("");
+    (globalThis.fetch as any).mockResolvedValue(new Response(payload, {
+      status: 200,
+      headers: { "content-type": "text/event-stream" },
+    }));
+
+    const result = await probeChatContract("https://api.example.com/v1", "sk-test", "gemini-test", {
+      stream: true,
+      reasoningEffort: "none",
+    });
+
+    expect(result).toMatchObject({
+      ok: true,
+      outcome: "final-answer",
+      stream: true,
+      contentPresent: true,
+      reasoningPresent: true,
+      finishReason: "stop",
+    });
+    const requestBody = JSON.parse(String((globalThis.fetch as any).mock.calls[0]?.[1]?.body));
+    expect(requestBody).toMatchObject({ stream: true, reasoning_effort: "none" });
+  });
+
+  it("returns only status metadata for HTTP, JSON and network failures", async () => {
+    (globalThis.fetch as any).mockResolvedValueOnce(new Response("provider detail with secret", { status: 503 }));
+    await expect(probeChatContract("https://api.example.com/v1", "sk-test", "gemini-test"))
+      .resolves.toMatchObject({ ok: false, outcome: "http-error", httpStatus: 503 });
+
+    (globalThis.fetch as any).mockResolvedValueOnce(new Response("not-json", { status: 200 }));
+    await expect(probeChatContract("https://api.example.com/v1", "sk-test", "gemini-test"))
+      .resolves.toMatchObject({ ok: false, outcome: "invalid-json", httpStatus: 200 });
+
+    (globalThis.fetch as any).mockRejectedValueOnce(new Error("secret-bearing network detail"));
+    const network = await probeChatContract("https://api.example.com/v1", "sk-test", "gemini-test");
+    expect(network).toMatchObject({ ok: false, outcome: "network-error" });
+    expect(network).not.toHaveProperty("errorMessage");
+  });
+
+  it("does not make a request when base URL or model is missing", async () => {
+    await expect(probeChatContract("", "sk-test", "gemini-test"))
+      .resolves.toMatchObject({ ok: false, outcome: "invalid-request" });
+    await expect(probeChatContract("https://api.example.com/v1", "sk-test", ""))
+      .resolves.toMatchObject({ ok: false, outcome: "invalid-request" });
+    expect(globalThis.fetch).not.toHaveBeenCalled();
   });
 });
