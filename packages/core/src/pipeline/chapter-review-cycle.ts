@@ -140,6 +140,12 @@ export async function runChapterReviewCycle(params: {
     normalizedContent: string,
     output: ReviseOutput,
   ) => RevisionCandidateSettlement | Promise<RevisionCandidateSettlement>;
+  readonly retainRejectedCandidate?: (input: {
+    readonly content: string;
+    readonly contentHash: string;
+    readonly wordCount: number;
+    readonly reason: string;
+  }) => void | Promise<void>;
   /** @deprecated Use settleRevisionCandidate so post-audit can bind to candidate truth. */
   readonly stateSettlementValid?: (output: ReviseOutput) => boolean | Promise<boolean>;
   readonly logWarn: (message: { zh: string; en: string }) => void;
@@ -170,6 +176,12 @@ export async function runChapterReviewCycle(params: {
     category: violation.rule,
     description: violation.description,
     suggestion: violation.suggestion,
+    ...(violation.repairHint ? {
+      repairHint: violation.repairHint,
+      repairScope: "local" as const,
+      repairTarget: "prose" as const,
+      verification: "verified" as const,
+    } : {}),
   }));
 
   params.assertChapterContentNotEmpty(finalContent, "draft generation");
@@ -272,6 +284,12 @@ export async function runChapterReviewCycle(params: {
     : Math.min(DEFAULT_MAX_REVIEW_ITERATIONS, Math.max(0, Math.floor(params.maxReviewIterations ?? DEFAULT_MAX_REVIEW_ITERATIONS)));
   params.logStage({ zh: "审计草稿", en: "auditing draft" });
   const initial = await assess(finalContent);
+
+  const filterRepairIssues = (issues: ReadonlyArray<AuditIssue>): ReadonlyArray<AuditIssue> => {
+    const hasLocalHardLength = issues.some((issue) => issue.ruleId === "length.hard-range" && issue.verification === "verified");
+    if (!hasLocalHardLength) return issues;
+    return issues.filter((issue) => !(issue.source === "llm" && /length|字数|长度|word|độ dài|số từ|word count/i.test(`${issue.category} ${issue.description}`)));
+  };
 
   const snapshots: ReviewSnapshot[] = [{
     content: finalContent,
@@ -399,7 +417,7 @@ export async function runChapterReviewCycle(params: {
         params.bookDir,
         finalContent,
         params.chapterNumber,
-        currentAudit.auditResult.issues,
+        filterRepairIssues(currentAudit.auditResult.issues),
         "auto",
         params.book.genre,
         { ...params.reducedControlInput, lengthSpec: params.lengthSpec },
@@ -445,6 +463,12 @@ export async function runChapterReviewCycle(params: {
         params.logWarn({
           zh: "修复候选的状态结算无效，保留原章节",
           en: "Revision candidate state settlement is invalid; retaining the canonical chapter.",
+        });
+        await params.retainRejectedCandidate?.({
+          content: revisedContent,
+          contentHash: revisionCandidateIdentity?.candidateContentHash ?? computeChapterContentHash(revisedContent),
+          wordCount: countChapterLength(revisedContent, params.lengthSpec.countingMode),
+          reason: revisionRejectionReason,
         });
         break;
       }
@@ -494,6 +518,12 @@ export async function runChapterReviewCycle(params: {
         en: `revision candidate rejected (${revisionAcceptance.rejectionReason ?? "acceptance gate not met"}); retaining the canonical chapter`,
       });
       revisionRejectionReason = revisionAcceptance.rejectionReason ?? "candidate rejected by shared acceptance gate";
+      await params.retainRejectedCandidate?.({
+        content: revisedContent,
+        contentHash: revisionCandidateIdentity.candidateContentHash,
+        wordCount: revisedWordCount,
+        reason: revisionRejectionReason,
+      });
       break;
     }
   }

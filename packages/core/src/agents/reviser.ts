@@ -67,7 +67,10 @@ function buildTieredIssueList(
   const medium: string[] = [];
 
   for (const issue of issues) {
-    const line = `- ${issue.category}: ${issue.description}`;
+    const hint = issue.repairHint
+      ? `\n  TARGET_TEXT: ${issue.repairHint.targetText}\n  REPLACEMENT_TEXT: ${issue.repairHint.replacementText}\n  OCCURRENCES: ${issue.repairHint.occurrenceIndexes.join(", ")}\n  CONTEXT: ${issue.repairHint.context}`
+      : "";
+    const line = `- ${issue.category}: ${issue.description}${hint}`;
     if (issue.severity === "critical") {
       critical.push(line);
     } else if (issue.severity === "warning") {
@@ -309,6 +312,7 @@ ${chapterContent}`;
       mode,
       chapterContent,
       autoOutputMode,
+      issues,
     );
     const wordCount = options?.lengthSpec
       ? countChapterLength(output.revisedContent, options.lengthSpec.countingMode)
@@ -321,6 +325,7 @@ ${chapterContent}`;
     mode: ReviseMode,
     originalChapter: string,
     autoOutputMode: AutoOutputMode = "allow-full",
+    issues: ReadonlyArray<AuditIssue> = [],
   ): ReviseOutput {
     const extract = (tag: string): string => {
       const regex = new RegExp(
@@ -349,9 +354,16 @@ ${chapterContent}`;
         const patchesRaw = extract("PATCHES");
         if (patchesRaw) {
           const patches = parseSpotFixPatches(patchesRaw);
-          if (patches.length > 0) {
-            const patchResult = applySpotFixPatches(originalChapter, patches);
-            if (patchResult.applied && patchResult.appliedPatchCount / patches.length >= 0.5) {
+          const spellingHints = issues
+            .filter((issue) => issue.category === "vi-known-spelling" && issue.verification === "verified" && issue.repairHint)
+            .map((issue) => issue.repairHint!);
+          const hintsSatisfied = spellingHints.every((hint) => patches.some((patch) =>
+            patch.targetText === hint.targetText
+            && patch.replacementText === hint.replacementText
+            && patch.occurrenceIndex === hint.occurrenceIndexes[0]));
+          if (patches.length > 0 && hintsSatisfied) {
+            const patchResult = applySpotFixPatches(originalChapter, patches, { exactOnly: true, requireAll: true });
+            if (patchResult.applied && patchResult.appliedPatchCount === patches.length) {
               return makeResult(patchResult.revisedContent, true);
             }
           }
@@ -468,6 +480,8 @@ TARGET_TEXT:
 (Exact quote from the original that identifies the passage to change)
 REPLACEMENT_TEXT:
 (Replacement text for this passage)
+OCCURRENCE_INDEX:
+(Optional one-based occurrence index when TARGET_TEXT repeats)
 --- END PATCH ---
 
 === REVISED_CONTENT ===
@@ -510,6 +524,8 @@ TARGET_TEXT:
 (从原文中精确引用要修改的段落)
 REPLACEMENT_TEXT:
 (替换后的文本)
+OCCURRENCE_INDEX:
+(当 TARGET_TEXT 重复时填写从 1 开始的出现序号)
 --- END PATCH ---
 
 === REVISED_CONTENT ===

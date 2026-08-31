@@ -3,6 +3,7 @@ import type { GenreProfile } from "../models/genre-profile.js";
 import type { BookRules } from "../models/book-rules.js";
 import type { FanficMode } from "../models/book.js";
 import type { ScaffoldLanguage } from "../models/writing-language.js";
+import type { RepairHint } from "../models/repair-hint.js";
 import type { ChapterMemo, ContextPackage, RuleStack } from "../models/input-governance.js";
 import { readGenreProfile, readBookLanguage, readBookRules } from "./rules-reader.js";
 import { getFanficDimensionConfig, FANFIC_DIMENSIONS } from "./fanfic-dimensions.js";
@@ -53,6 +54,7 @@ export interface AuditIssue {
   readonly category: string;
   readonly description: string;
   readonly suggestion: string;
+  readonly repairHint?: RepairHint;
   readonly repairScope?: "local" | "structural" | "unknown";
   readonly ruleId?: string;
   readonly findingId?: string;

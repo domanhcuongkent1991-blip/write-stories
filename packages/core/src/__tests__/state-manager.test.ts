@@ -738,6 +738,102 @@ describe("StateManager", () => {
 
       expect(next).toBe(13);
     });
+
+    it("does not advance Vietnamese progress past a failed canonical chapter", async () => {
+      const bookId = "vi-progress-book";
+      await manager.saveBookConfig(bookId, {
+        id: bookId,
+        title: "Vi progress",
+        platform: "tomato",
+        genre: "other",
+        language: "vi",
+        status: "active",
+        targetChapters: 10,
+        chapterWordCount: 1150,
+        createdAt: "2026-01-01T00:00:00Z",
+        updatedAt: "2026-01-01T00:00:00Z",
+      });
+      const chaptersDir = join(manager.bookDir(bookId), "chapters");
+      await mkdir(chaptersDir, { recursive: true });
+      await writeFile(join(chaptersDir, "0001_failed.md"), "# Chương 1\n\nNội dung.", "utf-8");
+      await writeFile(join(chaptersDir, "0002_ready.md"), "# Chương 2\n\nNội dung.", "utf-8");
+      const now = "2026-01-01T00:00:00Z";
+      await manager.saveChapterIndex(bookId, [
+        { number: 1, title: "Một", status: "audit-failed", wordCount: 2, createdAt: now, updatedAt: now, auditIssues: ["failed"], lengthWarnings: [] },
+        { number: 2, title: "Hai", status: "ready-for-review", wordCount: 2, createdAt: now, updatedAt: now, auditIssues: [], lengthWarnings: [] },
+      ]);
+      expect(await manager.getNextChapterNumber(bookId)).toBe(1);
+    });
+
+    it.each(["rejected", "state-degraded", "drafting", "auditing", "revising", "drafted"] as const)(
+      "keeps Vietnamese progress at the retry target for %s chapters",
+      async (status) => {
+        const bookId = `vi-progress-${status}`;
+        await manager.saveBookConfig(bookId, {
+          id: bookId,
+          title: "Vi progress",
+          platform: "tomato",
+          genre: "other",
+          language: "vi",
+          status: "active",
+          targetChapters: 10,
+          chapterWordCount: 1150,
+          createdAt: "2026-01-01T00:00:00Z",
+          updatedAt: "2026-01-01T00:00:00Z",
+        });
+        const now = "2026-01-01T00:00:00Z";
+        await manager.saveChapterIndex(bookId, [
+          { number: 1, title: "Một", status, wordCount: 2, createdAt: now, updatedAt: now, auditIssues: ["failed"], lengthWarnings: [] },
+          { number: 2, title: "Hai", status: "ready-for-review", wordCount: 2, createdAt: now, updatedAt: now, auditIssues: [], lengthWarnings: [] },
+        ]);
+        expect(await manager.getNextChapterNumber(bookId)).toBe(1);
+      },
+    );
+
+    it("advances Vietnamese progress only for accepted terminal statuses", async () => {
+      const statuses = ["audit-passed", "ready-for-review", "approved", "published", "imported"] as const;
+      for (const [index, status] of statuses.entries()) {
+        const bookId = `vi-accepted-${index}`;
+        await manager.saveBookConfig(bookId, {
+          id: bookId,
+          title: "Vi accepted",
+          platform: "tomato",
+          genre: "other",
+          language: "vi",
+          status: "active",
+          targetChapters: 10,
+          chapterWordCount: 1150,
+          createdAt: "2026-01-01T00:00:00Z",
+          updatedAt: "2026-01-01T00:00:00Z",
+        });
+        const now = "2026-01-01T00:00:00Z";
+        await manager.saveChapterIndex(bookId, [
+          { number: 1, title: "Một", status, wordCount: 2, createdAt: now, updatedAt: now, auditIssues: [], lengthWarnings: [] },
+        ]);
+        expect(await manager.getNextChapterNumber(bookId)).toBe(2);
+      }
+    });
+
+    it("does not trust a ready status with a failed terminal audit decision", async () => {
+      const bookId = "vi-progress-stale-audit";
+      await manager.saveBookConfig(bookId, {
+        id: bookId,
+        title: "Vi stale audit",
+        platform: "tomato",
+        genre: "other",
+        language: "vi",
+        status: "active",
+        targetChapters: 10,
+        chapterWordCount: 1150,
+        createdAt: "2026-01-01T00:00:00Z",
+        updatedAt: "2026-01-01T00:00:00Z",
+      });
+      const now = "2026-01-01T00:00:00Z";
+      await manager.saveChapterIndex(bookId, [
+        { number: 1, title: "Một", status: "ready-for-review", auditDecision: "fail", wordCount: 2, createdAt: now, updatedAt: now, auditIssues: ["failed"], lengthWarnings: [] },
+      ]);
+      expect(await manager.getNextChapterNumber(bookId)).toBe(1);
+    });
   });
 
   // -------------------------------------------------------------------------

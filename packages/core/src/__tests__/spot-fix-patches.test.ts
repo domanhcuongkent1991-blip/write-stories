@@ -101,4 +101,14 @@ describe("spot-fix patches", () => {
     expect(result.skippedPatchCount).toBe(1);
     expect(result.rejectedReason).toContain("No patches could be matched");
   });
+
+  it("applies exact repeated-target patches by one-based occurrence", () => {
+    const result = applySpotFixPatches("mười mốn ở đây; mười mốn ở đó.", [
+      { targetText: "mười mốn", replacementText: "mười bốn", occurrenceIndex: 1 },
+      { targetText: "mười mốn", replacementText: "mười bốn", occurrenceIndex: 2 },
+    ], { exactOnly: true, requireAll: true });
+    expect(result).toMatchObject({ applied: true, skippedPatchCount: 0, revisedContent: "mười bốn ở đây; mười bốn ở đó." });
+    expect(result.skippedPatchCount).toBe(0);
+    expect(result.revisedContent).toBe("mười bốn ở đây; mười bốn ở đó.");
+  });
 });

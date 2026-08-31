@@ -30,6 +30,7 @@ import type { RadarSource } from "../agents/radar-source.js";
 import { readGenreProfile } from "../agents/rules-reader.js";
 import { analyzeAITells } from "../agents/ai-tells.js";
 import { analyzeSensitiveWords } from "../agents/sensitive-words.js";
+import { validateVietnameseSurface } from "../agents/vietnamese-surface-validator.js";
 import { StateManager, type CanonicalChapterProjection } from "../state/manager.js";
 import { archiveChapterVersion, readChapterUserBrief } from "../state/chapter-workspace.js";
 import { MemoryDB, type Fact } from "../state/memory-db.js";
@@ -3276,7 +3277,22 @@ export class PipelineRunner {
           const ledgerIssues = memoBody
             ? validateHookLedger(memoBody, content)
             : [];
-          return [...baseIssues, ...ledgerIssues];
+          const viIssues = writingLanguage === "vi"
+            ? validateVietnameseSurface(content).map((v) => ({
+                severity: v.severity === "error" ? "critical" as const : "warning" as const,
+                category: v.rule,
+                description: v.description,
+                suggestion: v.suggestion,
+                source: "deterministic" as const,
+                ...(v.repairHint ? {
+                  repairScope: "local" as const,
+                  repairTarget: "prose" as const,
+                  verification: "verified" as const,
+                  repairHint: v.repairHint,
+                } : v.verification ? { verification: v.verification } : {}),
+              }))
+            : [];
+          return [...baseIssues, ...ledgerIssues, ...viIssues];
         },
         // Manual mode still performs the initial audit, but never auto-revises.
         maxReviewIterations: manualReview ? 0 : this.config.writingReviewRetries,
@@ -3375,6 +3391,23 @@ export class PipelineRunner {
             settledRevisionCandidateValidated = false;
             return { valid: false, rejectionReason: `candidate state validation unavailable: ${String(error)}` };
           }
+        },
+        retainRejectedCandidate: async ({ content, contentHash, wordCount, reason }) => {
+          if (writingLanguage !== "vi") return;
+          const candidateDir = join(bookDir, "story", "audit-candidates", `chapter-${String(chapterNumber).padStart(4, "0")}`);
+          await mkdir(candidateDir, { recursive: true });
+          const operationId = auditIdentity?.operationId ?? randomUUID();
+          const attemptId = auditIdentity?.attemptId ?? randomUUID();
+          const stamp = `${attemptId}-${contentHash.slice(0, 12)}`;
+          await writeFile(join(candidateDir, `${stamp}.md`), content, "utf-8");
+          await writeFile(join(candidateDir, `${stamp}.json`), JSON.stringify({
+            operationId,
+            attemptId,
+            chapterNumber,
+            contentHash,
+            wordCount,
+            reason,
+          }, null, 2) + "\n", "utf-8");
         },
         logWarn: (message) => this.logWarn(pipelineLang, message),
         logStage: (message) => this.logStage(stageLanguage, message),

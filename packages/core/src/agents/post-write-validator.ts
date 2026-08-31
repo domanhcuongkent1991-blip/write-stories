@@ -9,12 +9,17 @@ import { analyzeChapterCadence } from "../utils/chapter-cadence.js";
 import type { BookRules } from "../models/book-rules.js";
 import type { GenreProfile } from "../models/genre-profile.js";
 import type { ScaffoldLanguage } from "../models/writing-language.js";
+import type { RepairHint } from "../models/repair-hint.js";
 
 export interface PostWriteViolation {
   readonly rule: string;
   readonly severity: "error" | "warning";
   readonly description: string;
   readonly suggestion: string;
+  readonly repairHint?: RepairHint;
+  readonly repairScope?: "local" | "structural" | "unknown";
+  readonly repairTarget?: "prose" | "runtime-state" | "next-plan";
+  readonly verification?: "verified" | "unverified" | "stale";
 }
 
 export function normalizePostWriteSurface(

@@ -32,6 +32,13 @@ const AuditIssueSchema = z.object({
   lifecycle: z.enum(["open", "resolved", "superseded", "expired"]).optional(),
   ttlChapters: z.number().int().positive().optional(),
   confidence: z.number().min(0).max(1).optional(),
+  repairHint: z.object({
+    kind: z.literal("exact-replacement"),
+    targetText: z.string().min(1).max(200),
+    replacementText: z.string().max(200),
+    occurrenceIndexes: z.array(z.number().int().positive()).min(1).max(100),
+    context: z.string().max(500),
+  }).strict().optional(),
 }).strict();
 
 const ProvenanceSchema = z.object({

@@ -530,11 +530,18 @@ async function resolveContiguousArtifactChapterProgress(bookDir: string): Promis
 async function loadDurableArtifactChapterNumbers(bookDir: string): Promise<number[]> {
   const chaptersDir = join(bookDir, "chapters");
   const indexPath = join(chaptersDir, "index.json");
+  const language = await readFile(join(bookDir, "book.json"), "utf-8")
+    .then((raw) => (JSON.parse(raw) as { language?: string }).language)
+    .catch(() => undefined);
   const [indexChapters, fileChapters] = await Promise.all([
     readFile(indexPath, "utf-8")
       .then((raw) => {
-        const parsed = JSON.parse(raw) as Array<{ number?: unknown }>;
+        const parsed = JSON.parse(raw) as Array<{ number?: unknown; status?: unknown; auditDecision?: unknown }>;
         return parsed
+          .filter((entry) => {
+            if (language !== "vi") return true;
+            return isAcceptedVietnameseChapter(entry);
+          })
           .map((entry) => entry?.number)
           .filter((entry): entry is number => typeof entry === "number" && Number.isInteger(entry) && entry > 0);
       })
@@ -546,7 +553,28 @@ async function loadDurableArtifactChapterNumbers(bookDir: string): Promise<numbe
       }))
       .catch(() => [] as number[]),
   ]);
-  return [...indexChapters, ...fileChapters];
+  if (language !== "vi") return [...indexChapters, ...fileChapters];
+  // Vietnamese progress is intentionally index/audit authoritative. A chapter
+  // Markdown file by itself carries no terminal outcome, so counting it could
+  // let a failed or interrupted artifact skip the retry target after restart.
+  // Only accepted terminal statuses are eligible to advance the contiguous
+  // prefix; all draft/in-flight/failed rows remain retryable.
+  const acceptedStatuses = new Set(["audit-passed", "ready-for-review", "approved", "published", "imported"]);
+  const indexRaw = await readFile(indexPath, "utf-8").catch(() => "[]");
+  try {
+    const entries = JSON.parse(indexRaw) as Array<{ number?: unknown; status?: unknown; auditDecision?: unknown }>;
+    return entries
+      .filter((entry) => acceptedStatuses.has(String(entry?.status ?? "")) && (!entry.auditDecision || entry.auditDecision === "pass"))
+      .map((entry) => entry?.number)
+      .filter((entry): entry is number => typeof entry === "number" && Number.isInteger(entry) && entry > 0);
+  } catch {
+    return indexChapters;
+  }
+}
+
+function isAcceptedVietnameseChapter(entry: { readonly status?: unknown; readonly auditDecision?: unknown }): boolean {
+  const acceptedStatuses = new Set(["audit-passed", "ready-for-review", "approved", "published", "imported"]);
+  return acceptedStatuses.has(String(entry.status ?? "")) && (!entry.auditDecision || entry.auditDecision === "pass");
 }
 
 async function pathExists(path: string): Promise<boolean> {

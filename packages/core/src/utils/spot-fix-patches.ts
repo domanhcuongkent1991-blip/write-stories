@@ -1,6 +1,7 @@
 export interface SpotFixPatch {
   readonly targetText: string;
   readonly replacementText: string;
+  readonly occurrenceIndex?: number;
 }
 
 export interface SpotFixPatchApplyResult {
@@ -12,19 +13,25 @@ export interface SpotFixPatchApplyResult {
   readonly touchedChars: number;
 }
 
+export interface SpotFixPatchApplyOptions {
+  readonly exactOnly?: boolean;
+  readonly requireAll?: boolean;
+}
+
 export function parseSpotFixPatches(raw: string): SpotFixPatch[] {
   const normalized = raw.includes("=== PATCHES ===")
     ? raw.slice(raw.indexOf("=== PATCHES ===") + "=== PATCHES ===".length)
     : raw;
 
   const patches: SpotFixPatch[] = [];
-  const regex = /--- PATCH(?:\s+\d+)? ---\s*TARGET_TEXT:\s*([\s\S]*?)\s*REPLACEMENT_TEXT:\s*([\s\S]*?)\s*--- END PATCH ---/g;
+  const regex = /--- PATCH(?:\s+\d+)? ---\s*TARGET_TEXT:\s*([\s\S]*?)\s*REPLACEMENT_TEXT:\s*([\s\S]*?)(?:\s*OCCURRENCE_INDEX:\s*(\d+))?\s*--- END PATCH ---/g;
 
   let match: RegExpExecArray | null;
   while ((match = regex.exec(normalized)) !== null) {
     patches.push({
       targetText: trimField(match[1] ?? ""),
       replacementText: trimField(match[2] ?? ""),
+      ...(match[3] ? { occurrenceIndex: Number(match[3]) } : {}),
     });
   }
 
@@ -40,6 +47,7 @@ export function parseSpotFixPatches(raw: string): SpotFixPatch[] {
 export function applySpotFixPatches(
   original: string,
   patches: ReadonlyArray<SpotFixPatch>,
+  options: SpotFixPatchApplyOptions = {},
 ): SpotFixPatchApplyResult {
   if (patches.length === 0) {
     return {
@@ -57,8 +65,15 @@ export function applySpotFixPatches(
   let skippedPatchCount = 0;
   let touchedChars = 0;
 
-  for (const patch of patches) {
-    const result = tryApplyPatch(current, patch);
+  const orderedPatches = options.exactOnly
+    ? [...patches].sort((left, right) => {
+        if (left.targetText !== right.targetText) return 0;
+        return (right.occurrenceIndex ?? 0) - (left.occurrenceIndex ?? 0);
+      })
+    : patches;
+
+  for (const patch of orderedPatches) {
+    const result = tryApplyPatch(current, patch, options.exactOnly === true);
     if (result) {
       current = result.content;
       touchedChars += patch.targetText.length;
@@ -69,13 +84,15 @@ export function applySpotFixPatches(
   }
 
   return {
-    applied: appliedPatchCount > 0 && current !== original,
+    applied: appliedPatchCount > 0 && current !== original && (options.requireAll !== true || skippedPatchCount === 0),
     revisedContent: current,
     appliedPatchCount,
     skippedPatchCount,
     touchedChars,
     rejectedReason: appliedPatchCount === 0
       ? "No patches could be matched to the chapter content."
+      : options.requireAll === true && skippedPatchCount > 0
+        ? "One or more patches could not be matched exactly."
       : undefined,
   };
 }
@@ -83,9 +100,10 @@ export function applySpotFixPatches(
 function tryApplyPatch(
   content: string,
   patch: SpotFixPatch,
+  exactOnly = false,
 ): { content: string } | null {
   // 1. Try exact match
-  const exactResult = tryExactMatch(content, patch.targetText);
+  const exactResult = tryExactMatch(content, patch.targetText, patch.occurrenceIndex);
   if (exactResult) {
     return {
       content: content.slice(0, exactResult.start) +
@@ -95,6 +113,7 @@ function tryApplyPatch(
   }
 
   // 2. Try fuzzy match (normalize whitespace for comparison)
+  if (exactOnly) return null;
   const fuzzyResult = tryFuzzyMatch(content, patch.targetText);
   if (fuzzyResult) {
     return {
@@ -110,9 +129,21 @@ function tryApplyPatch(
 function tryExactMatch(
   content: string,
   target: string,
+  occurrenceIndex?: number,
 ): { start: number } | null {
   const start = content.indexOf(target);
   if (start === -1) return null;
+
+  if (occurrenceIndex !== undefined) {
+    if (!Number.isInteger(occurrenceIndex) || occurrenceIndex < 1) return null;
+    let cursor = 0;
+    for (let index = 0; index < occurrenceIndex; index += 1) {
+      cursor = content.indexOf(target, cursor);
+      if (cursor === -1) return null;
+      if (index + 1 < occurrenceIndex) cursor += target.length;
+    }
+    return { start: cursor };
+  }
 
   // Ensure unique match
   const another = content.indexOf(target, start + target.length);

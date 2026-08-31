@@ -143,4 +143,23 @@ describe("AuditRunV1", () => {
       ttlChapters: 2,
     });
   });
+
+  it("round-trips an exact repair hint while accepting legacy runs", () => {
+    const value = run();
+    const withHint = {
+      ...value,
+      findings: [{
+        ...value.findings[0],
+        repairHint: {
+          kind: "exact-replacement" as const,
+          targetText: "mười mốn",
+          replacementText: "mười bốn",
+          occurrenceIndexes: [1],
+          context: "sai mười mốn centimet",
+        },
+      }],
+    };
+    expect(JSON.parse(serializeAuditRun(withHint)).findings[0].repairHint).toEqual(withHint.findings[0].repairHint);
+    expect(AuditRunV1Schema.parse(JSON.parse(serializeAuditRun(value)))).toBeTruthy();
+  });
 });

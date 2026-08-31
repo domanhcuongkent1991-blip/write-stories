@@ -975,4 +975,95 @@ describe("ReviserAgent", () => {
       await rm(root, { recursive: true, force: true });
     }
   });
+
+  it("applies only exact occurrence-aware patches for verified Vietnamese spelling hints", async () => {
+    const root = await mkdtemp(join(tmpdir(), "inkos-reviser-vi-spelling-"));
+    const bookDir = join(root, "book");
+    await mkdir(join(bookDir, "story"), { recursive: true });
+    const agent = new ReviserAgent({
+      client: {
+        provider: "openai",
+        apiFormat: "chat",
+        stream: false,
+        defaults: { temperature: 0.7, maxTokens: 4096, thinkingBudget: 0, extra: {} },
+      },
+      model: "test-model",
+      projectRoot: root,
+    });
+    const original = "Âm thanh vang lên; mười mốn bước chân rồi mười mốn nhịp thở.";
+    const chatSpy = vi.spyOn(ReviserAgent.prototype as never, "chat" as never).mockResolvedValue({
+      content: [
+        "=== FIXED_ISSUES ===",
+        "- Đã sửa hai lỗi chính tả.",
+        "",
+        "=== PATCHES ===",
+        "--- PATCH 1 ---",
+        "TARGET_TEXT: mười mốn",
+        "REPLACEMENT_TEXT: mười bốn",
+        "OCCURRENCE_INDEX: 1",
+        "--- END PATCH ---",
+        "--- PATCH 2 ---",
+        "TARGET_TEXT: mười mốn",
+        "REPLACEMENT_TEXT: mười bốn",
+        "OCCURRENCE_INDEX: 2",
+        "--- END PATCH ---",
+      ].join("\n"),
+      usage: ZERO_USAGE,
+    });
+
+    try {
+      const out = await agent.reviseChapter(
+        bookDir,
+        original,
+        1,
+        [
+          {
+            severity: "critical",
+            category: "vi-known-spelling",
+            description: "Phát hiện lỗi chính tả mười mốn",
+            suggestion: "Thay bằng mười bốn",
+            repairScope: "local",
+            repairTarget: "prose",
+            verification: "verified",
+            repairHint: {
+              kind: "exact-replacement",
+              targetText: "mười mốn",
+              replacementText: "mười bốn",
+              occurrenceIndexes: [1],
+              context: "... mười mốn bước chân ...",
+            },
+          },
+          {
+            severity: "critical",
+            category: "vi-known-spelling",
+            description: "Phát hiện lỗi chính tả mười mốn",
+            suggestion: "Thay bằng mười bốn",
+            repairScope: "local",
+            repairTarget: "prose",
+            verification: "verified",
+            repairHint: {
+              kind: "exact-replacement",
+              targetText: "mười mốn",
+              replacementText: "mười bốn",
+              occurrenceIndexes: [2],
+              context: "... mười mốn nhịp thở ...",
+            },
+          },
+        ],
+        "auto",
+        "other",
+      );
+
+      const prompt = ((chatSpy.mock.calls[0]?.[0] ?? []) as ReadonlyArray<{ content: string }>)
+        .map((message) => message.content)
+        .join("\n");
+      expect(prompt).toContain("TARGET_TEXT");
+      expect(prompt).toContain("mười mốn");
+      expect(prompt).toContain("OCCURRENCES");
+      expect(out.revisedContent).toBe("Âm thanh vang lên; mười bốn bước chân rồi mười bốn nhịp thở.");
+      expect(out.fixedIssues).toEqual(["- Đã sửa hai lỗi chính tả."]);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
 });
