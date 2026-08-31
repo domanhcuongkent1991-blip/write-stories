@@ -65,7 +65,7 @@ describe("buildStudioBookConfig", () => {
     expect(config).toMatchObject({
       id: "dem-trang-o-sai-gon",
       language: "vi",
-      chapterWordCount: 2000,
+      chapterWordCount: 1150,
     });
   });
 
