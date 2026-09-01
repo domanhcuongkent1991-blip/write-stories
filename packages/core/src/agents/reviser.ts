@@ -270,7 +270,7 @@ export class ReviserAgent extends BaseAgent {
       ? `\n## 世界观设定\n${storyBible}\n`
       : "";
     const matrixBlock = characterMatrixWorkingSet !== "(文件不存在)"
-      ? `\n## 角色交互矩阵\n${characterMatrixWorkingSet}\n`
+      ? `\n## ${isEnglish ? "Character interaction matrix" : "角色交互矩阵"}\n${characterMatrixWorkingSet}\n`
       : "";
     const summariesBlock = governedMemoryBlocks?.summariesBlock
       ?? (chapterSummariesWorkingSet !== "(文件不存在)"
@@ -289,7 +289,14 @@ export class ReviserAgent extends BaseAgent {
       ? `\n## 同人正典参照（修稿专用）\n本书为同人作品。修改时参照正典角色档案和世界规则，不可违反正典事实。角色对话必须保留原作语癖。\n${fanficCanon}\n`
       : "";
     const reducedControlBlock = options?.contextPackage && options.ruleStack
-      ? this.buildReducedControlBlock(options.chapterMemo, options.chapterIntentData, options.chapterIntent, options.contextPackage, options.ruleStack)
+      ? this.buildReducedControlBlock(
+          options.chapterMemo,
+          options.chapterIntentData,
+          options.chapterIntent,
+          options.contextPackage,
+          options.ruleStack,
+          resolvedLanguage,
+        )
       : "";
     // Length guardrail only in legacy modes — auto mode delegates length to normalize.
     const lengthGuidanceBlock = mode !== "auto" && options?.lengthSpec
@@ -307,17 +314,17 @@ export class ReviserAgent extends BaseAgent {
       ? `\n## 文风指南\n${styleGuide}`
       : "";
 
-    const userPrompt = `请修正第${chapterNumber}章。
+    const userPrompt = `${isEnglish ? `Revise chapter ${chapterNumber}.` : `请修正第${chapterNumber}章。`}
 
-## 审稿问题
+## ${isEnglish ? "Review findings" : "审稿问题"}
 ${issueList}
 
-## 当前状态卡
+## ${isEnglish ? "Current state" : "当前状态卡"}
 ${currentState}
 ${ledgerBlock}
 ${sanitizeNarrativeEvidenceBlock(hookDebtBlock, resolvedLanguage) ?? ""}${sanitizeNarrativeEvidenceBlock(hooksBlock, resolvedLanguage) ?? ""}${sanitizeNarrativeEvidenceBlock(volumeSummariesBlock, resolvedLanguage) ?? ""}${reducedControlBlock || outlineBlock}${bibleBlock}${matrixBlock}${sanitizeNarrativeEvidenceBlock(summariesBlock, resolvedLanguage) ?? ""}${canonBlock}${fanficCanonBlock}${styleGuideBlock}${lengthGuidanceBlock}${writerTargetLengthSection}
 
-## 待修正章节
+## ${isEnglish ? "Chapter to revise" : "待修正章节"}
 ${chapterContent}`;
 
     const response = await this.chat(
@@ -629,8 +636,18 @@ ${outputFormat}`;
     chapterIntent: string | undefined,
     contextPackage: ContextPackage,
     ruleStack: RuleStack,
+    language: ScaffoldLanguage,
   ): string {
-    const selectedContext = renderNarrativeSelectedContext(contextPackage.selectedContext, "zh")
+    const isEnglish = language === "en";
+    const controlTitle = isEnglish ? "Chapter control input (compiled by Planner/Composer)" : "本章控制输入（由 Planner/Composer 编译）";
+    const selectedContextTitle = isEnglish ? "Selected context" : "已选上下文";
+    const ruleStackTitle = isEnglish ? "Rule stack" : "规则栈";
+    const activeOverridesTitle = isEnglish ? "Active overrides" : "当前覆盖";
+    const hardGuardrailLabel = isEnglish ? "Hard guardrails" : "硬护栏";
+    const softConstraintLabel = isEnglish ? "Soft constraints" : "软约束";
+    const diagnosticRuleLabel = isEnglish ? "Diagnostic rules" : "诊断规则";
+    const labelSeparator = isEnglish ? ": " : "：";
+    const selectedContext = renderNarrativeSelectedContext(contextPackage.selectedContext, language)
       .replace(/^### /gm, "- ");
     const overrides = ruleStack.activeOverrides.length > 0
       ? ruleStack.activeOverrides
@@ -639,23 +656,23 @@ ${outputFormat}`;
       : "- none";
     // Prefer memo-based narrative block; fall back to legacy intent markdown
     const narrativeBlock = memo
-      ? renderMemoAsNarrativeBlock(memo, intent, "zh")
+      ? renderMemoAsNarrativeBlock(memo, intent, language)
       : chapterIntent
-        ? buildNarrativeIntentBrief(chapterIntent, "zh")
-        : "(无)";
+        ? buildNarrativeIntentBrief(chapterIntent, language)
+        : isEnglish ? "(none)" : "(无)";
 
-    return `\n## 本章控制输入（由 Planner/Composer 编译）
+    return `\n## ${controlTitle}
 ${narrativeBlock}
 
-### 已选上下文
+### ${selectedContextTitle}
 ${selectedContext || "- none"}
 
-### 规则栈
-- 硬护栏：${ruleStack.sections.hard.join("、") || "(无)"}
-- 软约束：${ruleStack.sections.soft.join("、") || "(无)"}
-- 诊断规则：${ruleStack.sections.diagnostic.join("、") || "(无)"}
+### ${ruleStackTitle}
+- ${hardGuardrailLabel}${labelSeparator}${ruleStack.sections.hard.join(isEnglish ? ", " : "、") || (isEnglish ? "(none)" : "(无)")}
+- ${softConstraintLabel}${labelSeparator}${ruleStack.sections.soft.join(isEnglish ? ", " : "、") || (isEnglish ? "(none)" : "(无)")}
+- ${diagnosticRuleLabel}${labelSeparator}${ruleStack.sections.diagnostic.join(isEnglish ? ", " : "、") || (isEnglish ? "(none)" : "(无)")}
 
-### 当前覆盖
+### ${activeOverridesTitle}
 ${overrides}\n`;
   }
 }

@@ -130,6 +130,115 @@ describe("ReviserAgent", () => {
     }
   });
 
+  it("uses the English scaffold for governed Vietnamese revision context", async () => {
+    const root = await mkdtemp(join(tmpdir(), "inkos-reviser-vi-scaffold-"));
+    const bookDir = join(root, "book");
+    await mkdir(join(bookDir, "story"), { recursive: true });
+    await writeFile(join(bookDir, "story", "character_matrix.md"), "# Characters\n- Minh: keeps the signal hidden.\n", "utf-8");
+    await writeFile(join(bookDir, "book.json"), JSON.stringify({
+      id: "vietnamese-book",
+      title: "Vietnamese Book",
+      genre: "xuanhuan",
+      platform: "other",
+      chapterWordCount: 1150,
+      targetChapters: 10,
+      status: "active",
+      language: "vi",
+      createdAt: "2026-03-23T00:00:00.000Z",
+      updatedAt: "2026-03-23T00:00:00.000Z",
+    }), "utf-8");
+
+    const agent = new ReviserAgent({
+      client: {
+        provider: "openai",
+        apiFormat: "chat",
+        stream: false,
+        defaults: { temperature: 0.7, maxTokens: 4096, thinkingBudget: 0, extra: {} },
+      },
+      model: "test-model",
+      projectRoot: root,
+    });
+    const chatSpy = vi.spyOn(ReviserAgent.prototype as never, "chat" as never).mockResolvedValue({
+      content: "=== FIXED_ISSUES ===\n\n=== REVISED_CONTENT ===\nBản đã sửa.",
+      usage: ZERO_USAGE,
+    });
+
+    try {
+      await agent.reviseChapter(
+        bookDir,
+        "Bản gốc.",
+        1,
+        [CRITICAL_ISSUE],
+        "auto",
+        "xuanhuan",
+        {
+          chapterIntent: "## Goal\nGiữ mạch điều tra.",
+          chapterMemo: {
+            chapter: 1,
+            goal: "Giữ mạch điều tra",
+            isGoldenOpening: false,
+            body: "## Current task\n- Theo dấu tín hiệu.",
+            threadRefs: ["H001"],
+          },
+          chapterIntentData: {
+            chapter: 1,
+            goal: "Giữ mạch điều tra",
+            mustKeep: [],
+            mustAvoid: [],
+            styleEmphasis: [],
+            acceptanceCriteria: [],
+            pacingCode: "setup",
+            expectedHookOps: { upsert: [], mention: [], resolve: [], defer: [] },
+          },
+          contextPackage: {
+            chapter: 1,
+            selectedContext: [{
+              source: "runtime/hook_debt#H001",
+              reason: "Giữ bằng chứng cho mạch điều tra.",
+              excerpt: "H001 | tín hiệu đầu tiên",
+            }],
+          },
+          ruleStack: {
+            layers: [{ id: "L4", name: "current_task", precedence: 70, scope: "local" }],
+            sections: { hard: ["current_state"], soft: [], diagnostic: [] },
+            overrideEdges: [],
+            activeOverrides: [],
+          },
+          lengthSpec: buildLengthSpec(1150, "vi"),
+        },
+      );
+
+      const messages = (chatSpy.mock.calls[0]?.[0] ?? []) as ReadonlyArray<{ content: string }>;
+      const userPrompt = messages[1]?.content ?? "";
+      expect(userPrompt).toContain("## Goal");
+      expect(userPrompt).toContain("- Evidence 1");
+      expect(userPrompt).toContain("this thread");
+      expect(userPrompt).toContain("Revise chapter 1.");
+      expect(userPrompt).toContain("## Review findings");
+      expect(userPrompt).toContain("## Current state");
+      expect(userPrompt).toContain("## Chapter control input (compiled by Planner/Composer)");
+      expect(userPrompt).toContain("### Selected context");
+      expect(userPrompt).toContain("### Rule stack");
+      expect(userPrompt).toContain("### Active overrides");
+      expect(userPrompt).toContain("## Character interaction matrix");
+      expect(userPrompt).toContain("## Chapter to revise");
+      expect(userPrompt).not.toContain("## 目标");
+      expect(userPrompt).not.toContain("- 证据 1");
+      expect(userPrompt).not.toContain("这条线索");
+      expect(userPrompt).not.toContain("请修正第");
+      expect(userPrompt).not.toContain("## 审稿问题");
+      expect(userPrompt).not.toContain("## 当前状态卡");
+      expect(userPrompt).not.toContain("## 本章控制输入");
+      expect(userPrompt).not.toContain("### 已选上下文");
+      expect(userPrompt).not.toContain("### 规则栈");
+      expect(userPrompt).not.toContain("### 当前覆盖");
+      expect(userPrompt).not.toContain("## 角色交互矩阵");
+      expect(userPrompt).not.toContain("## 待修正章节");
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
   it("strips a repeated writer envelope from Vietnamese revised prose", async () => {
     const root = await mkdtemp(join(tmpdir(), "inkos-reviser-vi-envelope-"));
     const bookDir = join(root, "book");
