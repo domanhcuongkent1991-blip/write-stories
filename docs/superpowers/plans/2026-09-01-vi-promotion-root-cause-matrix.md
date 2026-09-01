@@ -46,6 +46,13 @@ covered by `promotion-replay-fixtures.test.ts`. It contains five cases:
 The fixture inventory intentionally contains only identifiers, shape metadata,
 owner boundary, evidence class, and expected outcome.
 
+`promotion-offline-replay.test.ts` exercises a test-only deterministic state
+machine over the required `3 → 8 → 15` checkpoints and one chapter `4–8`
+abort/restart. It reports `PASS_OFFLINE` or `HOLD`, verifies that canonical and
+manifest chapters stay aligned, and always requires zero provider calls. This
+is a control-plane replay, not a replacement for the production pipeline or a
+live qualification.
+
 ## Explicitly out of scope
 
 - changing public APIs, schemas, agent architecture, provider, model, or runtime;
