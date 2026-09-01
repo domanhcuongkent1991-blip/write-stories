@@ -17,6 +17,7 @@ raw provider responses, or full chapter prose.
 | Failure class | Observed shape | Owning boundary | Existing guard | Offline acceptance |
 | --- | --- | --- | --- | --- |
 | Provider contract | Single result object with `status`/`processed` metadata; occasional whole-response JSON fence | `HookResolvePreflightAgent` parser | Strict Zod result schema and exact hook IDs | Normalize only the documented envelope/fence; reject unknown keys, malformed JSON, and ID mismatch |
+| Provider completion | Streaming HTTP 200 contains reasoning but no final answer | LLM provider transport | Reasoning-only classification and one bounded retry | Classify as provider contract failure; stop before chapter write and retain state |
 | Planner contract | `deferred` hook proposed with irreversible `resolve` action | Hook lifecycle contract | `assertLegalHookTransition` | Reject before writer/state mutation; preserve canonical state |
 | Hard length | Vietnamese count `1812` against hard max `1800` | Review acceptance gate | `isOutsideHardRange` and shared candidate gate | Retain canonical chapter; do not spend a second structural call |
 | Reviser/auditor output | Post-revision structured audit output cannot be parsed | Review cycle | Parse-failure short circuit and bounded repair | Mark inconclusive/failed and retain canonical chapter |
@@ -38,6 +39,7 @@ The test-only inventory is in
 covered by `promotion-replay-fixtures.test.ts`. It contains five cases:
 
 - provider single-envelope normalization;
+- provider reasoning-only completion;
 - deferred-hook resolve rejection;
 - Vietnamese hard-range overrun;
 - malformed post-revision output;

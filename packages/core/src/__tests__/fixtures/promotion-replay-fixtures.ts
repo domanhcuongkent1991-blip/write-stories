@@ -7,11 +7,12 @@
 export type PromotionReplayFixture = {
   readonly id:
     | "provider-single-envelope"
+    | "provider-reasoning-only"
     | "planner-deferred-resolve"
     | "quality-hard-range-overrun"
     | "quality-malformed-reviser"
     | "recovery-snapshot-zero";
-  readonly owner: "adapter" | "planner" | "reviewer" | "harness";
+  readonly owner: "provider" | "adapter" | "planner" | "reviewer" | "harness";
   readonly observedEvidence: "live-qualification-f0a69b4f" | "offline-harness";
   readonly inputShape: string;
   readonly expectedOutcome: "normalize-and-validate" | "reject-before-write" | "retain-canonical" | "preserve-baseline";
@@ -28,6 +29,13 @@ export const PROMOTION_REPLAY_FIXTURES: ReadonlyArray<PromotionReplayFixture> = 
     observedEvidence: "live-qualification-f0a69b4f",
     inputShape: "single-result-object-with-status-and-processed-metadata",
     expectedOutcome: "normalize-and-validate",
+  },
+  {
+    id: "provider-reasoning-only",
+    owner: "provider",
+    observedEvidence: "live-qualification-f0a69b4f",
+    inputShape: "streaming-reasoning-without-final-answer",
+    expectedOutcome: "reject-before-write",
   },
   {
     id: "planner-deferred-resolve",

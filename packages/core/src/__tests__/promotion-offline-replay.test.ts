@@ -26,6 +26,7 @@ describe("offline Vietnamese promotion replay", () => {
   });
 
   it.each([
+    "provider-reasoning-only",
     "planner-deferred-resolve",
     "quality-hard-range-overrun",
     "quality-malformed-reviser",

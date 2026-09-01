@@ -7,6 +7,7 @@ describe("Vietnamese promotion replay fixtures", () => {
   it("covers each observed failure class without storing provider payloads", () => {
     expect(PROMOTION_REPLAY_FIXTURES.map((fixture) => fixture.id)).toEqual([
       "provider-single-envelope",
+      "provider-reasoning-only",
       "planner-deferred-resolve",
       "quality-hard-range-overrun",
       "quality-malformed-reviser",
@@ -25,6 +26,7 @@ describe("Vietnamese promotion replay fixtures", () => {
       expectedOutcome: fixture.expectedOutcome,
     }]))).toEqual({
       "provider-single-envelope": { owner: "adapter", expectedOutcome: "normalize-and-validate" },
+      "provider-reasoning-only": { owner: "provider", expectedOutcome: "reject-before-write" },
       "planner-deferred-resolve": { owner: "planner", expectedOutcome: "reject-before-write" },
       "quality-hard-range-overrun": { owner: "reviewer", expectedOutcome: "retain-canonical" },
       "quality-malformed-reviser": { owner: "reviewer", expectedOutcome: "retain-canonical" },

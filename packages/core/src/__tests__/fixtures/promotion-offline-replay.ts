@@ -7,7 +7,7 @@ export const OFFLINE_QUALIFICATION_CHECKPOINTS = [3, 8, 15] as const;
 
 type FailureFixtureId = Extract<
   PromotionReplayFixture["id"],
-  "planner-deferred-resolve" | "quality-hard-range-overrun" | "quality-malformed-reviser"
+  "provider-reasoning-only" | "planner-deferred-resolve" | "quality-hard-range-overrun" | "quality-malformed-reviser"
 >;
 
 export class OfflineReplayConfigurationError extends Error {
