@@ -618,7 +618,9 @@ export const createMessageSlice: StateCreator<ChatStore, [], [], MessageActions>
         });
       }
       const hasStream = Boolean(
-        get().sessions[sessionId]?.messages.some((message) => message.timestamp === streamTs),
+        get().sessions[sessionId]?.messages.some(
+          (message) => message.timestamp === streamTs && message.role === "assistant",
+        ),
       );
       const attachResponseTools = () => {
         if (responseToolExecutions.length === 0) return;
@@ -703,7 +705,9 @@ export const createMessageSlice: StateCreator<ChatStore, [], [], MessageActions>
       }) ?? false;
       if (failureAlreadyShown) return;
       const hasStream = Boolean(
-        get().sessions[sessionId]?.messages.some((message) => message.timestamp === streamTs),
+        get().sessions[sessionId]?.messages.some(
+          (message) => message.timestamp === streamTs && message.role === "assistant",
+        ),
       );
       if (hasStream) {
         get().replaceStreamWithError(sessionId, streamTs, errorMessage);
