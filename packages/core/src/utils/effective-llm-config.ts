@@ -131,7 +131,14 @@ async function readProjectConfig(root: string): Promise<Record<string, unknown>>
 
   const raw = await readFile(configPath, "utf-8");
   try {
-    return JSON.parse(raw) as Record<string, unknown>;
+    const parsed = JSON.parse(raw) as Record<string, unknown>;
+    // Vietnamese is a book-level writing language. ProjectConfig keeps its
+    // legacy zh/en scaffold contract, so an init --lang vi project must use
+    // the English scaffold while book metadata remains explicitly vi.
+    if (parsed.language === "vi") {
+      return { ...parsed, language: "en" };
+    }
+    return parsed;
   } catch {
     throw new Error(`inkos.json in ${root} is not valid JSON. Check the file for syntax errors.`);
   }

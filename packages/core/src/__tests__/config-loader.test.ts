@@ -322,4 +322,29 @@ describe("loadProjectConfig local provider auth", () => {
     expect(config.llm.model).toBe("gpt-5.4");
     expect(config.llm.apiKey).toBe("sk-env");
   });
+
+  it("loads a Vietnamese bootstrap project with an English scaffold runtime", async () => {
+    root = await mkdtemp(join(tmpdir(), "inkos-config-loader-vi-bootstrap-"));
+    for (const key of ENV_KEYS) {
+      previousEnv.set(key, process.env[key]);
+      process.env[key] = "";
+    }
+
+    await writeFile(join(root, "inkos.json"), JSON.stringify({
+      name: "vietnamese-bootstrap-project",
+      version: "0.1.0",
+      language: "vi",
+      llm: {
+        provider: "openai",
+        baseUrl: "http://127.0.0.1:11434/v1",
+        model: "gpt-oss:20b",
+      },
+    }, null, 2), "utf-8");
+    await writeFile(join(root, ".env"), "", "utf-8");
+
+    const config = await loadProjectConfig(root);
+
+    expect(config.language).toBe("en");
+    expect(config.llm.baseUrl).toBe("http://127.0.0.1:11434/v1");
+  });
 });
