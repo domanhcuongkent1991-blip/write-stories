@@ -597,6 +597,7 @@ describe("runChapterReviewCycle v9", () => {
 
     const result = await runChapterReviewCycle({
       ...baseParams,
+      bookId: "book-rejected-candidate",
       lengthSpec: VI_LENGTH_SPEC,
       initialOutput: { content: original, wordCount: 1150, postWriteErrors: [] },
       createReviser: () => ({ reviseChapter }),
@@ -608,6 +609,10 @@ describe("runChapterReviewCycle v9", () => {
     expect(auditChapter).toHaveBeenCalledTimes(2);
     expect(result.finalContent).toBe(original);
     expect(result.auditResult.decision).toBe("repair-required");
+    expect(result.auditRuns?.map((run) => run.phase)).toEqual(["initial", "post-revision"]);
+    expect(result.auditRuns?.[0]?.canonicalCommitOutcome).toBe("terminal-commit");
+    expect(result.auditRuns?.[1]?.canonicalCommitOutcome).toBe("rejected");
+    expect(result.auditRuns?.[1]?.revision.accepted).toBe(false);
   });
 
   it("returns inconclusive instead of rewriting when an auditor spelling target is not in the chapter", async () => {

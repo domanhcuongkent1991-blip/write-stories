@@ -47,6 +47,7 @@ describe("HookResolvePreflightAgent", () => {
     const result = await makeAgent().validate({
       contract: contract("advance"),
       chapterGoal: "Keep the actor unresolved.",
+      relevantMemoBeat: "The actor remains outside the chapter's evidence.",
     });
 
     expect(result).toEqual({ results: [] });
@@ -54,7 +55,7 @@ describe("HookResolvePreflightAgent", () => {
   });
 
   it("returns one strict result for each resolve hook", async () => {
-    vi.spyOn(llmProvider, "chatCompletion").mockResolvedValue({
+    const chatSpy = vi.spyOn(llmProvider, "chatCompletion").mockResolvedValue({
       content: JSON.stringify({ results: [{ hookId: "H006", decision: "pass" }] }),
       usage: { promptTokens: 11, completionTokens: 3, totalTokens: 14 },
     } as Awaited<ReturnType<typeof llmProvider.chatCompletion>>);
@@ -62,9 +63,23 @@ describe("HookResolvePreflightAgent", () => {
     await expect(makeAgent().validate({
       contract: contract("resolve"),
       chapterGoal: "Confirm only the physical device.",
+      relevantMemoBeat: "The inspection scene stays focused on the device.",
     })).resolves.toEqual({
       results: [{ hookId: "H006", decision: "pass" }],
       tokenUsage: { promptTokens: 11, completionTokens: 3, totalTokens: 14 },
+    });
+    const call = chatSpy.mock.calls[0];
+    expect(call?.[1]).toBe("test-model");
+    expect(call?.[2]).toEqual(expect.any(Array));
+    expect(call?.[3]).toEqual(expect.objectContaining({
+      temperature: 0,
+      structuredOutput: expect.objectContaining({ name: "hook_resolve_preflight" }),
+    }));
+    const userMessage = (chatSpy.mock.calls[0]?.[2] as Array<{ role: string; content: string }>)
+      .find((message) => message.role === "user");
+    expect(JSON.parse(userMessage?.content ?? "{}")).toMatchObject({
+      chapterGoal: "Confirm only the physical device.",
+      resolves: [{ relevantMemoBeat: "The inspection scene stays focused on the device." }],
     });
   });
 
@@ -89,6 +104,7 @@ describe("HookResolvePreflightAgent", () => {
       await expect(makeAgent().validate({
         contract: contract("resolve"),
         chapterGoal: "Confirm only the physical device.",
+        relevantMemoBeat: "The inspection scene stays focused on the device.",
       })).rejects.toBeInstanceOf(HookResolvePreflightError);
     }
   });

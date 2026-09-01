@@ -2917,13 +2917,14 @@ export class PipelineRunner {
         const results: ChapterPipelineResult[] = [];
         for (let index = 0; index < chapterCount; index += 1) {
           this.throwIfOperationAborted();
-          const result = await this._writeNextChapterLocked(
+          const providerCalls = createProviderCallCollector();
+          const result = await runWithProviderCallTelemetry(providerCalls, () => this._writeNextChapterLocked(
             lockedBook,
             lockedProfile,
             options.wordCount,
             options.temperatureOverride,
             options.externalContext ?? this.config.externalContext,
-          );
+          ));
           results.push(result);
           options.onChapterComplete?.(result, results.length, chapterCount);
           if (result.status !== "ready-for-review") break;

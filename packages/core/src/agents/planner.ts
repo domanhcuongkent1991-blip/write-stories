@@ -231,6 +231,7 @@ export class PlannerAgent extends BaseAgent {
       const firstPreflight = await preflight.validate({
         contract: expectedHookContract,
         chapterGoal: memo.goal,
+        relevantMemoBeat: memo.body,
       });
       memoResult = {
         ...memoResult,
@@ -267,6 +268,7 @@ export class PlannerAgent extends BaseAgent {
         const secondPreflight = await preflight.validate({
           contract: expectedHookContract,
           chapterGoal: memo.goal,
+          relevantMemoBeat: memo.body,
         });
         memoResult = {
           memo,

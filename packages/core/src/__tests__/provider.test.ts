@@ -448,6 +448,51 @@ describe("chatCompletion via pi-ai", () => {
     vi.unstubAllGlobals();
   });
 
+  it("sends strict structured-output schema through native OpenAI chat", async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        choices: [{ message: { content: '{"ok":true}' } }],
+        usage: { prompt_tokens: 3, completion_tokens: 2, total_tokens: 5 },
+      }),
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    await chatCompletion(makeClient(0.7, {
+      service: "custom",
+      stream: false,
+      _piModel: { ...MOCK_PI_MODEL, baseUrl: "https://gateway.example/v1" },
+    }), "structured-model", [{ role: "user", content: "return JSON" }], {
+      structuredOutput: {
+        name: "probe_result",
+        strict: true,
+        schema: {
+          type: "object",
+          additionalProperties: false,
+          required: ["ok"],
+          properties: { ok: { type: "boolean" } },
+        },
+      },
+    });
+
+    const request = fetchMock.mock.calls[0]?.[1] as RequestInit;
+    const payload = JSON.parse(String(request.body)) as Record<string, unknown>;
+    expect(payload.response_format).toEqual({
+      type: "json_schema",
+      json_schema: {
+        name: "probe_result",
+        strict: true,
+        schema: {
+          type: "object",
+          additionalProperties: false,
+          required: ["ok"],
+          properties: { ok: { type: "boolean" } },
+        },
+      },
+    });
+    vi.unstubAllGlobals();
+  });
+
   it("normalizes OpenAI chat metadata without exposing provider-specific payload fields", async () => {
     const fetchMock = vi.fn().mockResolvedValue({
       ok: true,

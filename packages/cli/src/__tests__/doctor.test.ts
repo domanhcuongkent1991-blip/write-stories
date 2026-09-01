@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { buildDoctorModelCandidates, resolveDoctorModelsBaseUrl } from "../commands/doctor.js";
+import {
+  buildDoctorModelCandidates,
+  buildDoctorProbeAttempts,
+  resolveDoctorModelsBaseUrl,
+} from "../commands/doctor.js";
 
 describe("doctor model candidate probing", () => {
   it("keeps the configured model first, then tries discovered models without duplicates", () => {
@@ -31,6 +35,26 @@ describe("doctor model candidate probing", () => {
     );
 
     expect(modelsBaseUrl).toBe("https://dashscope.aliyuncs.com/compatible-mode/v1");
+  });
+
+  it("caps the diagnostic probe matrix while preserving configured-first order", () => {
+    const attempts = buildDoctorProbeAttempts(
+      ["configured-model", "discovered-model", "fallback-model"],
+      [
+        { apiFormat: "chat", stream: true },
+        { apiFormat: "chat", stream: false },
+        { apiFormat: "responses", stream: false },
+      ],
+      4,
+    );
+
+    expect(attempts).toEqual([
+      { model: "configured-model", apiFormat: "chat", stream: true },
+      { model: "configured-model", apiFormat: "chat", stream: false },
+      { model: "configured-model", apiFormat: "responses", stream: false },
+      { model: "discovered-model", apiFormat: "chat", stream: true },
+    ]);
+    expect(attempts).toHaveLength(4);
   });
 
 });

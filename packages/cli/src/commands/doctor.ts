@@ -19,11 +19,18 @@ import {
 import { resolveCliLocale } from "../locale.js";
 import { formatCliMessage } from "../i18n/messages.js";
 
+const DOCTOR_PROBE_TOTAL_TIMEOUT_MS = 5_000;
+const DOCTOR_PROBE_ATTEMPT_TIMEOUT_MS = 1_500;
+const DOCTOR_MODELS_TIMEOUT_MS = 2_000;
+const MAX_DOCTOR_PROBE_ATTEMPTS = 12;
+
+type DoctorProbePlan = { apiFormat: "chat" | "responses"; stream: boolean };
+
 function buildDoctorProbePlans(
   preferredApiFormat: "chat" | "responses" | undefined,
   preferredStream: boolean | undefined,
-): Array<{ apiFormat: "chat" | "responses"; stream: boolean }> {
-  const plans: Array<{ apiFormat: "chat" | "responses"; stream: boolean }> = [];
+): DoctorProbePlan[] {
+  const plans: DoctorProbePlan[] = [];
   const seen = new Set<string>();
   const push = (apiFormat: "chat" | "responses", stream: boolean) => {
     const key = `${apiFormat}:${stream ? "1" : "0"}`;
@@ -44,6 +51,25 @@ function buildDoctorProbePlans(
   push("responses", false);
   push("responses", true);
   return plans;
+}
+
+export function buildDoctorProbeAttempts(
+  modelCandidates: ReadonlyArray<string>,
+  plans: ReadonlyArray<DoctorProbePlan>,
+  maxAttempts: number = MAX_DOCTOR_PROBE_ATTEMPTS,
+): Array<{ model: string; apiFormat: "chat" | "responses"; stream: boolean }> {
+  if (!Number.isInteger(maxAttempts) || maxAttempts < 1) {
+    throw new Error(`maxAttempts must be a positive integer; received ${maxAttempts}.`);
+  }
+
+  const attempts: Array<{ model: string; apiFormat: "chat" | "responses"; stream: boolean }> = [];
+  for (const model of modelCandidates) {
+    for (const plan of plans) {
+      if (attempts.length >= maxAttempts) return attempts;
+      attempts.push({ model, ...plan });
+    }
+  }
+  return attempts;
 }
 
 export function buildDoctorModelCandidates(
@@ -91,7 +117,7 @@ async function fetchDoctorModels(
   try {
     const res = await fetchWithProxy(modelsUrl, {
       headers: { Authorization: `Bearer ${apiKey}` },
-      signal: AbortSignal.timeout(10_000),
+      signal: AbortSignal.timeout(DOCTOR_MODELS_TIMEOUT_MS),
     }, proxyUrl);
     if (!res.ok) return [];
     const json = await res.json() as { data?: Array<{ id: string }> };
@@ -307,28 +333,38 @@ export const doctorCommand = new Command("doctor")
           ? buildDoctorProbePlans(llmConfig.apiFormat, llmConfig.stream)
           : [{ apiFormat: (llmConfig.apiFormat ?? "chat") as "chat" | "responses", stream: llmConfig.stream ?? true }];
 
-        for (const model of modelCandidates) {
-          for (const plan of plans) {
-            try {
-              const client = createLLMClient({
-                ...llmConfig,
-                model,
-                apiFormat: plan.apiFormat,
-                stream: plan.stream,
-              });
-              const response = await chatCompletion(client, model, [
-                { role: "user", content: "Say OK" },
-              ], { maxTokens: 16 });
-
-              connected = true;
-              detectedDetail = `OK (model: ${model}, apiFormat=${plan.apiFormat}, stream=${plan.stream}, tokens: ${response.usage.totalTokens})`;
-              break;
-            } catch (error) {
-              lastError = error instanceof Error ? error.message : String(error);
-            }
-          }
-          if (connected) {
+        const doctorDeadline = AbortSignal.timeout(DOCTOR_PROBE_TOTAL_TIMEOUT_MS);
+        const attempts = buildDoctorProbeAttempts(modelCandidates, plans);
+        for (const attempt of attempts) {
+          if (doctorDeadline.aborted) {
+            lastError = `Doctor probe budget exhausted after ${DOCTOR_PROBE_TOTAL_TIMEOUT_MS}ms`;
             break;
+          }
+          try {
+            const client = createLLMClient({
+              ...llmConfig,
+              model: attempt.model,
+              apiFormat: attempt.apiFormat,
+              stream: attempt.stream,
+            });
+            const response = await chatCompletion(client, attempt.model, [
+              { role: "user", content: "Say OK" },
+            ], {
+              maxTokens: 16,
+              retry: false,
+              signal: AbortSignal.any([
+                doctorDeadline,
+                AbortSignal.timeout(DOCTOR_PROBE_ATTEMPT_TIMEOUT_MS),
+              ]),
+              firstEventTimeoutMs: DOCTOR_PROBE_ATTEMPT_TIMEOUT_MS,
+              streamIdleTimeoutMs: DOCTOR_PROBE_ATTEMPT_TIMEOUT_MS,
+            });
+
+            connected = true;
+            detectedDetail = `OK (model: ${attempt.model}, apiFormat=${attempt.apiFormat}, stream=${attempt.stream}, tokens: ${response.usage.totalTokens})`;
+            break;
+          } catch (error) {
+            lastError = error instanceof Error ? error.message : String(error);
           }
         }
 

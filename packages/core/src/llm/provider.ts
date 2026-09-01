@@ -345,6 +345,19 @@ export interface LLMMessage {
   readonly content: string;
 }
 
+export interface LLMStructuredOutputSpec {
+  readonly name: string;
+  readonly schema: Record<string, unknown>;
+  readonly strict?: boolean;
+}
+
+interface ResolvedChatOptions {
+  readonly temperature: number;
+  readonly maxTokens: number;
+  readonly extra: Record<string, unknown>;
+  readonly structuredOutput?: LLMStructuredOutputSpec;
+}
+
 export interface LLMClient {
   readonly provider: "openai" | "anthropic";
   readonly service?: string;
@@ -1075,6 +1088,39 @@ function defaultOpenAIChatExtra(client: LLMClient, model: string): Record<string
   };
 }
 
+function structuredOutputPayload(
+  client: LLMClient,
+  spec: LLMStructuredOutputSpec | undefined,
+): Record<string, unknown> {
+  if (!spec) return {};
+  if (!/^[A-Za-z0-9_-]{1,64}$/u.test(spec.name)) {
+    throw new Error("Structured output name must contain only letters, numbers, '_' or '-'.");
+  }
+  const strict = spec.strict ?? true;
+  if (client.apiFormat === "responses") {
+    return {
+      text: {
+        format: {
+          type: "json_schema",
+          name: spec.name,
+          strict,
+          schema: spec.schema,
+        },
+      },
+    };
+  }
+  return {
+    response_format: {
+      type: "json_schema",
+      json_schema: {
+        name: spec.name,
+        strict,
+        schema: spec.schema,
+      },
+    },
+  };
+}
+
 function sanitizeHeaderApiKey(apiKey: string | undefined): string {
   const trimmed = apiKey?.trim() ?? "";
   if (!trimmed) return "";
@@ -1432,7 +1478,7 @@ async function chatCompletionViaCustomAnthropicCompatible(
   client: LLMClient,
   model: string,
   messages: ReadonlyArray<LLMMessage>,
-  resolved: { readonly temperature: number; readonly maxTokens: number; readonly extra: Record<string, unknown> },
+  resolved: ResolvedChatOptions,
   onStreamProgress?: OnStreamProgress,
   onTextDelta?: (text: string) => void,
   signal?: AbortSignal,
@@ -1587,7 +1633,7 @@ async function chatCompletionViaCustomOpenAICompatible(
   client: LLMClient,
   model: string,
   messages: ReadonlyArray<LLMMessage>,
-  resolved: { readonly temperature: number; readonly maxTokens: number; readonly extra: Record<string, unknown> },
+  resolved: ResolvedChatOptions,
   onStreamProgress?: OnStreamProgress,
   onTextDelta?: (text: string) => void,
   signal?: AbortSignal,
@@ -1622,6 +1668,7 @@ async function chatCompletionViaCustomOpenAICompatible(
       max_output_tokens: resolved.maxTokens,
       temperature: resolved.temperature,
       ...extra,
+      ...structuredOutputPayload(client, resolved.structuredOutput),
     };
     const instructions = joinSystemPrompt(messages);
     if (instructions) payload.instructions = instructions;
@@ -1776,6 +1823,7 @@ async function chatCompletionViaCustomOpenAICompatible(
     max_tokens: resolved.maxTokens,
     ...defaultOpenAIChatExtra(client, model),
     ...extra,
+    ...structuredOutputPayload(client, resolved.structuredOutput),
   };
   if (client.stream) {
     payload.stream_options = { include_usage: true };
@@ -1947,6 +1995,7 @@ export async function chatCompletion(
     readonly signal?: AbortSignal;
     readonly firstEventTimeoutMs?: number;
     readonly streamIdleTimeoutMs?: number;
+    readonly structuredOutput?: LLMStructuredOutputSpec;
     // Diagnostics / connectivity checks want a fast pass-or-fail — set false to
     // skip the transient 502/503/429 retry+backoff (e.g. the doctor probe).
     readonly retry?: boolean;
@@ -1964,6 +2013,7 @@ export async function chatCompletion(
     ),
     maxTokens: options?.maxTokens ?? client.defaults.maxTokens,
     extra: client.defaults.extra,
+    ...(options?.structuredOutput ? { structuredOutput: options.structuredOutput } : {}),
   };
   const onStreamProgress = options?.onStreamProgress;
   const onTextDelta = options?.onTextDelta;
@@ -2097,7 +2147,7 @@ async function chatCompletionViaPiAi(
   client: LLMClient,
   model: string,
   messages: ReadonlyArray<LLMMessage>,
-  resolved: { readonly temperature: number; readonly maxTokens: number; readonly extra: Record<string, unknown> },
+  resolved: ResolvedChatOptions,
   onStreamProgress?: OnStreamProgress,
   onTextDelta?: (text: string) => void,
   signal?: AbortSignal,
@@ -2106,7 +2156,10 @@ async function chatCompletionViaPiAi(
 ): Promise<LLMResponse> {
   const piModel = resolvePiModel(client, model);
   const context = toPiContext(messages);
-  const extraPayload = stripReservedKeys(resolved.extra);
+  const extraPayload = {
+    ...stripReservedKeys(resolved.extra),
+    ...structuredOutputPayload(client, resolved.structuredOutput),
+  };
   const onPayload = Object.keys(extraPayload).length > 0
     ? (payload: unknown) => {
         if (!payload || typeof payload !== "object" || Array.isArray(payload)) return payload;

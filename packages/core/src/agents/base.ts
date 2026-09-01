@@ -1,4 +1,10 @@
-import type { LLMClient, LLMMessage, LLMResponse, OnStreamProgress } from "../llm/provider.js";
+import type {
+  LLMClient,
+  LLMMessage,
+  LLMResponse,
+  LLMStructuredOutputSpec,
+  OnStreamProgress,
+} from "../llm/provider.js";
 import { runWorkerAgent, runWorkerAgentTool, type WorkerResultTool } from "../agent/worker-agent.js";
 import type { Static, TSchema } from "@sinclair/typebox";
 import { appendPromptPackGuidance } from "../prompts/prompt-pack.js";
@@ -52,7 +58,11 @@ export abstract class BaseAgent {
 
   protected async chat(
     messages: ReadonlyArray<LLMMessage>,
-    options?: { readonly temperature?: number; readonly maxTokens?: number },
+    options?: {
+      readonly temperature?: number;
+      readonly maxTokens?: number;
+      readonly structuredOutput?: LLMStructuredOutputSpec;
+    },
   ): Promise<LLMResponse> {
     const finalized = await this.finalizeTaskMessages(messages);
     return runWithProviderDefaultStage(defaultProviderStage(this.name), () =>

@@ -4,6 +4,10 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { PipelineRunner, type ChapterPipelineResult } from "../pipeline/runner.js";
 import type { BookConfig } from "../models/book.js";
+import {
+  recordProviderPostAttempt,
+  snapshotProviderCallTelemetry,
+} from "../llm/provider-call-telemetry.js";
 
 const BATCH_BOOK: BookConfig = {
   id: "demo-book",
@@ -84,6 +88,45 @@ describe("PipelineRunner.writeChapters", () => {
     expect(onChapterComplete).toHaveBeenNthCalledWith(1, chapter(3), 1, 3);
     expect(onChapterComplete).toHaveBeenNthCalledWith(3, chapter(5), 3, 3);
     expect(release).toHaveBeenCalledOnce();
+  });
+
+  it("scopes provider telemetry for each chapter in a batch", async () => {
+    const root = await mkdtemp(join(tmpdir(), "inkos-batch-"));
+    roots.push(root);
+    const runner = new PipelineRunner({
+      client: {} as never,
+      model: "test-model",
+      projectRoot: root,
+    });
+    const release = vi.fn(async () => undefined);
+    const writeLocked = vi.fn(async (book: BookConfig, profile: unknown, chapterNumber: number) => {
+      recordProviderPostAttempt();
+      return {
+        ...chapter(chapterNumber),
+        providerCallTelemetry: snapshotProviderCallTelemetry(),
+      };
+    });
+    const internals = runner as unknown as {
+      state: {
+        acquireBookLock: () => Promise<typeof release>;
+        loadBookConfig: () => Promise<BookConfig>;
+        bookDir: (bookId: string) => string;
+      };
+      _writeNextChapterLocked: typeof writeLocked;
+    };
+    internals.state = {
+      acquireBookLock: async () => release,
+      loadBookConfig: async () => BATCH_BOOK,
+      bookDir: () => root,
+    };
+    internals._writeNextChapterLocked = writeLocked;
+
+    const results = await runner.writeChapters("demo-book", 2);
+
+    expect(results.map((result) => result.providerCallTelemetry)).toEqual([
+      { total: 1, byStage: { unscoped: 1 }, transportRetries: 0, outputRetries: 0 },
+      { total: 1, byStage: { unscoped: 1 }, transportRetries: 0, outputRetries: 0 },
+    ]);
   });
 
   it("stops the batch after the first chapter that needs review", async () => {

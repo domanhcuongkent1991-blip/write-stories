@@ -18,6 +18,7 @@ import {
   type LLMMessage,
   type LLMResponse,
   type OnStreamProgress,
+  type LLMStructuredOutputSpec,
 } from "../llm/provider.js";
 import { guardedPiStream } from "./pi-stream.js";
 import { isLlmStubEnabled, stubChatCompletion } from "./llm-stub.js";
@@ -29,6 +30,7 @@ export interface WorkerAgentOptions {
   readonly onStreamProgress?: OnStreamProgress;
   readonly onTextDelta?: (text: string) => void;
   readonly signal?: AbortSignal;
+  readonly structuredOutput?: LLMStructuredOutputSpec;
 }
 
 export interface WorkerResultTool<TParameters extends TSchema> {
@@ -239,6 +241,7 @@ function providerWorkerStream(
           ...(options.maxTokens !== undefined ? { maxTokens: options.maxTokens } : {}),
           ...(options.webSearch !== undefined ? { webSearch: options.webSearch } : {}),
           ...(options.onStreamProgress ? { onStreamProgress: options.onStreamProgress } : {}),
+          ...(options.structuredOutput ? { structuredOutput: options.structuredOutput } : {}),
           onTextDelta: emitDelta,
           ...(signal ? { signal } : {}),
         });

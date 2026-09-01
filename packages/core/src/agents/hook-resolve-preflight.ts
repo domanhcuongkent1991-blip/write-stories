@@ -2,6 +2,7 @@ import { z } from "zod";
 import { BaseAgent } from "./base.js";
 import type { TokenUsage } from "../models/input-governance.js";
 import type { HookOperationIntentV2 } from "../models/hook-operation-intent.js";
+import type { LLMStructuredOutputSpec } from "../llm/provider.js";
 
 export const HookResolvePreflightResultSchema = z.discriminatedUnion("decision", [
   z.object({
@@ -27,6 +28,56 @@ const HookResolvePreflightBatchSchema = z.object({
   results: z.array(HookResolvePreflightResultSchema).max(20),
 }).strict();
 
+export const HOOK_RESOLVE_PREFLIGHT_STRUCTURED_OUTPUT: LLMStructuredOutputSpec = {
+  name: "hook_resolve_preflight",
+  strict: true,
+  schema: {
+    type: "object",
+    additionalProperties: false,
+    required: ["results"],
+    properties: {
+      results: {
+        type: "array",
+        maxItems: 20,
+        items: {
+          anyOf: [
+            {
+              type: "object",
+              additionalProperties: false,
+              required: ["hookId", "decision"],
+              properties: {
+                hookId: { type: "string", minLength: 1 },
+                decision: { const: "pass" },
+              },
+            },
+            {
+              type: "object",
+              additionalProperties: false,
+              required: ["hookId", "decision", "code", "description"],
+              properties: {
+                hookId: { type: "string", minLength: 1 },
+                decision: { const: "repair-required" },
+                code: { enum: ["payoff-mismatch", "insufficient-evidence"] },
+                description: { type: "string", minLength: 1, maxLength: 500 },
+              },
+            },
+            {
+              type: "object",
+              additionalProperties: false,
+              required: ["hookId", "decision", "description"],
+              properties: {
+                hookId: { type: "string", minLength: 1 },
+                decision: { const: "inconclusive" },
+                description: { type: "string", minLength: 1, maxLength: 500 },
+              },
+            },
+          ],
+        },
+      },
+    },
+  },
+};
+
 export class HookResolvePreflightError extends Error {
   constructor(
     readonly code: "PLANNER_CONTRACT_INVALID" | "INCONCLUSIVE_PROVIDER",
@@ -51,6 +102,7 @@ export class HookResolvePreflightAgent extends BaseAgent {
   async validate(input: {
     readonly contract: HookOperationIntentV2;
     readonly chapterGoal: string;
+    readonly relevantMemoBeat: string;
   }): Promise<HookResolvePreflightOutput> {
     const resolves = input.contract.operations.filter((operation) => operation.action === "resolve");
     if (resolves.length === 0) return { results: [] };
@@ -71,7 +123,7 @@ Do not infer identities, causes, or actors that are not stated. Return strict JS
         hookId: operation.hookId,
         canonicalExpectedPayoff: operation.canonicalExpectedPayoff,
         plannedEvidence: operation.plannedEvidence,
-        relevantMemoBeat: operation.plannedEvidence,
+        relevantMemoBeat: input.relevantMemoBeat,
       })),
     });
 
@@ -79,7 +131,10 @@ Do not infer identities, causes, or actors that are not stated. Return strict JS
       const response = await this.chat([
         { role: "system", content: systemPrompt },
         { role: "user", content: userPrompt },
-      ], { temperature: 0 });
+      ], {
+        temperature: 0,
+        structuredOutput: HOOK_RESOLVE_PREFLIGHT_STRUCTURED_OUTPUT,
+      });
       const parsed = this.parseStrictResult(response.content);
       this.assertExactResultIds(parsed.results, resolves.map((operation) => operation.hookId));
       return {
