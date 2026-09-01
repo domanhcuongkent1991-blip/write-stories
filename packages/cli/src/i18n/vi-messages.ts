@@ -72,6 +72,7 @@ export const VI_MESSAGES = {
   "init.globalOption": "  # Lựa chọn 1: Thiết lập cấu hình toàn cục (khuyến nghị, một lần):",
   "init.projectOption": "  # Lựa chọn 2: Chỉnh sửa .env chỉ cho dự án này",
   "init.englishHint": "  # Dự án tiếng Anh? Chạy lại với: inkos init --lang en",
+  "init.viOptInHint": "  # Viết tiếng Việt thử nghiệm: đặt INKOS_EXPERIMENTAL_WRITING_VI=1 trước khi chạy (chỉ cho tiến trình hiện tại)",
   "init.failure": "Không thể khởi tạo dự án: {detail}",
   "agent.failure": "Agent thất bại: {detail}",
   "studio.initialized": "Không tìm thấy inkos.json trong {root}. Đã khởi tạo dự án InkOS tối thiểu cho Studio.",

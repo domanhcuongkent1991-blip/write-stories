@@ -26,11 +26,33 @@ export function resolveWritingLanguage(
   env: NodeJS.ProcessEnv = process.env,
 ): WritingLanguage {
   if (explicit !== undefined && explicit !== null) {
-    if (explicit === "zh" || explicit === "en") return explicit;
-    throw new Error("Writing language must be zh or en.");
+    if (explicit === "zh" || explicit === "en" || explicit === "vi") return explicit;
+    throw new Error("Writing language must be zh, en, or vi.");
   }
 
-  return env.INKOS_DEFAULT_LANGUAGE === "en" || env.INKOS_DEFAULT_LANGUAGE === "zh"
+  return env.INKOS_DEFAULT_LANGUAGE === "en"
+    || env.INKOS_DEFAULT_LANGUAGE === "zh"
+    || env.INKOS_DEFAULT_LANGUAGE === "vi"
     ? env.INKOS_DEFAULT_LANGUAGE
     : "zh";
+}
+
+export function resolveGlobalWritingLanguage(explicit: unknown): Exclude<WritingLanguage, "vi"> {
+  if (explicit === "zh" || explicit === "en") return explicit;
+  throw new Error(
+    "Global default writing language must be zh or en. Vietnamese experimental writing is project-scoped; use inkos init --lang vi.",
+  );
+}
+
+export function resolveBookLanguageUpdate(current: unknown, explicit: unknown): WritingLanguage {
+  const currentLanguage = resolveWritingLanguage(current, {});
+  if (explicit === undefined || explicit === null) return currentLanguage;
+
+  const requestedLanguage = resolveWritingLanguage(explicit, {});
+  if ((currentLanguage === "vi") !== (requestedLanguage === "vi")) {
+    throw new Error(
+      "Vietnamese writing language cannot be enabled or disabled through book update. Create a new project/book with --lang vi.",
+    );
+  }
+  return requestedLanguage;
 }

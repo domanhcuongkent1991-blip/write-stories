@@ -59,7 +59,7 @@ export async function processTuiAgentInput(params: {
   const languageContext: TuiAgentLanguageContext = {
     uiLocale: params.uiLocale ?? resolveTuiLocale(),
     // Writing language controls only content synthesized for the writing agent.
-    writingLanguage: config.language === "en" ? "en" : "zh",
+    writingLanguage: config.language ?? "zh",
   };
   const route = resolveTuiAgentRoute(params.input, params.session, currentBookId, languageContext);
   const resolvedBookId = route.detachBook ? null : currentBookId;
@@ -231,13 +231,17 @@ export function resolveTuiAgentRoute(
   if (newMatch) {
     return entryRoute("book-create", commandBody(newMatch[1], writingLanguage === "en"
       ? "I want to create a new book. Confirm the direction with me first."
-      : "我想创建一本新书，请先和我确认方向。"));
+      : writingLanguage === "vi"
+        ? "Tôi muốn tạo một tác phẩm mới. Hãy cùng tôi xác nhận định hướng trước."
+        : "我想创建一本新书，请先和我确认方向。"));
   }
 
   const shortMatch = input.match(/^\/short(?:\s+([\s\S]+))?$/i);
   if (shortMatch) {
     return entryRoute("short", commandBody(shortMatch[1], writingLanguage === "en"
       ? "I want to create an InkOS Short. Confirm the direction with me first."
+      : writingLanguage === "vi"
+        ? "Tôi muốn tạo một truyện ngắn InkOS. Hãy cùng tôi xác nhận định hướng trước."
       : "我想做 InkOS Short，请先和我确认方向。"));
   }
 
@@ -245,6 +249,8 @@ export function resolveTuiAgentRoute(
   if (coverMatch) {
     return entryRoute("short", commandBody(coverMatch[1], writingLanguage === "en"
       ? "I want to create or redo a cover. Confirm the target with me first."
+      : writingLanguage === "vi"
+        ? "Tôi muốn tạo hoặc làm lại bìa. Hãy cùng tôi xác nhận mục tiêu trước."
       : "我想生成或重做封面，请先和我确认目标。"));
   }
 
@@ -254,6 +260,8 @@ export function resolveTuiAgentRoute(
     return {
       ...entryRoute("play", commandBody(playMatch[2], writingLanguage === "en"
         ? "I want to start an interactive world. Confirm the opening with me first."
+        : writingLanguage === "vi"
+          ? "Tôi muốn bắt đầu một thế giới tương tác. Hãy cùng tôi xác nhận phần mở đầu trước."
         : "我想启动互动世界，请先和我确认开局。")),
       ...(playMode ? { playMode } : {}),
     };
@@ -261,7 +269,11 @@ export function resolveTuiAgentRoute(
 
   if (/^\/write$/i.test(input)) {
     return {
-      userMessage: writingLanguage === "en" ? "Write the next chapter" : "写下一章",
+      userMessage: writingLanguage === "en"
+        ? "Write the next chapter"
+        : writingLanguage === "vi"
+          ? "Viết chương tiếp theo"
+          : "写下一章",
       sessionKind: activeBookId ? "book" : currentKind,
       actionSource: "slash",
       requestedIntent: "write_next",

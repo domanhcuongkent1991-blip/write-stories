@@ -222,6 +222,10 @@ export const CLI_MESSAGES = {
     zh: "  # 英文项目？使用以下命令重新运行：inkos init --lang en",
     en: "  # English project? Re-run with: inkos init --lang en",
   },
+  "init.viOptInHint": {
+    zh: "  # 越南语实验性写作：运行命令前设置 INKOS_EXPERIMENTAL_WRITING_VI=1（仅当前进程）",
+    en: "  # Vietnamese experimental writing: set INKOS_EXPERIMENTAL_WRITING_VI=1 before running (current process only)",
+  },
   "init.failure": { zh: "项目初始化失败：{detail}", en: "Failed to initialize project: {detail}" },
   "agent.failure": { zh: "Agent 运行失败：{detail}", en: "Agent failed: {detail}" },
   "studio.initialized": {

@@ -2,35 +2,38 @@ import { Command } from "commander";
 import { mkdir } from "node:fs/promises";
 import { resolve } from "node:path";
 import { log, logError } from "../utils.js";
-import { initializeProjectDirectory } from "../project-bootstrap.js";
-import { resolveCliLocale } from "../locale.js";
+import { hasGlobalConfig, initializeProjectDirectory } from "../project-bootstrap.js";
+import { resolveCliLocale, resolveWritingLanguage } from "../locale.js";
 import { formatCliMessage } from "../i18n/messages.js";
 
 export const initCommand = new Command("init")
   .description("Initialize an InkOS project (current directory by default)")
   .argument("[name]", "Project name (creates subdirectory). Omit to init current directory.")
-  .option("--lang <language>", "Default writing language: zh (Chinese) or en (English)", "zh")
+  .option("--lang <language>", "Default writing language: zh (Chinese), en (English), or vi (Vietnamese experimental)", "zh")
   .action(async (name: string | undefined, opts: { lang?: string }) => {
     const locale = resolveCliLocale();
     const projectDir = name ? resolve(process.cwd(), name) : process.cwd();
 
     try {
       await mkdir(projectDir, { recursive: true });
+      const writingLanguage = resolveWritingLanguage(opts.lang);
       await initializeProjectDirectory(projectDir, {
-        language: (opts.lang === "en" ? "en" : "zh"),
+        language: writingLanguage,
         overwriteSupportFiles: true,
       });
+      const globalConfigured = await hasGlobalConfig();
 
       log(formatCliMessage(locale, "init.initialized", { projectDir }));
       log(formatCliMessage(locale, "common.blank"));
-      const isEnglish = (opts.lang ?? "zh") === "en";
-      const exampleCreateLines = isEnglish
+      const exampleCreateLines = writingLanguage === "en"
         ? ["  inkos book create --title 'My Novel' --genre progression --platform royalroad --lang en"]
+        : writingLanguage === "vi"
+          ? ["  inkos book create --title 'Tiểu thuyết của tôi' --genre xuanhuan --platform tomato --lang vi"]
         : [
           "  inkos book create --title '我的小说' --genre xuanhuan --platform tomato",
           formatCliMessage(locale, "init.englishHint"),
         ];
-      if (global) {
+      if (globalConfigured) {
         log(formatCliMessage(locale, "init.globalDetected"));
         log(formatCliMessage(locale, "common.blank"));
         log(formatCliMessage(locale, "init.nextSteps"));
@@ -44,6 +47,9 @@ export const initCommand = new Command("init")
         log(formatCliMessage(locale, "init.projectOption"));
         log(formatCliMessage(locale, "common.blank"));
         for (const line of exampleCreateLines) log(formatCliMessage(locale, "common.command", { command: line }));
+      }
+      if (writingLanguage === "vi") {
+        log(formatCliMessage(locale, "init.viOptInHint"));
       }
       log(formatCliMessage(locale, "common.command", { command: "  inkos write next <book-id>" }));
     } catch (e) {

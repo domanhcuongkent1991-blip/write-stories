@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { findProjectRoot, log, logError, GLOBAL_CONFIG_DIR, GLOBAL_ENV_PATH } from "../utils.js";
 import { listModelsForService } from "@actalk/inkos-core";
 import { formatListModelsEmpty, formatListModelsHeader } from "../localization.js";
-import { resolveCliLocale, resolveWritingLanguage } from "../locale.js";
+import { resolveCliLocale, resolveGlobalWritingLanguage } from "../locale.js";
 import { formatCurrentCliMessage } from "../i18n/messages.js";
 
 export const configCommand = new Command("config")
@@ -104,9 +104,10 @@ configCommand
   .option("--max-tokens <n>", "Max output tokens")
   .option("--thinking-budget <n>", "Anthropic thinking budget")
   .option("--api-format <format>", "API format (chat / responses)")
-  .option("--lang <language>", "Default writing language: zh (Chinese) or en (English)")
+  .option("--lang <language>", "Default writing language: zh (Chinese) or en (English); vi is project-scoped via init")
   .action(async (opts) => {
     try {
+      const globalLanguage = opts.lang !== undefined ? resolveGlobalWritingLanguage(opts.lang) : undefined;
       await mkdir(GLOBAL_CONFIG_DIR, { recursive: true });
 
       const lines = [
@@ -119,7 +120,7 @@ configCommand
       if (opts.temperature) lines.push(`INKOS_LLM_TEMPERATURE=${opts.temperature}`);
       if (opts.thinkingBudget) lines.push(`INKOS_LLM_THINKING_BUDGET=${opts.thinkingBudget}`);
       if (opts.apiFormat) lines.push(`INKOS_LLM_API_FORMAT=${opts.apiFormat}`);
-      if (opts.lang) lines.push(`INKOS_DEFAULT_LANGUAGE=${resolveWritingLanguage(opts.lang, {})}`);
+      if (globalLanguage) lines.push(`INKOS_DEFAULT_LANGUAGE=${globalLanguage}`);
 
       await writeFile(GLOBAL_ENV_PATH, lines.join("\n") + "\n", "utf-8");
       log(formatCurrentCliMessage("config.globalSaved", { path: GLOBAL_ENV_PATH }));

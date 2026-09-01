@@ -72,6 +72,18 @@ describe("CLI stable-key catalog", () => {
     expect(audit.options[0]?.description).toBe("Xuất JSON");
     expect(audit.registeredArguments[0]?.description).toContain("ID sách");
   });
+
+  it("keeps Vietnamese help explicit about supported writing-language boundaries", () => {
+    const program = new Command("inkos");
+    const init = program.command("init").option("--lang <language>", "default");
+    const shortRun = program.command("short").command("run").option("--lang <language>", "short");
+
+    applyCliHelpLocale(program, "vi");
+
+    expect(init.options[0]?.description).toContain("vi");
+    expect(shortRun.options[0]?.description).toContain("zh (tiếng Trung) hoặc en (tiếng Anh)");
+    expect(shortRun.options[0]?.description).not.toContain("vi (tiếng Việt thử nghiệm)");
+  });
 });
 
 describe("CLI localization", () => {

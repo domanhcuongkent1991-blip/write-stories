@@ -34,6 +34,23 @@ describe("project bootstrap", () => {
     await expect(readFile(join(tempDir, ".node-version"), "utf-8")).resolves.toBe("22\n");
   }, 20_000);
 
+  it("creates a root-bound Vietnamese marker without enabling the environment flag", async () => {
+    const { initializeProjectDirectory } = await import("../project-bootstrap.js");
+    const environmentBefore = process.env.INKOS_EXPERIMENTAL_WRITING_VI;
+
+    await initializeProjectDirectory(tempDir, { language: "vi" });
+
+    const config = JSON.parse(await readFile(join(tempDir, "inkos.json"), "utf-8"));
+    expect(config.language).toBe("vi");
+    const marker = JSON.parse(await readFile(join(tempDir, ".inkos", "vi-writing-v1.json"), "utf-8"));
+    expect(marker).toEqual({
+      schemaVersion: 1,
+      contractVersion: "vi-writing-v1",
+      projectRoot: tempDir,
+    });
+    expect(process.env.INKOS_EXPERIMENTAL_WRITING_VI).toBe(environmentBefore);
+  });
+
   it("does not overwrite support files when auto-initializing", async () => {
     await writeFile(join(tempDir, ".env"), "EXISTING=1\n", "utf-8");
     await writeFile(join(tempDir, ".gitignore"), "CUSTOM\n", "utf-8");

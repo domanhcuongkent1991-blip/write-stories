@@ -100,6 +100,13 @@ describe("CLI integration", () => {
       expect(auditHelp).toContain("--json");
       expect(auditHelp).toContain("Xuất JSON");
     }, DOUBLE_CLI_INVOCATION_TEST_TIMEOUT_MS);
+
+    it("documents Vietnamese writing language in localized option help", () => {
+      const initHelp = run(["init", "--help"], { env: { INKOS_LOCALE: "vi" } });
+
+      expect(initHelp).toContain("vi");
+      expect(initHelp).toContain("tiếng Việt thử nghiệm");
+    });
   });
 
   describe("JSON locale boundary", () => {
@@ -127,6 +134,7 @@ describe("CLI integration", () => {
     it("initializes project in current directory", () => {
       const output = run(["init"]);
       expect(output).toContain("Project initialized");
+      expect(output).not.toContain("Global LLM config detected");
     });
 
     it("creates inkos.json with correct structure", async () => {
@@ -201,6 +209,23 @@ describe("CLI integration", () => {
         await rm(englishDir, { recursive: true, force: true });
       }
     });
+
+    it("persists Vietnamese writing language and its root-bound marker", async () => {
+      const vietnameseDir = await mkdtemp(join(tmpdir(), "inkos-cli-vi-init-"));
+
+      try {
+        const output = run(["init", vietnameseDir, "--lang", "vi"]);
+        expect(output).toContain("Project initialized");
+        expect(output).toContain("INKOS_EXPERIMENTAL_WRITING_VI=1");
+
+        const config = JSON.parse(await readFile(join(vietnameseDir, "inkos.json"), "utf-8"));
+        expect(config.language).toBe("vi");
+        const marker = JSON.parse(await readFile(join(vietnameseDir, ".inkos", "vi-writing-v1.json"), "utf-8"));
+        expect(marker.projectRoot).toBe(vietnameseDir);
+      } finally {
+        await rm(vietnameseDir, { recursive: true, force: true });
+      }
+    });
   });
 
   describe("inkos config set", () => {
@@ -229,6 +254,33 @@ describe("CLI integration", () => {
       const raw = await readFile(join(projectDir, "inkos.json"), "utf-8");
       const config = JSON.parse(raw);
       expect(config.writing.reviewRetries).toBe(3);
+    });
+  });
+
+  describe("inkos config set-global", () => {
+    it("rejects Vietnamese global defaults before creating a global config file", async () => {
+      const globalConfigPath = join(projectDir, ".inkos", ".env");
+      await rm(globalConfigPath, { force: true }).catch(() => {});
+      await rm(join(projectDir, ".inkos"), { recursive: true, force: true });
+
+      const result = runStderr([
+        "config",
+        "set-global",
+        "--provider",
+        "openai",
+        "--base-url",
+        "http://127.0.0.1:9/v1",
+        "--api-key",
+        "test-key",
+        "--model",
+        "test-model",
+        "--lang",
+        "vi",
+      ], { env: { HOME: projectDir, USERPROFILE: projectDir } });
+
+      expect(result.exitCode).not.toBe(0);
+      expect(result.stderr).toContain("Global default writing language must be zh or en.");
+      await expect(stat(globalConfigPath)).rejects.toThrow();
     });
   });
 

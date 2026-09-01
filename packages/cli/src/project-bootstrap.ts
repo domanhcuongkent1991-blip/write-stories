@@ -1,13 +1,18 @@
 import { access, mkdir, readFile, writeFile } from "node:fs/promises";
-import { basename, join } from "node:path";
+import { basename, join, resolve } from "node:path";
+import {
+  VI_WRITING_CONTRACT_VERSION,
+  VI_WRITING_MARKER_RELATIVE_PATH,
+  type WritingLanguage,
+} from "@actalk/inkos-core";
 import { GLOBAL_ENV_PATH } from "./utils.js";
 
 export interface ProjectBootstrapOptions {
-  readonly language?: "zh" | "en";
+  readonly language?: WritingLanguage;
   readonly overwriteSupportFiles?: boolean;
 }
 
-async function hasGlobalConfig(): Promise<boolean> {
+export async function hasGlobalConfig(): Promise<boolean> {
   try {
     const content = await readFile(GLOBAL_ENV_PATH, "utf-8");
     return content.includes("INKOS_LLM_API_KEY=") && !content.includes("your-api-key-here");
@@ -59,7 +64,7 @@ export async function ensureProjectGitignore(projectDir: string): Promise<void> 
   await writeFile(path, `${existing}${separator}${missing.join("\n")}\n`, "utf-8");
 }
 
-function buildProjectConfig(projectDir: string, language: "zh" | "en") {
+function buildProjectConfig(projectDir: string, language: WritingLanguage) {
   return {
     name: basename(projectDir),
     version: "0.1.0" as const,
@@ -141,14 +146,30 @@ export async function initializeProjectDirectory(
     "utf-8",
   );
 
+  if (language === "vi") {
+    await mkdir(join(projectDir, ".inkos"), { recursive: true });
+  }
+
   const globalConfigured = await hasGlobalConfig();
 
-  await Promise.all([
+  const supportWrites = [
     writeMaybe(join(projectDir, ".env"), buildProjectEnvTemplate(globalConfigured), overwriteSupportFiles),
     ensureProjectGitignore(projectDir),
     writeMaybe(join(projectDir, ".nvmrc"), "22\n", overwriteSupportFiles),
     writeMaybe(join(projectDir, ".node-version"), "22\n", overwriteSupportFiles),
-  ]);
+  ];
+  if (language === "vi") {
+    supportWrites.push(writeMaybe(
+      join(projectDir, VI_WRITING_MARKER_RELATIVE_PATH),
+      `${JSON.stringify({
+        schemaVersion: 1,
+        contractVersion: VI_WRITING_CONTRACT_VERSION,
+        projectRoot: resolve(projectDir),
+      }, null, 2)}\n`,
+      overwriteSupportFiles,
+    ));
+  }
+  await Promise.all(supportWrites);
 }
 
 export async function ensureProjectDirectoryInitialized(

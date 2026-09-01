@@ -396,4 +396,35 @@ describe("tui agent session bridge", () => {
       writingLanguage: "en",
     }).userMessage).toBe(rawInput);
   });
+
+  it("preserves Vietnamese writing language from project config", async () => {
+    loadConfigMock.mockResolvedValue({
+      llm: {
+        provider: "openai",
+        model: "gpt-5.4",
+        baseUrl: "https://right.codes/codex/v1",
+        apiFormat: "chat",
+        stream: false,
+      },
+      language: "vi",
+    });
+    runAgentSessionMock.mockResolvedValue({ responseText: "Đã nhận.", messages: [] });
+
+    const { processTuiAgentInput } = await import("../tui/agent-input.js");
+    const session = createProjectSession(projectRoot);
+
+    await processTuiAgentInput({
+      projectRoot,
+      input: "/write",
+      session,
+      activeBookId: "viet-book",
+      uiLocale: "vi",
+    });
+
+    expect(runAgentSessionMock).toHaveBeenCalledWith(
+      expect.objectContaining({ language: "vi", bookId: "viet-book" }),
+      "Viết chương tiếp theo",
+      [],
+    );
+  });
 });

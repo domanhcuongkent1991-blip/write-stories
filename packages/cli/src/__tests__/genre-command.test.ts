@@ -39,6 +39,14 @@ describe("genre template scaffold", () => {
     expect(template).not.toMatch(CHINESE_CHARS);
   });
 
+  it("uses the English scaffold for Vietnamese writing", () => {
+    const template = buildGenreTemplate(params, "vi");
+
+    expect(template).toContain("## Genre Taboos");
+    expect(template).toContain("## Narrative Guidance");
+    expect(template).not.toMatch(CHINESE_CHARS);
+  });
+
   it("keeps the same frontmatter keys in both languages", () => {
     const extractKeys = (template: string): string[] => {
       const frontmatter = template.split("---")[1] ?? "";

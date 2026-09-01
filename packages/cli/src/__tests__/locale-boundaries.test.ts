@@ -1,6 +1,11 @@
 import { describe, expect, expectTypeOf, it } from "vitest";
 import type { WritingLanguage } from "@actalk/inkos-core";
-import { resolveCliLocale, resolveWritingLanguage } from "../locale.js";
+import {
+  resolveBookLanguageUpdate,
+  resolveCliLocale,
+  resolveGlobalWritingLanguage,
+  resolveWritingLanguage,
+} from "../locale.js";
 import { formatWriteNextResultLines } from "../localization.js";
 
 const WRITE_RESULT = {
@@ -23,8 +28,8 @@ describe("CLI locale and writing-language boundaries", () => {
     expect(resolveWritingLanguage("en", {})).toBe("en");
     expect(resolveWritingLanguage(undefined, { INKOS_DEFAULT_LANGUAGE: "en" })).toBe("en");
     expect(resolveWritingLanguage(undefined, { INKOS_LOCALE: "vi" })).toBe("zh");
-    expect(resolveWritingLanguage(undefined, { INKOS_DEFAULT_LANGUAGE: "vi" })).toBe("zh");
-    expect(() => resolveWritingLanguage("vi", {})).toThrow(/zh or en/);
+    expect(resolveWritingLanguage(undefined, { INKOS_DEFAULT_LANGUAGE: "vi" })).toBe("vi");
+    expect(resolveWritingLanguage("vi", {})).toBe("vi");
   });
 
   it("uses the book language for length units under a Vietnamese UI", () => {
@@ -32,8 +37,25 @@ describe("CLI locale and writing-language boundaries", () => {
     expect(formatWriteNextResultLines("vi", "en", WRITE_RESULT)).toContain("  Độ dài: 1200 words");
   });
 
-  it("keeps Vietnamese outside the writing-language type", () => {
-    expectTypeOf<"vi">().not.toMatchTypeOf<WritingLanguage>();
-    expectTypeOf<WritingLanguage>().toEqualTypeOf<"zh" | "en">();
+  it("keeps Vietnamese in the writing-language type while UI locale stays independent", () => {
+    expectTypeOf<"vi">().toMatchTypeOf<WritingLanguage>();
+    expectTypeOf<WritingLanguage>().toEqualTypeOf<"zh" | "en" | "vi">();
+  });
+
+  it("keeps global defaults legacy-safe and blocks Vietnamese book migration", () => {
+    expect(resolveGlobalWritingLanguage("zh")).toBe("zh");
+    expect(resolveGlobalWritingLanguage("en")).toBe("en");
+    expect(() => resolveGlobalWritingLanguage("vi")).toThrow(
+      "Global default writing language must be zh or en.",
+    );
+
+    expect(resolveBookLanguageUpdate("vi", "vi")).toBe("vi");
+    expect(resolveBookLanguageUpdate("en", undefined)).toBe("en");
+    expect(() => resolveBookLanguageUpdate("en", "vi")).toThrow(
+      "Vietnamese writing language cannot be enabled or disabled through book update.",
+    );
+    expect(() => resolveBookLanguageUpdate("vi", "en")).toThrow(
+      "Vietnamese writing language cannot be enabled or disabled through book update.",
+    );
   });
 });
