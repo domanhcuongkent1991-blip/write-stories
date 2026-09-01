@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { PlannerAgent } from "../agents/planner.js";
@@ -441,10 +441,15 @@ describe("PlannerAgent.planChapter memo generation", () => {
   });
 
   it("keeps Vietnamese golden-opening discipline to the first three chapters", async () => {
-    vi.spyOn(llmProvider, "chatCompletion").mockResolvedValue({
-      content: validMemoRaw(4),
-      usage: ZERO_USAGE,
-    } as unknown as Awaited<ReturnType<typeof llmProvider.chatCompletion>>);
+    vi.spyOn(llmProvider, "chatCompletion")
+      .mockResolvedValueOnce({
+        content: validMemoRaw(4),
+        usage: ZERO_USAGE,
+      } as unknown as Awaited<ReturnType<typeof llmProvider.chatCompletion>>)
+      .mockResolvedValueOnce({
+        content: JSON.stringify({ results: [{ hookId: "S004", decision: "pass" }] }),
+        usage: ZERO_USAGE,
+      } as unknown as Awaited<ReturnType<typeof llmProvider.chatCompletion>>);
 
     const result = await makePlanner().planChapter({
       book: { ...makeBook(), language: "vi" },
@@ -453,6 +458,115 @@ describe("PlannerAgent.planChapter memo generation", () => {
     });
 
     expect(result.memo.isGoldenOpening).toBe(false);
+  });
+
+  it("corrects one Vietnamese payoff mismatch and revalidates the corrected resolve", async () => {
+    await writeFile(join(bookDir, "story/pending_hooks.md"), [
+      "| hook_id | start_chapter | type | status | last_advanced_chapter | expected_payoff | notes |",
+      "| --- | --- | --- | --- | --- | --- | --- |",
+      "| H03 | 1 | mystery | open | 1 | Door 7 anomaly | |",
+      "| sabotage-sau-can-thi-thu | 1 | mystery | progressing | 1 | Identify the actor behind the remote administrator lock | |",
+      "| H006 | 1 | device | progressing | 1 | Confirm the physical signal-manipulation device | |",
+      "| H07 | 1 | mystery | open | 1 | mastermind | |",
+    ].join("\n"), "utf-8");
+    const invalidMemo = validMemoRaw(4).replaceAll("S004", "sabotage-sau-can-thi-thu");
+    const correctedMemo = validMemoRaw(4).replaceAll("S004", "H006");
+    const chatSpy = vi.spyOn(llmProvider, "chatCompletion")
+      .mockResolvedValueOnce({ content: invalidMemo, usage: ZERO_USAGE } as Awaited<ReturnType<typeof llmProvider.chatCompletion>>)
+      .mockResolvedValueOnce({
+        content: JSON.stringify({ results: [{
+          hookId: "sabotage-sau-can-thi-thu",
+          decision: "repair-required",
+          code: "payoff-mismatch",
+          description: "Physical-device evidence does not identify the remote-lock actor.",
+        }] }),
+        usage: ZERO_USAGE,
+      } as Awaited<ReturnType<typeof llmProvider.chatCompletion>>)
+      .mockResolvedValueOnce({ content: correctedMemo, usage: ZERO_USAGE } as Awaited<ReturnType<typeof llmProvider.chatCompletion>>)
+      .mockResolvedValueOnce({
+        content: JSON.stringify({ results: [{ hookId: "H006", decision: "pass" }] }),
+        usage: ZERO_USAGE,
+      } as Awaited<ReturnType<typeof llmProvider.chatCompletion>>);
+
+    const result = await makePlanner().planChapter({
+      book: { ...makeBook(), language: "vi" },
+      bookDir,
+      chapterNumber: 4,
+    });
+
+    expect(chatSpy).toHaveBeenCalledTimes(4);
+    expect(result.intent.expectedHookOps.resolve).toEqual(["H006"]);
+    expect(result.intent.expectedHookContract?.operations).toEqual(expect.arrayContaining([
+      expect.objectContaining({ hookId: "H006", action: "resolve" }),
+    ]));
+    expect(result.intent.expectedHookContract?.operations).not.toEqual(expect.arrayContaining([
+      expect.objectContaining({ hookId: "sabotage-sau-can-thi-thu", action: "resolve" }),
+    ]));
+    const correctionMessages = chatSpy.mock.calls[2]?.[2] as ReadonlyArray<{ role: string; content: string }>;
+    expect(correctionMessages.find((message) => message.role === "user")?.content)
+      .toContain("Identify the actor behind the remote administrator lock");
+  });
+
+  it("stops before intent persistence when the corrected Vietnamese plan is still invalid", async () => {
+    await writeFile(join(bookDir, "story/pending_hooks.md"), [
+      "| hook_id | start_chapter | type | status | last_advanced_chapter | expected_payoff | notes |",
+      "| --- | --- | --- | --- | --- | --- | --- |",
+      "| H03 | 1 | mystery | open | 1 | Door 7 anomaly | |",
+      "| sabotage-sau-can-thi-thu | 1 | mystery | progressing | 1 | Identify the actor behind the remote administrator lock | |",
+      "| H07 | 1 | mystery | open | 1 | mastermind | |",
+    ].join("\n"), "utf-8");
+    const invalidMemo = validMemoRaw(4).replaceAll("S004", "sabotage-sau-can-thi-thu");
+    const repairResult = JSON.stringify({ results: [{
+      hookId: "sabotage-sau-can-thi-thu",
+      decision: "repair-required",
+      code: "payoff-mismatch",
+      description: "Device evidence does not identify the actor.",
+    }] });
+    const chatSpy = vi.spyOn(llmProvider, "chatCompletion")
+      .mockResolvedValueOnce({ content: invalidMemo, usage: ZERO_USAGE } as Awaited<ReturnType<typeof llmProvider.chatCompletion>>)
+      .mockResolvedValueOnce({ content: repairResult, usage: ZERO_USAGE } as Awaited<ReturnType<typeof llmProvider.chatCompletion>>)
+      .mockResolvedValueOnce({ content: invalidMemo, usage: ZERO_USAGE } as Awaited<ReturnType<typeof llmProvider.chatCompletion>>)
+      .mockResolvedValueOnce({ content: repairResult, usage: ZERO_USAGE } as Awaited<ReturnType<typeof llmProvider.chatCompletion>>);
+
+    await expect(makePlanner().planChapter({
+      book: { ...makeBook(), language: "vi" },
+      bookDir,
+      chapterNumber: 4,
+    })).rejects.toThrow(/planner contract.*still invalid/i);
+
+    expect(chatSpy).toHaveBeenCalledTimes(4);
+    await expect(readFile(join(bookDir, "story/runtime/chapter-0004.intent.md"), "utf-8"))
+      .rejects.toThrow();
+  });
+
+  it("uses one parse attempt and no fallback for the semantic correction", async () => {
+    await writeFile(join(bookDir, "story/pending_hooks.md"), [
+      "| hook_id | start_chapter | type | status | last_advanced_chapter | expected_payoff | notes |",
+      "| --- | --- | --- | --- | --- | --- | --- |",
+      "| H03 | 1 | mystery | open | 1 | Door 7 anomaly | |",
+      "| sabotage-sau-can-thi-thu | 1 | mystery | progressing | 1 | Identify the actor behind the remote administrator lock | |",
+      "| H07 | 1 | mystery | open | 1 | mastermind | |",
+    ].join("\n"), "utf-8");
+    const invalidMemo = validMemoRaw(4).replaceAll("S004", "sabotage-sau-can-thi-thu");
+    const chatSpy = vi.spyOn(llmProvider, "chatCompletion")
+      .mockResolvedValueOnce({ content: invalidMemo, usage: ZERO_USAGE } as Awaited<ReturnType<typeof llmProvider.chatCompletion>>)
+      .mockResolvedValueOnce({
+        content: JSON.stringify({ results: [{
+          hookId: "sabotage-sau-can-thi-thu",
+          decision: "repair-required",
+          code: "insufficient-evidence",
+          description: "The planned beat does not reveal the actor.",
+        }] }),
+        usage: ZERO_USAGE,
+      } as Awaited<ReturnType<typeof llmProvider.chatCompletion>>)
+      .mockResolvedValueOnce({ content: "not a governed memo", usage: ZERO_USAGE } as Awaited<ReturnType<typeof llmProvider.chatCompletion>>);
+
+    await expect(makePlanner().planChapter({
+      book: { ...makeBook(), language: "vi" },
+      bookDir,
+      chapterNumber: 4,
+    })).rejects.toThrow(/semantic correction.*parse/i);
+    expect(chatSpy).toHaveBeenCalledTimes(3);
   });
 
   // Phase hotfix 4: English books must receive English system + user prompts

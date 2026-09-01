@@ -9,6 +9,15 @@ import { computeChapterContentHash } from "../audit/chapter-audit-evaluator.js";
 import type { ChapterAuditEvaluation } from "../audit/chapter-audit-evaluator.js";
 import { decideAudit, evaluateRevisionCandidate } from "../audit/audit-policy.js";
 import { createAuditRun, type AuditRunV1 } from "../audit/audit-run.js";
+import {
+  applyVietnameseLocalRepair,
+  type LocalRepairTelemetry,
+} from "../utils/vietnamese-local-repair.js";
+import {
+  buildCandidateRejectionEvidence,
+  type CandidateRejectionEvidence,
+} from "./candidate-rejection-evidence.js";
+import { runWithProviderCallStage } from "../llm/provider-call-telemetry.js";
 
 export interface ChapterReviewCycleUsage {
   readonly promptTokens: number;
@@ -37,6 +46,7 @@ export interface ChapterReviewCycleResult {
   readonly auditRuns?: ReadonlyArray<AuditRunV1>;
   readonly reviserTokenUsage?: ChapterReviewCycleUsage;
   readonly auditorTokenUsage?: ChapterReviewCycleUsage;
+  readonly localRepair?: LocalRepairTelemetry;
 }
 
 const DEFAULT_MAX_REVIEW_ITERATIONS = 1;
@@ -87,6 +97,10 @@ function bindVietnameseAuditorSpellingFindings(
       repairScope: "local",
       repairTarget: "prose",
       verification: "verified",
+      evidence: {
+        ...issue.evidence,
+        contentHash: computeChapterContentHash(content),
+      },
       repairHint: {
         ...hint,
         context: content.slice(contextStart, contextEnd),
@@ -122,6 +136,7 @@ interface ReviewSnapshot {
 export interface RevisionCandidateSettlement {
   readonly valid: boolean;
   readonly rejectionReason?: string;
+  readonly rejectionEvidence?: CandidateRejectionEvidence;
   /** Deterministic/state findings computed from the exact settled candidate truth. */
   readonly stateFindings?: ReadonlyArray<AuditIssue>;
   readonly truthFileOverrides?: {
@@ -140,6 +155,8 @@ export async function runChapterReviewCycle(params: {
   readonly reducedControlInput?: ChapterReviewCycleControlInput;
   readonly lengthSpec: LengthSpec;
   readonly initialUsage: ChapterReviewCycleUsage;
+  readonly initialStateFindings?: ReadonlyArray<AuditIssue>;
+  readonly initialTruthFileOverrides?: RevisionCandidateSettlement["truthFileOverrides"];
   readonly createReviser: () => {
     reviseChapter: (
       bookDir: string,
@@ -200,6 +217,7 @@ export async function runChapterReviewCycle(params: {
     readonly contentHash: string;
     readonly wordCount: number;
     readonly reason: string;
+    readonly rejectionEvidence: CandidateRejectionEvidence;
   }) => void | Promise<void>;
   /** @deprecated Use settleRevisionCandidate so post-audit can bind to candidate truth. */
   readonly stateSettlementValid?: (output: ReviseOutput) => boolean | Promise<boolean>;
@@ -224,6 +242,7 @@ export async function runChapterReviewCycle(params: {
     readonly candidateWordCount: number;
   } | undefined;
   let revisionRejectionReason: string | undefined;
+  let localRepair: LocalRepairTelemetry | undefined;
 
   // Convert initial postWriteErrors into AuditIssues as fallback when runPostWriteChecks isn't provided.
   const initialPostWriteIssues: ReadonlyArray<AuditIssue> = params.initialOutput.postWriteErrors.map((violation) => ({
@@ -258,14 +277,17 @@ export async function runChapterReviewCycle(params: {
       attemptId: auditRunAttemptId,
       phase: assessmentCount === 0 ? "initial" : "post-revision",
     };
-    const rawLlmAudit = await params.auditor.auditChapter(
-      params.bookDir,
-      content,
-      params.chapterNumber,
-      params.book.genre,
-      params.reducedControlInput
-        ? { ...params.reducedControlInput, ...(options ?? {}) }
-        : options,
+    const rawLlmAudit = await runWithProviderCallStage(
+      assessmentCount === 0 ? "initial-auditor" : "post-candidate-auditor",
+      () => params.auditor.auditChapter(
+        params.bookDir,
+        content,
+        params.chapterNumber,
+        params.book.genre,
+        params.reducedControlInput
+          ? { ...params.reducedControlInput, ...(options ?? {}) }
+          : options,
+      ),
     );
     const spellingBinding = params.lengthSpec.countingMode === "vi_wordlike_tokens_v1"
       ? bindVietnameseAuditorSpellingFindings(content, rawLlmAudit.issues)
@@ -355,7 +377,10 @@ export async function runChapterReviewCycle(params: {
     ? 0
     : Math.min(DEFAULT_MAX_REVIEW_ITERATIONS, Math.max(0, Math.floor(params.maxReviewIterations ?? DEFAULT_MAX_REVIEW_ITERATIONS)));
   params.logStage({ zh: "审计草稿", en: "auditing draft" });
-  const initial = await assess(finalContent);
+  const initial = await assess(finalContent, {
+    stateFindings: params.initialStateFindings,
+    truthFileOverrides: params.initialTruthFileOverrides,
+  });
 
   const filterRepairIssues = (issues: ReadonlyArray<AuditIssue>): ReadonlyArray<AuditIssue> => {
     // Preferred-range drift is telemetry only. Passing it to the reviser can
@@ -418,6 +443,7 @@ export async function runChapterReviewCycle(params: {
         accepted: Boolean(candidate && finalContent === candidate.content),
         ...(revisionRejectionReason ? { rejectionReason: revisionRejectionReason } : {}),
       },
+      localRepair,
     }));
     if (candidate) {
       const candidateEvaluation = asEvaluation(candidate.auditResult, candidate.content);
@@ -453,6 +479,7 @@ export async function runChapterReviewCycle(params: {
             ? { rejectionReason: revisionRejectionReason ?? "candidate rejected by shared acceptance gate" }
             : {}),
         },
+        localRepair,
       }));
     }
     return runs;
@@ -476,6 +503,7 @@ export async function runChapterReviewCycle(params: {
       auditRuns: buildAuditRuns(),
       ...(reviserTokenUsage ? { reviserTokenUsage } : {}),
       ...(auditorTokenUsage ? { auditorTokenUsage } : {}),
+      ...(localRepair ? { localRepair } : {}),
     };
   }
 
@@ -486,23 +514,75 @@ export async function runChapterReviewCycle(params: {
         en: `repair iteration ${iteration + 1}/${maxReviewIterations} (current score: ${currentAudit.score})`,
       });
 
-      const reviser = params.createReviser();
-      revisionAttempts = 1;
-      let reviseOutput = await reviser.reviseChapter(
-        params.bookDir,
-        finalContent,
-        params.chapterNumber,
-        filterRepairIssues(currentAudit.auditResult.issues),
-        "auto",
-        params.book.genre,
-        { ...params.reducedControlInput, lengthSpec: params.lengthSpec },
-      );
-      totalUsage = params.addUsage(totalUsage, reviseOutput.tokenUsage);
-      if (reviseOutput.tokenUsage) {
-        reviserTokenUsage = params.addUsage(
-          reviserTokenUsage ?? { promptTokens: 0, completionTokens: 0, totalTokens: 0 },
-          reviseOutput.tokenUsage,
+      const repairIssues = filterRepairIssues(currentAudit.auditResult.issues);
+      const localRepairResult = params.lengthSpec.countingMode === "vi_wordlike_tokens_v1"
+        ? applyVietnameseLocalRepair(finalContent, repairIssues)
+        : undefined;
+      if (localRepairResult?.kind === "rejected") {
+        localRepair = localRepairResult.telemetry;
+        revisionRejectionReason = `deterministic local repair rejected: ${localRepairResult.code}`;
+        params.logWarn({
+          zh: "确定性拼写修复无法安全应用，保留原章节",
+          en: "Deterministic spelling repair could not be applied safely; retaining the canonical chapter.",
+        });
+        break;
+      }
+
+      const localBaseContent = localRepairResult?.kind === "applied"
+        ? localRepairResult.content
+        : finalContent;
+      if (localRepairResult?.kind === "applied") {
+        localRepair = localRepairResult.telemetry;
+      }
+      const structuralIssues = repairIssues.filter((issue) => {
+        const isAppliedLocalSpelling = localRepairResult?.kind === "applied"
+          && issue.repairHint?.kind === "exact-replacement"
+          && VIETNAMESE_SPELLING_SIGNAL_RE.test(
+            `${issue.ruleId ?? ""} ${issue.category} ${issue.description}`,
+          );
+        return !isAppliedLocalSpelling
+          && issue.repairTarget !== "runtime-state"
+          && issue.repairTarget !== "next-plan";
+      });
+
+      let reviseOutput: ReviseOutput;
+      if (structuralIssues.length === 0 && localRepairResult?.kind === "applied") {
+        reviseOutput = {
+          revisedContent: localBaseContent,
+          wordCount: countChapterLength(localBaseContent, params.lengthSpec.countingMode),
+          fixedIssues: [...localRepairResult.fixedFindingIds],
+          repairKind: "deterministic-exact",
+        };
+      } else if (structuralIssues.length > 0) {
+        const reviser = params.createReviser();
+        revisionAttempts = 1;
+        const structuralOutput = await runWithProviderCallStage(
+          "structural-revision",
+          () => reviser.reviseChapter(
+            params.bookDir,
+            localBaseContent,
+            params.chapterNumber,
+            structuralIssues,
+            "auto",
+            params.book.genre,
+            { ...params.reducedControlInput, lengthSpec: params.lengthSpec },
+          ),
         );
+        reviseOutput = { ...structuralOutput, repairKind: "llm-structural" };
+        totalUsage = params.addUsage(totalUsage, reviseOutput.tokenUsage);
+        if (reviseOutput.tokenUsage) {
+          reviserTokenUsage = params.addUsage(
+            reviserTokenUsage ?? { promptTokens: 0, completionTokens: 0, totalTokens: 0 },
+            reviseOutput.tokenUsage,
+          );
+        }
+      } else {
+        revisionRejectionReason = "no prose repair is safe for the remaining state blocker";
+        params.logWarn({
+          zh: "剩余阻断项属于运行时状态，不能作为正文修订指令",
+          en: "Remaining blockers belong to runtime state and cannot be sent as prose revision instructions.",
+        });
+        break;
       }
 
       let revisedContent = params.normalizePostWriteSurface?.(reviseOutput.revisedContent)
@@ -549,74 +629,15 @@ export async function runChapterReviewCycle(params: {
           contentHash: revisionCandidateIdentity.candidateContentHash,
           wordCount: candidateWordCount,
           reason: revisionRejectionReason,
+          rejectionEvidence: buildCandidateRejectionEvidence({
+            rejectionCode: "audit-failed",
+            ownerClass: "AUDIT",
+            findings: currentAudit.auditResult.issues,
+            fallbackDescription: revisionRejectionReason,
+          }),
         });
 
-        // Gemini can acknowledge the length issue yet return a nearly
-        // unchanged chapter. Give Vietnamese hard-length repair one bounded
-        // rescue pass with an explicit measured deficit, while keeping the
-        // original canonical content untouched until the shared gate passes.
-        if (iteration === 0) {
-          // If the first revision made the chapter longer, do not compound that
-          // bad candidate. Start the bounded rescue from the canonical draft;
-          // otherwise keep the shorter candidate as the rescue baseline.
-          const rescueFromCanonical = candidateWordCount >= canonicalWordCount;
-          const rescueBaseContent = rescueFromCanonical ? finalContent : revisedContent;
-          const rescueBaseWordCount = rescueFromCanonical ? canonicalWordCount : candidateWordCount;
-          const deficit = Math.max(1, rescueBaseWordCount - params.lengthSpec.hardMax);
-          const rescueIssue: AuditIssue = {
-            severity: "critical",
-            category: "length",
-            description: `Previous revision measured ${candidateWordCount} Vietnamese words; ${rescueFromCanonical ? `the canonical draft measures ${canonicalWordCount} words; ` : ""}remove at least ${deficit} more words and return a complete chapter safely below the hard ceiling. Aim for ${params.lengthSpec.softMin}-${Math.min(params.lengthSpec.softMax, params.lengthSpec.hardMax - 50)} Vietnamese words, never exceed ${params.lengthSpec.hardMax} words, and preserve the causal beats, evidence, hook payoffs, and ending hook.`,
-            suggestion: "Aggressively remove redundant transitions, repeated interior beats, and redundant explanations. Leave a safety margin below the hard ceiling while preserving causal beats, evidence, hook payoffs, and the ending hook.",
-            ruleId: "length.hard-range",
-            repairScope: "structural",
-            repairTarget: "prose",
-            verification: "verified",
-          };
-          const rescueOutput = await reviser.reviseChapter(
-            params.bookDir,
-            rescueBaseContent,
-            params.chapterNumber,
-            [rescueIssue],
-            "auto",
-            params.book.genre,
-            { ...params.reducedControlInput, lengthSpec: params.lengthSpec },
-          );
-          reviseOutput = rescueOutput;
-          totalUsage = params.addUsage(totalUsage, rescueOutput.tokenUsage);
-          if (rescueOutput.tokenUsage) {
-            reviserTokenUsage = params.addUsage(
-              reviserTokenUsage ?? { promptTokens: 0, completionTokens: 0, totalTokens: 0 },
-              rescueOutput.tokenUsage,
-            );
-          }
-          const rescuedContent = params.normalizePostWriteSurface?.(rescueOutput.revisedContent)
-            ?? rescueOutput.revisedContent;
-          if (!rescuedContent || rescuedContent === rescueBaseContent) {
-            revisionRejectionReason = "length rescue produced no new content";
-            break;
-          }
-          revisedContent = rescuedContent;
-          revisionCandidateProduced = revisedContent !== finalContent;
-          revisionCandidateIdentity = {
-            candidateContentHash: computeChapterContentHash(revisedContent),
-            candidateWordCount: countChapterLength(revisedContent, params.lengthSpec.countingMode),
-          };
-          candidateWordCount = revisionCandidateIdentity.candidateWordCount;
-          candidateInHardRange = !isOutsideHardRange(candidateWordCount, params.lengthSpec);
-          if (!candidateInHardRange) {
-            revisionRejectionReason = `length rescue remains outside the hard length range (${candidateWordCount})`;
-            await params.retainRejectedCandidate?.({
-              content: revisedContent,
-              contentHash: revisionCandidateIdentity.candidateContentHash,
-              wordCount: candidateWordCount,
-              reason: revisionRejectionReason,
-            });
-            break;
-          }
-        } else {
-          break;
-        }
+        break;
       }
       let candidateSettlement: RevisionCandidateSettlement = { valid: true };
       if (params.settleRevisionCandidate) {
@@ -637,6 +658,13 @@ export async function runChapterReviewCycle(params: {
           contentHash: revisionCandidateIdentity?.candidateContentHash ?? computeChapterContentHash(revisedContent),
           wordCount: countChapterLength(revisedContent, params.lengthSpec.countingMode),
           reason: revisionRejectionReason,
+          rejectionEvidence: candidateSettlement.rejectionEvidence
+            ?? buildCandidateRejectionEvidence({
+              rejectionCode: "state-validation-failed",
+              ownerClass: "STATE_SETTLEMENT",
+              findings: candidateSettlement.stateFindings ?? [],
+              fallbackDescription: revisionRejectionReason,
+            }),
         });
         break;
       }
@@ -691,6 +719,12 @@ export async function runChapterReviewCycle(params: {
         contentHash: revisionCandidateIdentity.candidateContentHash,
         wordCount: revisedWordCount,
         reason: revisionRejectionReason,
+        rejectionEvidence: buildCandidateRejectionEvidence({
+          rejectionCode: "audit-failed",
+          ownerClass: "AUDIT",
+          findings: nextAssessment.auditResult.issues,
+          fallbackDescription: revisionRejectionReason,
+        }),
       });
       break;
     }
@@ -709,5 +743,6 @@ export async function runChapterReviewCycle(params: {
     auditRuns: buildAuditRuns(),
     ...(reviserTokenUsage ? { reviserTokenUsage } : {}),
     ...(auditorTokenUsage ? { auditorTokenUsage } : {}),
+    ...(localRepair ? { localRepair } : {}),
   };
 }

@@ -90,8 +90,14 @@ import {
   retrySettlementAfterValidationFailure,
 } from "./chapter-state-recovery.js";
 import { persistChapterArtifacts } from "./chapter-persistence.js";
-import { runChapterReviewCycle } from "./chapter-review-cycle.js";
+import { runChapterReviewCycle, type ChapterReviewCycleResult } from "./chapter-review-cycle.js";
 import { validateChapterTruthPersistence } from "./chapter-truth-validation.js";
+import {
+  buildCandidateRejectionEvidence,
+  loadLatestCandidateRejectionEvidence,
+  renderCandidateRecoveryGuidance,
+  serializeRetainedCandidateMetadata,
+} from "./candidate-rejection-evidence.js";
 import { loadPersistedPlan, relativeToBookDir, savePersistedPlan } from "./persisted-governed-plan.js";
 import { selectBookReferenceContext } from "../references/reference-context.js";
 import type { ActivatedSkillGuidance } from "../agent/skill-tool.js";
@@ -108,6 +114,13 @@ import {
   WritingLanguagePreflightError,
   type LongFictionOperation,
 } from "../state/writing-language-preflight.js";
+import {
+  createProviderCallCollector,
+  runWithProviderCallStage,
+  runWithProviderCallTelemetry,
+  snapshotProviderCallTelemetry,
+  type ProviderCallTelemetry,
+} from "../llm/provider-call-telemetry.js";
 
 const SEQUENCE_LEVEL_CATEGORIES = new Set([
   "Pacing Monotony", "节奏单调",
@@ -343,6 +356,8 @@ export interface ChapterPipelineResult {
   readonly contextTrace?: ChapterContextTraceSummary;
   readonly tokenUsageByAgent?: ChapterTrace["tokenUsageByAgent"];
   readonly tokenUsageBySource?: ChapterTrace["tokenUsageBySource"];
+  readonly localRepair?: ChapterReviewCycleResult["localRepair"];
+  readonly providerCallTelemetry?: ProviderCallTelemetry;
 }
 
 export interface WriteChaptersOptions {
@@ -2863,16 +2878,18 @@ export class PipelineRunner {
     try {
       const lockedBook = await this.state.loadBookConfig(bookId);
       const lockedProfile = await this.preflightBook(lockedBook, "write");
-      return await this.runWithWritingProfile(
-        lockedProfile,
-        () => this._writeNextChapterLocked(
-          lockedBook,
+      const providerCalls = createProviderCallCollector();
+      return await runWithProviderCallTelemetry(providerCalls, () =>
+        this.runWithWritingProfile(
           lockedProfile,
-          wordCount,
-          temperatureOverride,
-          externalContext ?? this.config.externalContext,
-        ),
-      );
+          () => this._writeNextChapterLocked(
+            lockedBook,
+            lockedProfile,
+            wordCount,
+            temperatureOverride,
+            externalContext ?? this.config.externalContext,
+          ),
+        ));
     } finally {
       await releaseLock();
     }
@@ -3204,7 +3221,7 @@ export class PipelineRunner {
     // 1. Write chapter
     const writer = new WriterAgent(this.agentCtxFor("writer", bookId));
     this.logStage(stageLanguage, { zh: "撰写章节草稿", en: "writing chapter draft" });
-    const output = await writer.writeChapter({
+    const output = await runWithProviderCallStage("writer-draft", () => writer.writeChapter({
       book,
       bookDir,
       chapterNumber,
@@ -3212,7 +3229,7 @@ export class PipelineRunner {
       lengthSpec,
       ...(wordCount ? { wordCountOverride: wordCount } : {}),
       ...(temperatureOverride ? { temperatureOverride } : {}),
-    });
+    }));
     this.throwIfOperationAborted();
     const writerCount = countChapterLength(output.content, lengthSpec.countingMode);
     const storyDir = join(bookDir, "story");
@@ -3225,6 +3242,116 @@ export class PipelineRunner {
       readFile(join(storyDir, "chapter_summaries.md"), "utf-8").catch(() => ""),
     ]);
 
+    // Vietnamese writing receives an early in-memory typed-truth gate before
+    // its single prose-revision budget is spent. Keep the legacy zh/en order
+    // unchanged: this feature is intentionally scoped to the Vietnamese lane.
+    let initialTruthValidation: Awaited<ReturnType<typeof validateChapterTruthPersistence>> | undefined;
+    let initialStateFindings: ReadonlyArray<AuditIssue> = [];
+    let initialTruthFileOverrides:
+      | { readonly currentState: string; readonly ledger?: string; readonly hooks: string }
+      | undefined;
+    if (writingLanguage === "vi") {
+      const initialPromotedOutput = await this.promotePersistenceHooks(
+        bookDir,
+        chapterNumber,
+        output,
+        pipelineLang,
+      );
+      initialTruthValidation = await runWithProviderCallStage(
+        "initial-state-validation",
+        () => validateChapterTruthPersistence({
+        writer,
+        validator: new StateValidatorAgent(this.agentCtxFor("state-validator", bookId)),
+        book,
+        bookDir,
+        chapterNumber,
+        title: initialPromotedOutput.title,
+        content: output.content,
+        persistenceOutput: initialPromotedOutput,
+        auditResult: {
+          passed: false,
+          decision: "inconclusive",
+          issues: [],
+          summary: "initial typed truth validation",
+          contentHash: computeChapterContentHash(output.content),
+        },
+        previousTruth: { oldState, oldHooks, oldLedger },
+        authorityContext: {
+          storyFrame: authorityStoryFrame,
+          bookRules: authorityBookRules,
+          chapterSummaries: authorityChapterSummaries,
+        },
+        expectedHookOps: writeInput.chapterIntentData?.expectedHookOps,
+        acceptanceCriteria: writeInput.chapterIntentData?.acceptanceCriteria,
+        normalizeSettledOutput: (settledOutput) => this.promotePersistenceHooks(
+          bookDir,
+          chapterNumber,
+          settledOutput,
+          pipelineLang,
+        ),
+        reducedControlInput,
+        language: pipelineLang,
+        logWarn: (message) => this.logWarn(pipelineLang, message),
+          logger: this.config.logger,
+        }),
+      );
+      const initialContentHash = computeChapterContentHash(output.content);
+      const initialHookFindings = writeInput.chapterIntentData?.expectedHookOps
+        ? validateExpectedHookOps({
+            expected: writeInput.chapterIntentData.expectedHookOps,
+            actual: initialTruthValidation.persistenceOutput.runtimeStateDelta?.hookOps
+              ?? { upsert: [], mention: [], resolve: [], defer: [] },
+            runtimeHooks: initialTruthValidation.persistenceOutput.runtimeStateSnapshot?.hooks.hooks ?? [],
+            acceptanceCriteria: writeInput.chapterIntentData.acceptanceCriteria ?? [],
+            contentHash: initialContentHash,
+          })
+        : [];
+      const hookFindingKeys = new Set(initialHookFindings.map(
+        (issue) => `${issue.category}\u0000${issue.description}`,
+      ));
+      const initialValidationWarnings: ReadonlyArray<AuditIssue> = initialTruthValidation.validation.warnings
+        .filter((warning) => !hookFindingKeys.has(`${warning.category}\u0000${warning.description}`))
+        .filter((warning) => !initialTruthValidation?.governedHookFindings.some(
+          (finding) => finding.category === warning.category && finding.description === warning.description,
+        ))
+        .map((warning) => ({
+          severity: "warning" as const,
+          category: warning.category,
+          description: warning.description,
+          suggestion: "Review and repair the typed runtime settlement before accepting this chapter.",
+          source: "state" as const,
+          verification: "unverified" as const,
+          evidence: { contentHash: initialContentHash, stateRef: "initial-truth-validation" },
+          repairTarget: "runtime-state" as const,
+        }));
+      initialStateFindings = [
+        ...initialTruthValidation.governedHookFindings,
+        ...initialHookFindings,
+        ...initialValidationWarnings,
+        ...initialTruthValidation.degradedIssues.map((issue) => ({
+          ...issue,
+          source: "state" as const,
+          verification: issue.verification ?? "unverified" as const,
+          evidence: {
+            ...issue.evidence,
+            contentHash: initialContentHash,
+            stateRef: issue.evidence?.stateRef ?? "initial-truth-validation",
+          },
+          repairTarget: issue.repairTarget ?? "runtime-state" as const,
+        })),
+      ].filter((issue, index, findings) => {
+        const key = `${issue.category}\u0000${issue.description}`;
+        return findings.findIndex(
+          (candidate) => `${candidate.category}\u0000${candidate.description}` === key,
+        ) === index;
+      });
+      initialTruthFileOverrides = {
+        currentState: initialTruthValidation.persistenceOutput.updatedState,
+        ledger: initialTruthValidation.persistenceOutput.updatedLedger || undefined,
+        hooks: initialTruthValidation.persistenceOutput.updatedHooks,
+      };
+    }
+
     // Token usage accumulator
     let totalUsage: TokenUsageSummary = output.tokenUsage ?? { promptTokens: 0, completionTokens: 0, totalTokens: 0 };
     let finalContent: string;
@@ -3233,6 +3360,7 @@ export class PipelineRunner {
     let auditResult: AuditResult;
     let postReviseCount: number;
     let repairApplied: boolean;
+    let localRepair: ChapterReviewCycleResult["localRepair"];
     let auditRunWrites: ReadonlyArray<AtomicFileWrite> = [];
     let auditRuns: ReadonlyArray<AuditRunV1> = [];
     let settledRevisionCandidate: WriteChapterOutput | undefined;
@@ -3254,6 +3382,8 @@ export class PipelineRunner {
         reducedControlInput,
         lengthSpec,
         initialUsage: totalUsage,
+        initialStateFindings,
+        initialTruthFileOverrides,
         createReviser: () => new ReviserAgent(this.agentCtxFor("reviser", bookId)),
         auditor,
         normalizePostWriteSurface: (chapterContent) =>
@@ -3299,18 +3429,39 @@ export class PipelineRunner {
         autoRevisionAllowed: !manualReview,
         operationId: auditIdentity?.operationId,
         attemptId: auditIdentity?.attemptId,
-        settleRevisionCandidate: async (normalizedContent) => {
+        settleRevisionCandidate: async (normalizedContent, reviseOutput) => {
           try {
-            const settled = await this.buildPersistenceOutput(
-              bookId,
-              book,
-              bookDir,
-              chapterNumber,
-              output,
-              normalizedContent,
-              lengthSpec.countingMode,
-              reducedControlInput,
-            );
+            if (reviseOutput.repairKind === "deterministic-exact" && !initialTruthValidation) {
+              return {
+                valid: false,
+                rejectionReason: "initial typed settlement is unavailable for exact repair reuse",
+                rejectionEvidence: buildCandidateRejectionEvidence({
+                  rejectionCode: "state-validation-failed",
+                  ownerClass: "STATE_SETTLEMENT",
+                  findings: [],
+                  fallbackDescription: "Initial typed settlement is unavailable for exact repair reuse.",
+                }),
+              };
+            }
+            const settled = reviseOutput.repairKind === "deterministic-exact"
+              ? {
+                  ...initialTruthValidation!.persistenceOutput,
+                  content: normalizedContent,
+                  wordCount: countChapterLength(normalizedContent, lengthSpec.countingMode),
+                }
+              : await runWithProviderCallStage(
+                  "candidate-settlement",
+                  () => this.buildPersistenceOutput(
+                    bookId,
+                    book,
+                    bookDir,
+                    chapterNumber,
+                    output,
+                    normalizedContent,
+                    lengthSpec.countingMode,
+                    reducedControlInput,
+                  ),
+                );
             const promoted = await this.promotePersistenceHooks(
               bookDir,
               chapterNumber,
@@ -3323,10 +3474,21 @@ export class PipelineRunner {
             if (!surfaceValid) {
               settledRevisionCandidate = undefined;
               settledRevisionCandidateValidated = false;
-              return { valid: false, rejectionReason: "candidate settlement output is incomplete" };
+              return {
+                valid: false,
+                rejectionReason: "candidate settlement output is incomplete",
+                rejectionEvidence: buildCandidateRejectionEvidence({
+                  rejectionCode: "state-validation-failed",
+                  ownerClass: "STATE_SETTLEMENT",
+                  findings: [],
+                  fallbackDescription: "Candidate settlement output is incomplete.",
+                }),
+              };
             }
             const validator = new StateValidatorAgent(this.agentCtxFor("state-validator", bookId));
-            const validation = await validateChapterTruthPersistence({
+            const validation = await runWithProviderCallStage(
+              "candidate-settlement",
+              () => validateChapterTruthPersistence({
               writer,
               validator,
               book,
@@ -3359,8 +3521,9 @@ export class PipelineRunner {
               reducedControlInput,
               language: pipelineLang,
               logWarn: (message) => this.logWarn(pipelineLang, message),
-              logger: this.config.logger,
-            });
+                logger: this.config.logger,
+              }),
+            );
             const valid = validation.chapterStatus === null
               && validation.validation.passed
               && !validation.validation.repairRequired;
@@ -3376,6 +3539,21 @@ export class PipelineRunner {
                 contentHash: computeChapterContentHash(validation.persistenceOutput.content),
               })
               : [];
+            const rejectionFindings = [
+              ...validation.governedHookFindings,
+              ...validation.degradedIssues,
+              ...validation.validation.warnings.map((warning) => ({
+                severity: "critical" as const,
+                category: warning.category,
+                description: warning.description,
+                suggestion: "Repair the typed candidate settlement.",
+                source: "state" as const,
+                repairTarget: "runtime-state" as const,
+              })),
+            ];
+            const providerUnavailable = validation.chapterStatus === "state-degraded"
+              && validation.degradedIssues.some((issue) => issue.category === "state-validation");
+            const hookContractFailed = validation.governedHookFindings.length > 0;
             return valid
               ? {
                   valid: true,
@@ -3386,15 +3564,45 @@ export class PipelineRunner {
                     hooks: validation.persistenceOutput.updatedHooks,
                   },
                 }
-              : { valid: false, rejectionReason: "candidate state validation failed or degraded" };
+              : {
+                  valid: false,
+                  rejectionReason: rejectionFindings[0]?.description
+                    ?? "candidate state validation failed or degraded",
+                  stateFindings: rejectionFindings,
+                  rejectionEvidence: buildCandidateRejectionEvidence({
+                    rejectionCode: providerUnavailable
+                      ? "provider-unavailable"
+                      : hookContractFailed ? "hook-contract-failed" : "state-validation-failed",
+                    ownerClass: providerUnavailable
+                      ? "PROVIDER"
+                      : "STATE_SETTLEMENT",
+                    findings: rejectionFindings,
+                    fallbackDescription: "Candidate state validation failed or degraded.",
+                  }),
+                };
           } catch (error) {
             this.config.logger?.warn(`Revision candidate settlement failed: ${String(error)}`);
             settledRevisionCandidate = undefined;
             settledRevisionCandidateValidated = false;
-            return { valid: false, rejectionReason: `candidate state validation unavailable: ${String(error)}` };
+            return {
+              valid: false,
+              rejectionReason: "candidate state validation unavailable",
+              rejectionEvidence: buildCandidateRejectionEvidence({
+                rejectionCode: "provider-unavailable",
+                ownerClass: "PROVIDER",
+                findings: [],
+                fallbackDescription: "Candidate state validation is unavailable.",
+              }),
+            };
           }
         },
-        retainRejectedCandidate: async ({ content, contentHash, wordCount, reason }) => {
+        retainRejectedCandidate: async ({
+          content,
+          contentHash,
+          wordCount,
+          reason,
+          rejectionEvidence,
+        }) => {
           if (writingLanguage !== "vi") return;
           const candidateDir = join(bookDir, "story", "audit-candidates", `chapter-${String(chapterNumber).padStart(4, "0")}`);
           await mkdir(candidateDir, { recursive: true });
@@ -3402,14 +3610,15 @@ export class PipelineRunner {
           const attemptId = auditIdentity?.attemptId ?? randomUUID();
           const stamp = `${attemptId}-${contentHash.slice(0, 12)}`;
           await writeFile(join(candidateDir, `${stamp}.md`), content, "utf-8");
-          await writeFile(join(candidateDir, `${stamp}.json`), JSON.stringify({
+          await writeFile(join(candidateDir, `${stamp}.json`), serializeRetainedCandidateMetadata({
             operationId,
             attemptId,
             chapterNumber,
             contentHash,
             wordCount,
             reason,
-          }, null, 2) + "\n", "utf-8");
+            rejectionEvidence,
+          }), "utf-8");
         },
         logWarn: (message) => this.logWarn(pipelineLang, message),
         logStage: (message) => this.logStage(stageLanguage, message),
@@ -3421,6 +3630,7 @@ export class PipelineRunner {
       auditResult = reviewResult.auditResult;
       postReviseCount = reviewResult.postReviseCount;
       repairApplied = reviewResult.repairApplied;
+      localRepair = reviewResult.localRepair;
       auditRuns = reviewResult.auditRuns ?? [];
       tokenUsageByAgent = {
         ...tokenUsageByAgent,
@@ -3442,8 +3652,14 @@ export class PipelineRunner {
       pipelineLang,
       { content: finalContent },
     );
+    const reusableInitialTruth = finalContent === output.content
+      ? initialTruthValidation
+      : undefined;
+    const reusesInitialTruth = reusableInitialTruth !== undefined;
     let persistenceOutput = settledRevisionCandidate?.content === finalContent
       ? settledRevisionCandidate
+      : reusesInitialTruth
+        ? reusableInitialTruth.persistenceOutput
       : await this.buildPersistenceOutput(
           bookId,
           book,
@@ -3468,9 +3684,11 @@ export class PipelineRunner {
         title: finalTitleResolution.title,
       };
     }
-    const acceptedValidatedSettlement = settledRevisionCandidateValidated
-      && settledRevisionCandidate?.content === finalContent;
-    if (!acceptedValidatedSettlement) {
+    const hasReusableTruthSettlement = (
+      settledRevisionCandidateValidated
+      && settledRevisionCandidate?.content === finalContent
+    ) || reusesInitialTruth;
+    if (!hasReusableTruthSettlement) {
       persistenceOutput = await this.promotePersistenceHooks(
         bookDir,
         chapterNumber,
@@ -3535,9 +3753,11 @@ export class PipelineRunner {
 
     // 4.1 Validate settler output before writing
     this.logStage(stageLanguage, { zh: "校验真相文件变更", en: "validating truth file updates" });
-    let chapterStatus: ChapterPipelineResult["status"] | null = null;
-    let degradedIssues: ReadonlyArray<AuditIssue> = [];
-    if (!acceptedValidatedSettlement) {
+    let chapterStatus: ChapterPipelineResult["status"] | null =
+      reusableInitialTruth?.chapterStatus ?? null;
+    let degradedIssues: ReadonlyArray<AuditIssue> =
+      reusableInitialTruth?.degradedIssues ?? [];
+    if (!hasReusableTruthSettlement) {
       const validator = new StateValidatorAgent(this.agentCtxFor("state-validator", bookId));
       const truthValidation = await validateChapterTruthPersistence({
         writer,
@@ -3579,7 +3799,8 @@ export class PipelineRunner {
       const stateEvidenceIssues: ReadonlyArray<AuditIssue> = degradedIssues.map((issue) => ({
         ...issue,
         source: "state" as const,
-        verification: validationUnavailable ? "unverified" as const : "verified" as const,
+        verification: issue.verification
+          ?? (/unavailable|不可用/iu.test(issue.description) ? "unverified" as const : "verified" as const),
         evidence: {
           ...issue.evidence,
           contentHash,
@@ -3688,6 +3909,8 @@ export class PipelineRunner {
       tokenUsage: totalUsage,
       tokenUsageByAgent,
       tokenUsageBySource: writeInput.contextTrace?.tokenUsageBySource,
+      localRepair,
+      providerCallTelemetry: snapshotProviderCallTelemetry(),
       loadChapterIndex: () => this.state.loadChapterIndex(bookId),
       prepareCanonicalFiles: () => writer.prepareChapterFileSet(
         bookDir,
@@ -3776,6 +3999,8 @@ export class PipelineRunner {
       } : {}),
       tokenUsageByAgent,
       tokenUsageBySource: writeInput.contextTrace?.tokenUsageBySource,
+      localRepair,
+      providerCallTelemetry: snapshotProviderCallTelemetry(),
     };
   }
 
@@ -4762,11 +4987,19 @@ ${matrix}`,
   ): Promise<Pick<WriteChapterInput, "externalContext" | "chapterIntent" | "chapterMemo" | "chapterIntentData" | "contextPackage" | "ruleStack"> & {
     readonly contextTrace?: ChapterContextTraceSummary;
   }> {
+    const retainedRecovery = book.language === "vi"
+      ? await loadLatestCandidateRejectionEvidence(bookDir, chapterNumber)
+      : null;
+    const plannerContext = retainedRecovery
+      ? [externalContext?.trim(), renderCandidateRecoveryGuidance(retainedRecovery)]
+          .filter((part): part is string => Boolean(part))
+          .join("\n\n")
+      : externalContext;
     const { plan, composed } = await this.createGovernedArtifacts(
       book,
       bookDir,
       chapterNumber,
-      externalContext,
+      plannerContext,
       { reuseExistingIntentWhenContextMissing: true },
     );
 
@@ -5397,7 +5630,15 @@ ${matrix}`,
       (!externalContext || externalContext.trim().length === 0)
     ) {
       const persisted = await loadPersistedPlan(bookDir, chapterNumber);
-      if (persisted) return persisted;
+      if (persisted?.intent.expectedHookContract) {
+        const memorySeed = await loadNarrativeMemorySeed(bookDir).catch(() => undefined);
+        if (memorySeed) {
+          const current = await loadPersistedPlan(bookDir, chapterNumber, memorySeed.hooks);
+          if (current) return current;
+        }
+      } else if (persisted) {
+        return persisted;
+      }
     }
 
     const planner = new PlannerAgent(this.agentCtxFor("planner", book.id));

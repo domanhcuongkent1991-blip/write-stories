@@ -6,7 +6,8 @@ import type { LengthSpec } from "../models/length-governance.js";
 import type { ScaffoldLanguage, WritingLanguage } from "../models/writing-language.js";
 import { buildLengthSpec } from "../utils/length-metrics.js";
 import {
-  acceptanceCriteriaFromHookOps,
+  acceptanceCriteriaFromHookContractV2,
+  bindExpectedHookOperationsV2,
   hookOpsFromLedger,
   parseHookLedger,
 } from "../utils/hook-ledger-validator.js";
@@ -46,6 +47,13 @@ import {
   readSubplotBoard,
 } from "./planner-context.js";
 import type { StoredHook } from "../state/memory-db.js";
+import {
+  HookResolvePreflightAgent,
+  HookResolvePreflightError,
+  type HookResolvePreflightOutput,
+  type HookResolvePreflightResult,
+} from "./hook-resolve-preflight.js";
+import type { HookOperationIntentV2 } from "../models/hook-operation-intent.js";
 
 export interface PlanChapterInput {
   readonly book: BookConfig;
@@ -64,6 +72,41 @@ export interface PlanChapterOutput {
 }
 
 const MEMO_RETRY_LIMIT = 3;
+
+interface MemoGenerationPolicy {
+  readonly parseAttemptLimit: number;
+  readonly allowFallback: boolean;
+  readonly semanticCorrectionFeedback?: string;
+}
+
+function addTokenUsage(left?: TokenUsage, right?: TokenUsage): TokenUsage | undefined {
+  if (!left) return right;
+  if (!right) return left;
+  return {
+    promptTokens: left.promptTokens + right.promptTokens,
+    completionTokens: left.completionTokens + right.completionTokens,
+    totalTokens: left.totalTokens + right.totalTokens,
+  };
+}
+
+function buildSemanticCorrectionFeedback(
+  contract: HookOperationIntentV2,
+  preflight: HookResolvePreflightOutput,
+): string {
+  const operations = new Map(contract.operations.map((operation) => [operation.hookId, operation] as const));
+  const failures = preflight.results.filter((result): result is Extract<HookResolvePreflightResult, { decision: "repair-required" }> =>
+    result.decision === "repair-required");
+  return failures.map((failure) => {
+    const operation = operations.get(failure.hookId);
+    return [
+      `Hook ID: ${failure.hookId}`,
+      `Canonical expected payoff: ${operation?.canonicalExpectedPayoff ?? "(missing canonical payoff)"}`,
+      `Failure code: ${failure.code}`,
+      `Failure: ${failure.description}`,
+      "Correct the ledger once: remove this resolve or replace it only with a hook whose canonical payoff the planned evidence explicitly satisfies. Do not invent the payoff.",
+    ].join("\n");
+  }).join("\n\n");
+}
 
 /**
  * Phase 3 planner.
@@ -157,7 +200,7 @@ export class PlannerAgent extends BaseAgent {
       input.book.chapterWordCount,
       writingLanguage,
     );
-    const memoResult = await this.planChapterMemoWithUsage({
+    const memoInput = {
       storyDir,
       bookDir: input.bookDir,
       chapterNumber: input.chapterNumber,
@@ -175,15 +218,80 @@ export class PlannerAgent extends BaseAgent {
       // for English books instead of always-Chinese.
       language: scaffoldLanguage,
       lengthSpec,
+    } as const;
+    let memoResult = await this.planChapterMemoWithUsage(memoInput);
+    let memo = memoResult.memo;
+    let expectedHookContract = bindExpectedHookOperationsV2(memo.body, {
+      activeHooks: authoritativeMemoHooks,
+      chapterNumber: input.chapterNumber,
     });
 
-    const memo = memoResult.memo;
+    if (writingLanguage === "vi" && expectedHookContract.operations.some((operation) => operation.action === "resolve")) {
+      const preflight = new HookResolvePreflightAgent(this.ctx);
+      const firstPreflight = await preflight.validate({
+        contract: expectedHookContract,
+        chapterGoal: memo.goal,
+      });
+      memoResult = {
+        ...memoResult,
+        tokenUsage: addTokenUsage(memoResult.tokenUsage, firstPreflight.tokenUsage),
+      };
+      const firstFailure = firstPreflight.results.find((result) => result.decision !== "pass");
+      if (firstFailure?.decision === "inconclusive") {
+        throw new HookResolvePreflightError(
+          "INCONCLUSIVE_PROVIDER",
+          `planner contract preflight inconclusive for ${firstFailure.hookId}: ${firstFailure.description}`,
+        );
+      }
+      if (firstFailure?.decision === "repair-required") {
+        const feedback = buildSemanticCorrectionFeedback(expectedHookContract, firstPreflight);
+        let correctedMemoResult: { memo: ChapterMemo; tokenUsage?: TokenUsage };
+        try {
+          correctedMemoResult = await this.planChapterMemoWithUsage(memoInput, {
+            parseAttemptLimit: 1,
+            allowFallback: false,
+            semanticCorrectionFeedback: feedback,
+          });
+        } catch (error) {
+          throw new HookResolvePreflightError(
+            "PLANNER_CONTRACT_INVALID",
+            `semantic correction parse failed: ${error instanceof Error ? error.message : String(error)}`,
+            { cause: error },
+          );
+        }
+        memo = correctedMemoResult.memo;
+        expectedHookContract = bindExpectedHookOperationsV2(memo.body, {
+          activeHooks: authoritativeMemoHooks,
+          chapterNumber: input.chapterNumber,
+        });
+        const secondPreflight = await preflight.validate({
+          contract: expectedHookContract,
+          chapterGoal: memo.goal,
+        });
+        memoResult = {
+          memo,
+          tokenUsage: addTokenUsage(
+            addTokenUsage(memoResult.tokenUsage, correctedMemoResult.tokenUsage),
+            secondPreflight.tokenUsage,
+          ),
+        };
+        const secondFailure = secondPreflight.results.find((result) => result.decision !== "pass");
+        if (secondFailure) {
+          throw new HookResolvePreflightError(
+            secondFailure.decision === "inconclusive" ? "INCONCLUSIVE_PROVIDER" : "PLANNER_CONTRACT_INVALID",
+            `planner contract is still invalid for ${secondFailure.hookId}: ${secondFailure.description}`,
+          );
+        }
+      }
+    }
+
+    intent.expectedHookContract = expectedHookContract;
     intent.expectedHookOps = hookOpsFromLedger(memo.body, {
       activeHooks: authoritativeMemoHooks,
       chapterNumber: input.chapterNumber,
     });
-    intent.acceptanceCriteria = acceptanceCriteriaFromHookOps(
-      intent.expectedHookOps,
+    intent.acceptanceCriteria = acceptanceCriteriaFromHookContractV2(
+      expectedHookContract,
       scaffoldLanguage,
     );
     intent.pacingCode = pacingCodeFromMemo(memo.body);
@@ -254,6 +362,9 @@ export class PlannerAgent extends BaseAgent {
     readonly authoritativeActiveHooks?: ReadonlyArray<StoredHook>;
     readonly language?: ScaffoldLanguage;
     readonly lengthSpec: LengthSpec;
+  }, policy: MemoGenerationPolicy = {
+    parseAttemptLimit: MEMO_RETRY_LIMIT,
+    allowFallback: true,
   }): Promise<{ memo: ChapterMemo; tokenUsage?: TokenUsage }> {
     const [characterMatrix, subplotBoard, emotionalArcs, bookRulesRaw] = await Promise.all([
       readCharacterMatrix(input.storyDir),
@@ -313,11 +424,13 @@ export class PlannerAgent extends BaseAgent {
 
     const systemPrompt = getPlannerMemoSystemPrompt(language);
 
-    let currentUserMessage = userMessage;
+    let currentUserMessage = policy.semanticCorrectionFeedback
+      ? `${userMessage}\n\n## Governed hook-contract correction\n${policy.semanticCorrectionFeedback}`
+      : userMessage;
     let lastError: PlannerParseError | undefined;
     let tokenUsage: TokenUsage | undefined;
 
-    for (let attempt = 0; attempt < MEMO_RETRY_LIMIT; attempt += 1) {
+    for (let attempt = 0; attempt < policy.parseAttemptLimit; attempt += 1) {
       const response = await this.chat(
         [
           { role: "system", content: systemPrompt },
@@ -342,13 +455,14 @@ export class PlannerAgent extends BaseAgent {
           throw error;
         }
         lastError = error;
-        this.log?.warn(`[planner] memo parse failed (attempt ${attempt + 1}/${MEMO_RETRY_LIMIT}): ${error.message}`);
-        currentUserMessage = `${userMessage}\n\n${retryFeedbackHeader}\n${error.message}\n${retryFeedbackTrailer}`;
+        this.log?.warn(`[planner] memo parse failed (attempt ${attempt + 1}/${policy.parseAttemptLimit}): ${error.message}`);
+        currentUserMessage = `${userMessage}${policy.semanticCorrectionFeedback ? `\n\n## Governed hook-contract correction\n${policy.semanticCorrectionFeedback}` : ""}\n\n${retryFeedbackHeader}\n${error.message}\n${retryFeedbackTrailer}`;
       }
     }
 
     const fallbackError = lastError ?? new PlannerParseError("memo planner exhausted retries without a specific error");
-    this.log?.warn(`[planner] memo planner fell back after ${MEMO_RETRY_LIMIT} attempts: ${fallbackError.message}`);
+    if (!policy.allowFallback) throw fallbackError;
+    this.log?.warn(`[planner] memo planner fell back after ${policy.parseAttemptLimit} attempts: ${fallbackError.message}`);
     return { memo: parseMemo(
       this.buildFallbackMemoMarkdown({
         chapterNumber: input.chapterNumber,

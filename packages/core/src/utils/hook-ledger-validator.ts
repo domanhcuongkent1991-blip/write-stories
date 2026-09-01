@@ -1,6 +1,14 @@
 import type { AuditIssue } from "../agents/continuity.js";
 import { HookRecordSchema, type HookOps, type HookRecord } from "../models/runtime-state.js";
 import type { StoredHook } from "../state/memory-db.js";
+import {
+  HookOperationContractError,
+  HookOperationIntentV2Schema,
+  assertHookContractCurrent,
+  hashCanonicalHookPayoff,
+  type ExpectedHookOperationAction,
+  type HookOperationIntentV2,
+} from "../models/hook-operation-intent.js";
 import { normalizeHookPayoffTiming } from "./hook-lifecycle.js";
 
 /**
@@ -196,7 +204,7 @@ export function hookOpsFromLedger(
     }
   }
   return {
-    upsert: dedupeById(ledger.advance).map((entry) => toAdvancingHookRecord(
+    upsert: dedupeById([...ledger.open, ...ledger.advance]).map((entry) => toAdvancingHookRecord(
       knownHooks.get(entry.id)!,
       options!.chapterNumber,
     )),
@@ -204,6 +212,54 @@ export function hookOpsFromLedger(
     resolve: dedupeById(ledger.resolve).map((entry) => entry.id),
     defer: dedupeById(ledger.defer).map((entry) => entry.id),
   };
+}
+
+export function bindExpectedHookOperationsV2(
+  memoBody: string,
+  options: HookOpsFromLedgerOptions,
+): HookOperationIntentV2 {
+  const ledger = parseHookLedger(memoBody);
+  const knownHooks = new Map(options.activeHooks.map((hook) => [hook.hookId, hook] as const));
+  const entries: Array<{ readonly action: ExpectedHookOperationAction; readonly entry: HookLedgerEntry }> = [
+    ...ledger.open.map((entry) => ({ action: "advance" as const, entry })),
+    ...ledger.advance.map((entry) => ({ action: "advance" as const, entry })),
+    ...ledger.resolve.map((entry) => ({ action: "resolve" as const, entry })),
+    ...ledger.defer.map((entry) => ({ action: "defer" as const, entry })),
+  ];
+  const seen = new Map<string, ExpectedHookOperationAction>();
+
+  const operations = entries.map(({ action, entry }) => {
+    const previousAction = seen.get(entry.id);
+    if (previousAction !== undefined) {
+      const kind = previousAction === action ? "duplicate" : "contradictory";
+      throw new HookOperationContractError(
+        `${kind} hook operation for ${entry.id}: ${previousAction} and ${action}`,
+      );
+    }
+    seen.set(entry.id, action);
+
+    const hook = knownHooks.get(entry.id);
+    if (!hook) {
+      throw new HookOperationContractError(`unknown stable hook ID ${entry.id}`);
+    }
+    if (action === "resolve" && entry.descriptor.trim().length === 0) {
+      throw new HookOperationContractError(
+        `resolve operation ${entry.id} requires planned evidence`,
+      );
+    }
+
+    return {
+      hookId: entry.id,
+      action,
+      canonicalPayoffHash: hashCanonicalHookPayoff(entry.id, hook.expectedPayoff ?? ""),
+      canonicalExpectedPayoff: hook.expectedPayoff ?? "",
+      plannedEvidence: entry.descriptor,
+    };
+  });
+
+  const contract = HookOperationIntentV2Schema.parse({ schemaVersion: 2, operations });
+  assertHookContractCurrent(contract, options.activeHooks);
+  return contract;
 }
 
 export function acceptanceCriteriaFromHookOps(
@@ -227,6 +283,25 @@ export function acceptanceCriteriaFromHookOps(
       ? `Hook ${hookId} is ${actionLabel.defer} in runtime truth.`
       : `伏笔 ${hookId} 必须${actionLabel.defer}。`),
   ];
+}
+
+export function acceptanceCriteriaFromHookContractV2(
+  contract: HookOperationIntentV2,
+  language: "zh" | "en",
+): string[] {
+  return contract.operations.map((operation) => {
+    const canonical = operation.canonicalExpectedPayoff.trim();
+    if (language === "en") {
+      if (operation.action === "resolve") {
+        return `Hook ${operation.hookId} resolves only when chapter evidence satisfies the canonical payoff: ${canonical}`;
+      }
+      return `Hook ${operation.hookId} performs the governed ${operation.action} operation without contradicting its canonical payoff${canonical ? `: ${canonical}` : "."}`;
+    }
+    if (operation.action === "resolve") {
+      return `伏笔 ${operation.hookId} 只有在正文证据兑现权威回收目标时才能回收：${canonical}`;
+    }
+    return `伏笔 ${operation.hookId} 必须执行受治理的 ${operation.action} 操作，且不得违背权威回收目标${canonical ? `：${canonical}` : "。"}`;
+  });
 }
 
 function toAdvancingHookRecord(hook: StoredHook, chapterNumber: number): HookRecord {

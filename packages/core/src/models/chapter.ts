@@ -1,6 +1,8 @@
 import { z } from "zod";
 import { LengthTelemetrySchema } from "./length-governance.js";
 import { TokenUsageSchema } from "./input-governance.js";
+import { LocalRepairTelemetrySchema } from "../utils/vietnamese-local-repair.js";
+import { ProviderCallTelemetrySchema } from "../llm/provider-call-telemetry.js";
 
 export const AuditDecisionSchema = z.enum(["pass", "repair-required", "fail", "inconclusive"]);
 export type AuditDecision = z.infer<typeof AuditDecisionSchema>;
@@ -65,6 +67,8 @@ export const ChapterMetaSchema = z.object({
     reviser: TokenUsageSchema.optional(),
   }).optional(),
   tokenUsageBySource: z.record(z.string(), z.number().int().nonnegative()).optional(),
+  localRepair: LocalRepairTelemetrySchema.optional(),
+  providerCallTelemetry: ProviderCallTelemetrySchema.optional(),
 });
 
 export type ChapterMeta = z.infer<typeof ChapterMetaSchema>;

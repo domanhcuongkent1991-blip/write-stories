@@ -18,6 +18,7 @@ import {
   stateDegradedDescription,
   stateDegradedSuggestion,
 } from "../utils/writing-surface.js";
+import { runWithProviderCallStage } from "../llm/provider-call-telemetry.js";
 
 export interface SettlementRetryParams {
   readonly writer: Pick<WriterAgent, "settleChapterState">;
@@ -69,23 +70,26 @@ export async function retrySettlementAfterValidationFailure(
     en: `State validation failed; retrying settlement only for chapter ${params.chapterNumber}`,
   });
 
-  const rawRetryOutput = await params.writer.settleChapterState({
-    book: params.book,
-    bookDir: params.bookDir,
-    chapterNumber: params.chapterNumber,
-    title: params.title,
-    content: params.content,
-    allowReapply: true,
-    baselineChapter: params.baselineChapter,
-    allowNewHooks: params.allowNewHooks,
-    chapterIntent: params.reducedControlInput?.chapterIntent,
-    contextPackage: params.reducedControlInput?.contextPackage,
-    ruleStack: params.reducedControlInput?.ruleStack,
-    validationFeedback: buildStateValidationFeedback(
-      params.originalValidation.warnings,
-      scaffoldLanguage,
-    ),
-  });
+  const rawRetryOutput = await runWithProviderCallStage(
+    "settlement-recovery",
+    () => params.writer.settleChapterState({
+      book: params.book,
+      bookDir: params.bookDir,
+      chapterNumber: params.chapterNumber,
+      title: params.title,
+      content: params.content,
+      allowReapply: true,
+      baselineChapter: params.baselineChapter,
+      allowNewHooks: params.allowNewHooks,
+      chapterIntent: params.reducedControlInput?.chapterIntent,
+      contextPackage: params.reducedControlInput?.contextPackage,
+      ruleStack: params.reducedControlInput?.ruleStack,
+      validationFeedback: buildStateValidationFeedback(
+        params.originalValidation.warnings,
+        scaffoldLanguage,
+      ),
+    }),
+  );
   const retryOutput = params.normalizeSettledOutput
     ? await params.normalizeSettledOutput(rawRetryOutput)
     : rawRetryOutput;

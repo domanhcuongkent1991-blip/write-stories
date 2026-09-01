@@ -10,6 +10,17 @@ export { type StyleProfile } from "./models/style-profile.js";
 export { type LengthCountingMode, type LengthSpec, type LengthTelemetry, type LengthWarning, LengthCountingModeSchema, LengthSpecSchema, LengthTelemetrySchema, LengthWarningSchema } from "./models/length-governance.js";
 export type { RepairHint } from "./models/repair-hint.js";
 export {
+  ExpectedHookOperationActionSchema,
+  ExpectedHookOperationV2Schema,
+  HookOperationIntentV2Schema,
+  HookOperationContractError,
+  hashCanonicalHookPayoff,
+  assertHookContractCurrent,
+  type ExpectedHookOperationAction,
+  type ExpectedHookOperationV2,
+  type HookOperationIntentV2,
+} from "./models/hook-operation-intent.js";
+export {
   WritingLanguageSchema,
   ScaffoldLanguageSchema,
   PromptStrategySchema,

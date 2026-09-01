@@ -1093,7 +1093,7 @@ describe("ReviserAgent", () => {
     }
   });
 
-  it("applies only exact occurrence-aware patches for verified Vietnamese spelling hints", async () => {
+  it("keeps provider-backed revision explicit after local spelling repair moves to orchestration", async () => {
     const root = await mkdtemp(join(tmpdir(), "inkos-reviser-vi-spelling-"));
     const bookDir = join(root, "book");
     await mkdir(join(bookDir, "story"), { recursive: true });
@@ -1109,7 +1109,29 @@ describe("ReviserAgent", () => {
     });
     const original = "Âm thanh vang lên; mười mốn bước chân rồi mười mốn nhịp thở.";
     const chatSpy = vi.spyOn(ReviserAgent.prototype as never, "chat" as never)
-      .mockRejectedValue(new Error("verified exact spelling repairs must not call the provider"));
+      .mockResolvedValue({
+        content: [
+          "=== FIXED_ISSUES ===",
+          "- Phát hiện lỗi chính tả mười mốn",
+          "",
+          "=== PATCHES ===",
+          "--- PATCH 1 ---",
+          "TARGET_TEXT:",
+          "mười mốn",
+          "REPLACEMENT_TEXT:",
+          "mười bốn",
+          "OCCURRENCE_INDEX: 1",
+          "--- END PATCH ---",
+          "--- PATCH 2 ---",
+          "TARGET_TEXT:",
+          "mười mốn",
+          "REPLACEMENT_TEXT:",
+          "mười bốn",
+          "OCCURRENCE_INDEX: 2",
+          "--- END PATCH ---",
+        ].join("\n"),
+        usage: ZERO_USAGE,
+      });
 
     try {
       const out = await agent.reviseChapter(
@@ -1162,9 +1184,9 @@ describe("ReviserAgent", () => {
         "other",
       );
 
-      expect(chatSpy).not.toHaveBeenCalled();
+      expect(chatSpy).toHaveBeenCalledTimes(1);
       expect(out.revisedContent).toBe("Âm thanh vang lên; mười bốn bước chân rồi mười bốn nhịp thở.");
-      expect(out.fixedIssues).toEqual(["Phát hiện lỗi chính tả mười mốn"]);
+      expect(out.fixedIssues).toEqual(["- Phát hiện lỗi chính tả mười mốn"]);
     } finally {
       await rm(root, { recursive: true, force: true });
     }

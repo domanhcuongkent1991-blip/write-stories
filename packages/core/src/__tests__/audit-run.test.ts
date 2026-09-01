@@ -162,4 +162,22 @@ describe("AuditRunV1", () => {
     expect(JSON.parse(serializeAuditRun(withHint)).findings[0].repairHint).toEqual(withHint.findings[0].repairHint);
     expect(AuditRunV1Schema.parse(JSON.parse(serializeAuditRun(value)))).toBeTruthy();
   });
+
+  it("round-trips optional local repair telemetry while legacy runs remain valid", () => {
+    const legacy = run();
+    expect(AuditRunV1Schema.parse(JSON.parse(serializeAuditRun(legacy))).localRepair).toBeUndefined();
+    const withLocalRepair = {
+      ...legacy,
+      localRepair: {
+        attempted: true,
+        applied: true,
+        patchCount: 1,
+        inputContentHash: "a".repeat(64),
+        outputContentHash: "b".repeat(64),
+      },
+    };
+
+    expect(JSON.parse(serializeAuditRun(withLocalRepair)).localRepair)
+      .toEqual(withLocalRepair.localRepair);
+  });
 });

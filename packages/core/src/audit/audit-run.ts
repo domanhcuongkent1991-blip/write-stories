@@ -8,6 +8,7 @@ import {
   type ChapterAuditEvaluation,
 } from "./chapter-audit-evaluator.js";
 import type { AuditIssue, AuditProvenance } from "../agents/continuity.js";
+import { LocalRepairTelemetrySchema, type LocalRepairTelemetry } from "../utils/vietnamese-local-repair.js";
 
 const HashSchema = z.string().regex(/^[a-f0-9]{64}$/u);
 const UuidSchema = z.string().uuid();
@@ -87,6 +88,7 @@ export const AuditRunV1Schema = z.object({
   provenance: ProvenanceSchema.optional(),
   retryCounts: z.object({ transport: z.number().int().nonnegative(), output: z.number().int().nonnegative(), quality: z.number().int().nonnegative() }).strict(),
   tokenUsage: z.object({ promptTokens: z.number().int().nonnegative(), completionTokens: z.number().int().nonnegative(), totalTokens: z.number().int().nonnegative() }).strict().optional(),
+  localRepair: LocalRepairTelemetrySchema.optional(),
 }).strict().superRefine((value, ctx) => {
   if (value.passed !== (value.decision === "pass")) {
     ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["passed"], message: "passed is derived from decision" });
@@ -148,6 +150,7 @@ export function createAuditRun(input: {
   readonly revision?: AuditRunV1["revision"];
   readonly canonicalCommitOutcome?: AuditRunV1["canonicalCommitOutcome"];
   readonly retryCounts?: AuditRunV1["retryCounts"];
+  readonly localRepair?: LocalRepairTelemetry;
   readonly operationId?: string;
   readonly attemptId?: string;
 }): AuditRunV1 {
@@ -179,6 +182,7 @@ export function createAuditRun(input: {
     provenance: input.evaluation.provenance,
     retryCounts: input.retryCounts ?? { transport: 0, output: 0, quality: 0 },
     tokenUsage: input.evaluation.tokenUsage,
+    localRepair: input.localRepair,
   });
 }
 

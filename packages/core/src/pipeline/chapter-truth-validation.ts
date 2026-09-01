@@ -45,6 +45,7 @@ export async function validateChapterTruthPersistence(params: {
   readonly logger?: Pick<Logger, "warn">;
 }): Promise<{
   readonly validation: ValidationResult;
+  readonly governedHookFindings: ReadonlyArray<AuditIssue>;
   readonly chapterStatus: "state-degraded" | null;
   readonly degradedIssues: ReadonlyArray<AuditIssue>;
   readonly persistenceOutput: WriteChapterOutput;
@@ -55,6 +56,7 @@ export async function validateChapterTruthPersistence(params: {
   let degradedIssues: ReadonlyArray<AuditIssue> = [];
   let persistenceOutput = params.persistenceOutput;
   let auditResult = params.auditResult;
+  let governedHookFindings = governedHookContradictions(params, persistenceOutput);
 
   try {
     validation = await params.validator.validate(
@@ -82,8 +84,9 @@ export async function validateChapterTruthPersistence(params: {
     };
     return {
       validation: { passed: true, warnings: [] },
+      governedHookFindings,
       chapterStatus: "state-degraded",
-      degradedIssues: [errorIssue],
+      degradedIssues: [errorIssue, ...governedHookFindings],
       persistenceOutput: buildStateDegradedPersistenceOutput({
         output: persistenceOutput,
         oldState: params.previousTruth.oldState,
@@ -92,7 +95,7 @@ export async function validateChapterTruthPersistence(params: {
       }),
       auditResult: {
         ...params.auditResult,
-        issues: [...params.auditResult.issues, errorIssue],
+        issues: [...params.auditResult.issues, errorIssue, ...governedHookFindings],
       },
     };
   }
@@ -107,7 +110,12 @@ export async function validateChapterTruthPersistence(params: {
     }
   }
 
-  validation = applyGovernedHookValidation(params, validation, persistenceOutput);
+  validation = applyGovernedHookValidation(
+    params,
+    validation,
+    persistenceOutput,
+    governedHookFindings,
+  );
 
   if (!validation.passed || validation.repairRequired) {
     const recovery = await retrySettlementAfterValidationFailure({
@@ -143,7 +151,9 @@ export async function validateChapterTruthPersistence(params: {
       if (recoveredValidation.passed && !recoveredValidation.repairRequired) {
         persistenceOutput = recovery.output;
         validation = recoveredValidation;
+        governedHookFindings = [];
       } else {
+        governedHookFindings = recoveredHookContradictions;
         chapterStatus = "state-degraded";
         validation = recoveredValidation;
         degradedIssues = recoveredHookContradictions.length > 0
@@ -181,6 +191,7 @@ export async function validateChapterTruthPersistence(params: {
 
   return {
     validation,
+    governedHookFindings,
     chapterStatus,
     degradedIssues,
     persistenceOutput,

@@ -3682,6 +3682,122 @@ describe("PipelineRunner", () => {
     }
   });
 
+  it("validates initial typed truth before the first continuity audit", async () => {
+    const { root, runner, state, bookId } = await createRunnerFixture();
+    const restoreVi = await enableViWriting(root);
+    const storedBook = await state.loadBookConfig(bookId);
+    const vietnameseBook: BookConfig = {
+      ...storedBook,
+      language: "vi",
+      chapterWordCount: 1150,
+    };
+    await state.saveBookConfig(bookId, vietnameseBook);
+    const initialContent = "từ ".repeat(1150).trim();
+    const initialOutput = createSettledRevisionOutput({
+      book: vietnameseBook,
+      bookDir: state.bookDir(bookId),
+      chapterNumber: 1,
+      title: "Chương kiểm thử",
+      content: initialContent,
+    });
+    const events: string[] = [];
+    vi.spyOn(WriterAgent.prototype, "writeChapter").mockImplementation(async () => {
+      events.push("writer-draft");
+      return initialOutput;
+    });
+    vi.spyOn(StateValidatorAgent.prototype, "validate").mockImplementation(async () => {
+      events.push("initial-truth-validation");
+      return { passed: true, repairRequired: false, warnings: [] };
+    });
+    vi.spyOn(ContinuityAuditor.prototype, "auditChapter").mockImplementation(async () => {
+      events.push("initial-audit");
+      return createAuditResult({ passed: true, decision: "pass", overallScore: 95 });
+    });
+
+    try {
+      const result = await runner.writeNextChapter(bookId, 1150);
+
+      expect(result.status).toBe("ready-for-review");
+      expect(events.slice(0, 3)).toEqual([
+        "writer-draft",
+        "initial-truth-validation",
+        "initial-audit",
+      ]);
+      expect(events.filter((event) => event === "initial-truth-validation")).toHaveLength(1);
+    } finally {
+      restoreVi();
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("reuses initial typed settlement for an exact Vietnamese spelling patch", async () => {
+    const { root, runner, state, bookId } = await createRunnerFixture();
+    const restoreVi = await enableViWriting(root);
+    const storedBook = await state.loadBookConfig(bookId);
+    const vietnameseBook: BookConfig = {
+      ...storedBook,
+      language: "vi",
+      chapterWordCount: 1150,
+    };
+    await state.saveBookConfig(bookId, vietnameseBook);
+    const originalContent = `${"từ ".repeat(1148)}lầy bơi`;
+    const patchedContent = `${"từ ".repeat(1148)}bãi bùn đất lầy lội`;
+    vi.spyOn(WriterAgent.prototype, "writeChapter").mockResolvedValue(
+      createSettledRevisionOutput({
+        book: vietnameseBook,
+        bookDir: state.bookDir(bookId),
+        chapterNumber: 1,
+        title: "Bãi bùn",
+        content: originalContent,
+      }),
+    );
+    const auditChapter = vi.spyOn(ContinuityAuditor.prototype, "auditChapter")
+      .mockResolvedValueOnce(createAuditResult({
+        passed: true,
+        overallScore: 95,
+        issues: [{
+          severity: "info",
+          category: "Lỗi chính tả",
+          description: "Cụm lầy bơi bị sai.",
+          suggestion: "Thay bằng bãi bùn đất lầy lội.",
+          repairScope: "local",
+          repairHint: {
+            kind: "exact-replacement",
+            targetText: "lầy bơi",
+            replacementText: "bãi bùn đất lầy lội",
+            occurrenceIndexes: [1],
+            context: "lầy bơi",
+          },
+        }],
+      }))
+      .mockResolvedValueOnce(createAuditResult({ passed: true, overallScore: 96, issues: [] }));
+    const settleChapterState = vi.mocked(WriterAgent.prototype.settleChapterState);
+    const reviseChapter = vi.mocked(ReviserAgent.prototype.reviseChapter);
+    settleChapterState.mockClear();
+    reviseChapter.mockClear();
+
+    try {
+      const result = await runner.writeNextChapter(bookId, 1150);
+      const chapterPath = join(state.bookDir(bookId), "chapters", "0001_Bãi_bùn.md");
+
+      expect(result.status).toBe("ready-for-review");
+      expect(result.localRepair).toMatchObject({ applied: true, patchCount: 1 });
+      expect(result.providerCallTelemetry).toEqual({
+        total: 0,
+        byStage: {},
+        transportRetries: 0,
+        outputRetries: 0,
+      });
+      expect(settleChapterState).not.toHaveBeenCalled();
+      expect(reviseChapter).not.toHaveBeenCalled();
+      expect(auditChapter).toHaveBeenCalledTimes(2);
+      await expect(readFile(chapterPath, "utf-8")).resolves.toContain(patchedContent);
+    } finally {
+      restoreVi();
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
   it("logs English stage messages during writeNextChapter for English books", async () => {
     const { logger, infos } = createCaptureLogger();
     const { root, runner, state, bookId } = await createRunnerFixture({
@@ -4389,7 +4505,7 @@ describe("PipelineRunner", () => {
       expect(savedIndex[0]).toMatchObject({
         revisionAttempts: 1,
         revisionOutcome: "rejected",
-        revisionRejectionReason: expect.stringContaining("state validation failed"),
+        revisionRejectionReason: "candidate recovery still contradicts its body",
       });
       const auditRun = JSON.parse(await readFile(
         join(state.bookDir(bookId), savedIndex[0]!.auditRunPaths![0]!),
@@ -4401,7 +4517,7 @@ describe("PipelineRunner", () => {
         candidateContentHash: computeChapterContentHash(revisedDraft),
         candidateWordCount: countChapterLength(revisedDraft, "zh_chars"),
         accepted: false,
-        rejectionReason: expect.stringContaining("state validation failed"),
+        rejectionReason: "candidate recovery still contradicts its body",
       });
     } finally {
       await rm(root, { recursive: true, force: true });

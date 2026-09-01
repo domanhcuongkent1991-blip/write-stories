@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { HookOpsSchema } from "./runtime-state.js";
+import { HookOperationIntentV2Schema } from "./hook-operation-intent.js";
 
 export const TokenUsageSchema = z.object({
   promptTokens: z.number().int().nonnegative(),
@@ -49,6 +50,7 @@ export const ChapterIntentSchema = z.object({
     resolve: [],
     defer: [],
   }),
+  expectedHookContract: HookOperationIntentV2Schema.optional(),
 });
 
 export type ChapterIntent = z.infer<typeof ChapterIntentSchema>;

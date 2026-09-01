@@ -7,6 +7,8 @@ import type { AuditRunV1 } from "../audit/audit-run.js";
 import type { TokenUsage } from "../models/input-governance.js";
 import { auditRunRelativePath } from "../audit/audit-run.js";
 import { buildStateDegradedReviewNote } from "./chapter-state-recovery.js";
+import type { LocalRepairTelemetry } from "../utils/vietnamese-local-repair.js";
+import type { ProviderCallTelemetry } from "../llm/provider-call-telemetry.js";
 
 export interface ChapterPersistenceUsage {
   readonly promptTokens: number;
@@ -30,6 +32,8 @@ export async function persistChapterArtifacts(params: {
   readonly tokenUsage?: ChapterPersistenceUsage;
   readonly tokenUsageByAgent?: Partial<Record<"planner" | "writer" | "auditor" | "reviser", TokenUsage>>;
   readonly tokenUsageBySource?: Readonly<Record<string, number>>;
+  readonly localRepair?: LocalRepairTelemetry;
+  readonly providerCallTelemetry?: ProviderCallTelemetry;
   readonly loadChapterIndex: () => Promise<ReadonlyArray<ChapterMeta>>;
   readonly prepareCanonicalFiles: (
     updatedIndex: ReadonlyArray<ChapterMeta>,
@@ -86,6 +90,8 @@ export async function persistChapterArtifacts(params: {
     tokenUsage: params.tokenUsage,
     tokenUsageByAgent: params.tokenUsageByAgent,
     tokenUsageBySource: params.tokenUsageBySource,
+    localRepair: params.localRepair,
+    providerCallTelemetry: params.providerCallTelemetry,
   };
   const existingIdx = existingIndex.findIndex((e) => e.number === params.chapterNumber);
   const persistedEntry = existingIdx >= 0

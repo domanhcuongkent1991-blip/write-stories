@@ -23,6 +23,10 @@ import {
   agentTrajectoryHeaders,
   beginAgentModelCall,
 } from "./agent-trajectory.js";
+import {
+  recordProviderPostAttempt,
+  recordProviderRetryCounts,
+} from "./provider-call-telemetry.js";
 
 
 // === Streaming Monitor Types ===
@@ -1450,6 +1454,7 @@ async function chatCompletionViaCustomAnthropicCompatible(
   if (system) payload.system = system;
 
   const apiKey = sanitizeHeaderApiKey(client._apiKey);
+  recordProviderPostAttempt();
   const response = await fetchWithProxy(`${baseUrl.replace(/\/$/, "")}/messages`, {
     method: "POST",
     headers: sanitizeHttpHeaders({
@@ -1621,6 +1626,7 @@ async function chatCompletionViaCustomOpenAICompatible(
     const instructions = joinSystemPrompt(messages);
     if (instructions) payload.instructions = instructions;
 
+    recordProviderPostAttempt();
     const response = await fetchWithProxy(`${baseUrl.replace(/\/$/, "")}/responses`, {
       method: "POST",
       headers,
@@ -1775,6 +1781,7 @@ async function chatCompletionViaCustomOpenAICompatible(
     payload.stream_options = { include_usage: true };
   }
 
+  recordProviderPostAttempt();
   const response = await fetchWithProxy(`${baseUrl.replace(/\/$/, "")}/chat/completions`, {
     method: "POST",
     headers,
@@ -2031,6 +2038,7 @@ export async function chatCompletion(
       // text; callers can also opt out (e.g. fast-fail diagnostics).
       { enabled: (options?.retry ?? true) && !onTextDelta, signal },
     );
+    recordProviderRetryCounts(retried.retryCounts);
     return addRetryCounts(retried.value, retried.retryCounts);
   } catch (error) {
     // 注意：中断的流（PartialResponseError）不再"打捞"半截内容当成功返回——
@@ -2038,7 +2046,10 @@ export async function chatCompletion(
     // 负责（完整重新生成）；重试耗尽后如实抛错。
     const normalized = wrapLLMError(error, errorCtx);
     const retryCounts = readRetryCounts(error);
-    if (retryCounts) normalized.retryCounts = retryCounts;
+    if (retryCounts) {
+      normalized.retryCounts = retryCounts;
+      recordProviderRetryCounts(retryCounts);
+    }
     throw normalized;
   }
 }
@@ -2115,6 +2126,7 @@ async function chatCompletionViaPiAi(
   };
 
   if (!client.stream) {
+    recordProviderPostAttempt();
     const response = await piCompleteSimple(piModel, context, streamOpts);
     const content = response.content
       .filter((block): block is { type: "text"; text: string } => block.type === "text")
@@ -2151,6 +2163,7 @@ async function chatCompletionViaPiAi(
     }, assistantResponseMetadata(response));
   }
 
+  recordProviderPostAttempt();
   const eventStream = piStreamSimple(piModel, context, streamOpts);
   const chunks: string[] = [];
   const monitor = createStreamMonitor(onStreamProgress);

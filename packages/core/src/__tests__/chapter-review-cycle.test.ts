@@ -66,6 +66,46 @@ const baseParams = {
 } as const;
 
 describe("runChapterReviewCycle v9", () => {
+  it("merges initial truth findings and overrides into the first assessment", async () => {
+    const content = "b".repeat(200);
+    const stateFinding: AuditIssue = {
+      severity: "critical",
+      category: "hook-runtime-contradiction",
+      description: "The initial settlement resolves a hook that the prose leaves open.",
+      suggestion: "Repair runtime truth before revising prose.",
+      source: "state",
+      verification: "verified",
+      repairTarget: "runtime-state",
+      evidence: { contentHash: computeChapterContentHash(content), stateRef: "runtime:hook:H006" },
+    };
+    const truthFileOverrides = {
+      currentState: "validated state",
+      ledger: "validated ledger",
+      hooks: "validated hooks",
+    };
+    const auditChapter = vi.fn().mockResolvedValue(createAuditResult({
+      passed: true,
+      decision: "pass",
+      overallScore: 95,
+    }));
+
+    const result = await runChapterReviewCycle({
+      ...baseParams,
+      initialOutput: { content, wordCount: content.length, postWriteErrors: [] },
+      initialStateFindings: [stateFinding],
+      initialTruthFileOverrides: truthFileOverrides,
+      createReviser: () => ({ reviseChapter: vi.fn() }),
+      auditor: { auditChapter },
+      maxReviewIterations: 0,
+    });
+
+    expect(auditChapter.mock.calls[0]?.[4]?.truthFileOverrides).toEqual(truthFileOverrides);
+    expect(result.auditResult.decision).toBe("repair-required");
+    expect(result.auditResult.issues).toEqual(expect.arrayContaining([
+      expect.objectContaining({ category: "hook-runtime-contradiction", verification: "verified" }),
+    ]));
+  });
+
   it("aggregates auditor usage across initial and post-revision assessments", async () => {
     const auditChapter = vi.fn()
       .mockResolvedValueOnce(createAuditResult({
@@ -224,7 +264,7 @@ describe("runChapterReviewCycle v9", () => {
     expect(result.auditResult.issues.filter((issue) => issue.ruleId === "length.hard-range")).toHaveLength(0);
   });
 
-  it("rejects an overlong revision after a bounded canonical rescue before settlement", async () => {
+  it("rejects an overlong revision without spending a second structural call", async () => {
     const original = "nguyên bản ".repeat(1900);
     const candidate = "bản sửa ".repeat(1900);
     const auditChapter = vi.fn().mockResolvedValue(createAuditResult({ passed: true, overallScore: 95 }));
@@ -248,8 +288,7 @@ describe("runChapterReviewCycle v9", () => {
       settleRevisionCandidate,
     });
 
-    expect(reviseChapter).toHaveBeenCalledTimes(2);
-    expect(reviseChapter.mock.calls[1]?.[1]).toBe(original);
+    expect(reviseChapter).toHaveBeenCalledTimes(1);
     expect(settleRevisionCandidate).not.toHaveBeenCalled();
     expect(auditChapter).toHaveBeenCalledTimes(1);
     expect(result.finalContent).toBe(original);
@@ -259,7 +298,7 @@ describe("runChapterReviewCycle v9", () => {
     ]));
   });
 
-  it("uses one bounded Vietnamese length-rescue pass before settlement", async () => {
+  it("does not use a second Vietnamese length-rescue call before settlement", async () => {
     const words = (count: number, prefix: string) => Array.from(
       { length: count },
       (_, index) => `${prefix}${index}`,
@@ -295,23 +334,13 @@ describe("runChapterReviewCycle v9", () => {
       settleRevisionCandidate,
     });
 
-    expect(reviseChapter).toHaveBeenCalledTimes(2);
-    expect(reviseChapter.mock.calls[1]?.[1]).toBe(firstCandidate);
-    expect(reviseChapter.mock.calls[1]?.[3]).toEqual([
-      expect.objectContaining({
-        category: "length",
-        description: expect.stringContaining("remove at least 50 more words"),
-        ruleId: "length.hard-range",
-      }),
-    ]);
-    expect(settleRevisionCandidate).toHaveBeenCalledWith(rescuedCandidate, expect.anything());
-    expect(result.finalContent).toBe(rescuedCandidate);
-    expect(result.finalWordCount).toBe(1200);
-    expect(result.revised).toBe(true);
-    expect(result.auditResult.passed).toBe(true);
+    expect(reviseChapter).toHaveBeenCalledTimes(1);
+    expect(settleRevisionCandidate).not.toHaveBeenCalled();
+    expect(result.finalContent).toBe(original);
+    expect(result.revised).toBe(false);
   });
 
-  it("rescues from the canonical draft when the first Vietnamese revision gets longer", async () => {
+  it("rejects a longer Vietnamese revision without a second provider call", async () => {
     const words = (count: number, prefix: string) => Array.from(
       { length: count },
       (_, index) => `${prefix}${index}`,
@@ -347,20 +376,10 @@ describe("runChapterReviewCycle v9", () => {
       settleRevisionCandidate,
     });
 
-    expect(reviseChapter).toHaveBeenCalledTimes(2);
-    expect(reviseChapter.mock.calls[1]?.[1]).toBe(original);
-    expect(reviseChapter.mock.calls[1]?.[3]).toEqual([
-      expect.objectContaining({
-        category: "length",
-        description: expect.stringContaining("remove at least 59 more words"),
-        ruleId: "length.hard-range",
-      }),
-    ]);
-    expect(settleRevisionCandidate).toHaveBeenCalledWith(rescuedCandidate, expect.anything());
-    expect(result.finalContent).toBe(rescuedCandidate);
-    expect(result.finalWordCount).toBe(1200);
-    expect(result.revised).toBe(true);
-    expect(result.auditResult.passed).toBe(true);
+    expect(reviseChapter).toHaveBeenCalledTimes(1);
+    expect(settleRevisionCandidate).not.toHaveBeenCalled();
+    expect(result.finalContent).toBe(original);
+    expect(result.revised).toBe(false);
   });
 
   it("accepts a 1533-word Vietnamese chapter with a warning and no length repair", async () => {
@@ -384,7 +403,7 @@ describe("runChapterReviewCycle v9", () => {
     ]));
   });
 
-  it("binds an exact auditor spelling report and repairs it as a verified local blocker", async () => {
+  it("binds and applies an exact spelling repair without constructing the Reviser", async () => {
     const filler = Array.from({ length: 1428 }, (_, index) => `tu${index}`).join(" ");
     const original = `${filler} cụm từ sai`;
     const candidate = `${filler} cụm từ đúng`;
@@ -405,38 +424,27 @@ describe("runChapterReviewCycle v9", () => {
     const auditChapter = vi.fn()
       .mockResolvedValueOnce(createAuditResult({ passed: true, overallScore: 94, issues: [spellingIssue] }))
       .mockResolvedValueOnce(createAuditResult({ passed: true, overallScore: 95, issues: [] }));
-    const reviseChapter = vi.fn().mockResolvedValue({
-      revisedContent: candidate,
-      wordCount: 1431,
-      fixedIssues: ["spelling"],
-      tokenUsage: ZERO_USAGE,
-    });
+    const reviseChapter = vi.fn();
+    const createReviser = vi.fn(() => ({ reviseChapter }));
+    const settleRevisionCandidate = vi.fn(async () => ({ valid: true }));
 
     const result = await runChapterReviewCycle({
       ...baseParams,
       lengthSpec: VI_LENGTH_SPEC,
       initialOutput: { content: original, wordCount: 1431, postWriteErrors: [] },
-      createReviser: () => ({ reviseChapter }),
+      createReviser,
       auditor: { auditChapter },
-      settleRevisionCandidate: async () => ({ valid: true }),
+      settleRevisionCandidate,
     });
 
-    expect(reviseChapter.mock.calls[0]?.[3]).toEqual(expect.arrayContaining([
-      expect.objectContaining({
-        category: "vi-known-spelling",
-        severity: "critical",
-        verification: "verified",
-        repairHint: expect.objectContaining({
-          targetText: "cụm từ sai",
-          replacementText: "cụm từ đúng",
-        }),
-      }),
-    ]));
-    expect(reviseChapter.mock.calls[0]?.[3]).not.toEqual(expect.arrayContaining([
-      expect.objectContaining({ ruleId: "length.soft-range" }),
-    ]));
+    expect(createReviser).not.toHaveBeenCalled();
+    expect(reviseChapter).not.toHaveBeenCalled();
+    expect(settleRevisionCandidate).toHaveBeenCalledWith(candidate, expect.objectContaining({
+      repairKind: "deterministic-exact",
+    }));
     expect(result.finalContent).toBe(candidate);
     expect(result.auditResult.decision).toBe("pass");
+    expect(result.localRepair).toMatchObject({ applied: true, patchCount: 1 });
   });
 
   it("routes a host-bound transition contradiction through the bounded revision cycle", async () => {
@@ -491,6 +499,74 @@ describe("runChapterReviewCycle v9", () => {
     expect(auditChapter).toHaveBeenCalledTimes(2);
     expect(result.finalContent).toBe(candidate);
     expect(result.auditResult.decision).toBe("pass");
+  });
+
+  it("applies local spelling first and then spends exactly one structural revision call", async () => {
+    const filler = Array.from({ length: 1140 }, (_, index) => `tu${index}`).join(" ");
+    const original = `${filler} lầy bơi`;
+    const patched = `${filler} bãi bùn đất lầy lội`;
+    const structurallyRevised = `${patched} với nguyên nhân chuyển cảnh rõ ràng`;
+    const spellingIssue: AuditIssue = {
+      severity: "info",
+      category: "Lỗi chính tả",
+      description: "Cụm lầy bơi bị sai.",
+      suggestion: "Thay đúng cụm từ.",
+      repairScope: "local",
+      repairHint: {
+        kind: "exact-replacement",
+        targetText: "lầy bơi",
+        replacementText: "bãi bùn đất lầy lội",
+        occurrenceIndexes: [1],
+        context: "lầy bơi",
+      },
+    };
+    const structuralIssue: AuditIssue = {
+      severity: "critical",
+      category: "continuity",
+      description: "Chuyển cảnh thiếu nguyên nhân.",
+      suggestion: "Bổ sung nguyên nhân chuyển cảnh.",
+      source: "deterministic",
+      verification: "verified",
+      repairScope: "structural",
+      repairTarget: "prose",
+    };
+    const auditChapter = vi.fn()
+      .mockResolvedValueOnce(createAuditResult({
+        passed: false,
+        overallScore: 80,
+        issues: [spellingIssue],
+        hostFindings: [structuralIssue],
+      }))
+      .mockResolvedValueOnce(createAuditResult({ passed: true, overallScore: 95, issues: [] }));
+    const reviseChapter = vi.fn(async (
+      _bookDir,
+      content: string,
+      _chapter,
+      issues: ReadonlyArray<AuditIssue>,
+    ) => {
+      expect(content).toBe(patched);
+      expect(issues).toEqual([expect.objectContaining({ category: "continuity" })]);
+      return {
+        revisedContent: structurallyRevised,
+        wordCount: 1150,
+        fixedIssues: ["continuity"],
+        tokenUsage: ZERO_USAGE,
+      };
+    });
+
+    const result = await runChapterReviewCycle({
+      ...baseParams,
+      lengthSpec: VI_LENGTH_SPEC,
+      initialOutput: { content: original, wordCount: 1142, postWriteErrors: [] },
+      createReviser: () => ({ reviseChapter }),
+      auditor: { auditChapter },
+      settleRevisionCandidate: async () => ({ valid: true }),
+    });
+
+    expect(reviseChapter).toHaveBeenCalledTimes(1);
+    expect(auditChapter).toHaveBeenCalledTimes(2);
+    expect(result.finalContent).toBe(structurallyRevised);
+    expect(result.localRepair).toMatchObject({ applied: true, patchCount: 1 });
   });
 
   it("does not accept a revision while the host-bound transition contradiction remains", async () => {

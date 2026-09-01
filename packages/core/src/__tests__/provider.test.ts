@@ -10,6 +10,12 @@ import {
   type LLMClient,
 } from "../llm/provider.js";
 import { runWithAgentTrajectory } from "../llm/agent-trajectory.js";
+import {
+  createProviderCallCollector,
+  runWithProviderCallStage,
+  runWithProviderCallTelemetry,
+  snapshotProviderCallTelemetry,
+} from "../llm/provider-call-telemetry.js";
 
 // ── Mock @mariozechner/pi-ai ──────────────────────────────────────────────────
 // We intercept streamSimple so tests don't hit the network.
@@ -696,15 +702,23 @@ describe("chatCompletion via pi-ai", () => {
       stream: false,
       _piModel: { ...MOCK_PI_MODEL, baseUrl: "https://api.kkaiapi.com/v1" },
     });
+    const providerCalls = createProviderCallCollector();
 
-    const result = await runWithAgentTrajectory({
-      conversationId: "inkos-conv",
-      runId: "run-7",
-      agentRole: "workflow",
-    }, () => chatCompletion(client, "deepseek-v4-flash", [{ role: "user", content: "write" }]));
+    const result = await runWithProviderCallTelemetry(providerCalls, () =>
+      runWithProviderCallStage("writer-draft", () => runWithAgentTrajectory({
+        conversationId: "inkos-conv",
+        runId: "run-7",
+        agentRole: "workflow",
+      }, () => chatCompletion(client, "deepseek-v4-flash", [{ role: "user", content: "write" }]))));
 
     expect(result.content).toBe("recovered");
     expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(snapshotProviderCallTelemetry(providerCalls)).toEqual({
+      total: 2,
+      byStage: { "writer-draft": 2 },
+      transportRetries: 1,
+      outputRetries: 0,
+    });
     const first = fetchMock.mock.calls[0]?.[1]?.headers as Record<string, string>;
     const second = fetchMock.mock.calls[1]?.[1]?.headers as Record<string, string>;
     expect(first["X-InkOS-Model-Call-ID"]).toBeTruthy();
@@ -930,13 +944,21 @@ describe("chatCompletion via pi-ai", () => {
         baseUrl: "https://gateway.example/v1",
       },
     });
-    const result = await chatCompletion(client, "wild-compatible", [
-      { role: "system", content: "只输出中文。" },
-      { role: "user", content: "ping" },
-    ]);
+    const providerCalls = createProviderCallCollector();
+    const result = await runWithProviderCallTelemetry(providerCalls, () =>
+      runWithProviderCallStage("planner", () => chatCompletion(client, "wild-compatible", [
+        { role: "system", content: "只输出中文。" },
+        { role: "user", content: "ping" },
+      ])));
 
     expect(result.content).toBe("ok");
     expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(snapshotProviderCallTelemetry(providerCalls)).toEqual({
+      total: 2,
+      byStage: { planner: 2 },
+      transportRetries: 0,
+      outputRetries: 0,
+    });
     const firstBody = JSON.parse(fetchMock.mock.calls[0]?.[1]?.body as string);
     const secondBody = JSON.parse(fetchMock.mock.calls[1]?.[1]?.body as string);
     expect(firstBody.messages).toEqual([

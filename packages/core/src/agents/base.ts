@@ -10,6 +10,22 @@ import {
 } from "../agent/skill-tool.js";
 import { applyOutputLanguageContract } from "./output-language-contract.js";
 import type { WritingLanguageProfile } from "../utils/language.js";
+import {
+  runWithProviderDefaultStage,
+  type ProviderCallStage,
+} from "../llm/provider-call-telemetry.js";
+
+function defaultProviderStage(agentName: string): ProviderCallStage {
+  switch (agentName) {
+    case "planner": return "planner";
+    case "resolve-preflight": return "resolve-preflight";
+    case "writer": return "writer-draft";
+    case "state-validator": return "initial-state-validation";
+    case "continuity-auditor": return "initial-auditor";
+    case "reviser": return "structural-revision";
+    default: return "unscoped";
+  }
+}
 
 export interface AgentContext {
   readonly client: LLMClient;
@@ -38,11 +54,13 @@ export abstract class BaseAgent {
     messages: ReadonlyArray<LLMMessage>,
     options?: { readonly temperature?: number; readonly maxTokens?: number },
   ): Promise<LLMResponse> {
-    return runWorkerAgent(this.ctx.client, this.ctx.model, await this.finalizeTaskMessages(messages), {
-      ...options,
-      onStreamProgress: this.ctx.onStreamProgress,
-      signal: this.ctx.signal,
-    });
+    const finalized = await this.finalizeTaskMessages(messages);
+    return runWithProviderDefaultStage(defaultProviderStage(this.name), () =>
+      runWorkerAgent(this.ctx.client, this.ctx.model, finalized, {
+        ...options,
+        onStreamProgress: this.ctx.onStreamProgress,
+        signal: this.ctx.signal,
+      }));
   }
 
   protected async submitStructured<TParameters extends TSchema>(
@@ -50,16 +68,18 @@ export abstract class BaseAgent {
     resultTool: WorkerResultTool<TParameters>,
     options?: { readonly temperature?: number; readonly maxTokens?: number },
   ): Promise<Static<TParameters>> {
-    return runWorkerAgentTool(
-      this.ctx.client,
-      this.ctx.model,
-      await this.finalizeTaskMessages(messages),
-      resultTool,
-      {
-        ...options,
-        signal: this.ctx.signal,
-      },
-    );
+    const finalized = await this.finalizeTaskMessages(messages);
+    return runWithProviderDefaultStage(defaultProviderStage(this.name), () =>
+      runWorkerAgentTool(
+        this.ctx.client,
+        this.ctx.model,
+        finalized,
+        resultTool,
+        {
+          ...options,
+          signal: this.ctx.signal,
+        },
+      ));
   }
 
   protected async withPromptPackGuidance(basePrompt: string, promptId: string): Promise<string> {
@@ -97,12 +117,14 @@ export abstract class BaseAgent {
   ): Promise<LLMResponse> {
     // OpenAI has native search — use it directly
     if (this.ctx.client.provider === "openai") {
-      return runWorkerAgent(this.ctx.client, this.ctx.model, await this.finalizeTaskMessages(messages), {
-        ...options,
-        webSearch: true,
-        onStreamProgress: this.ctx.onStreamProgress,
-        signal: this.ctx.signal,
-      });
+      const finalized = await this.finalizeTaskMessages(messages);
+      return runWithProviderDefaultStage(defaultProviderStage(this.name), () =>
+        runWorkerAgent(this.ctx.client, this.ctx.model, finalized, {
+          ...options,
+          webSearch: true,
+          onStreamProgress: this.ctx.onStreamProgress,
+          signal: this.ctx.signal,
+        }));
     }
 
     // Other providers: self-hosted search → inject results into prompt

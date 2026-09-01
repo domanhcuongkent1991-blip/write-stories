@@ -218,7 +218,7 @@ describe("persistChapterArtifacts", () => {
       content: "{\"kind\":\"audit-run-v1\"}\n",
     };
 
-    await persistChapterArtifacts({
+    const result = await persistChapterArtifacts({
       chapterNumber: 3,
       chapterTitle: "Chapter Title",
       status: "audit-failed",
@@ -227,6 +227,19 @@ describe("persistChapterArtifacts", () => {
       finalWordCount: 888,
       lengthWarnings: [],
       degradedIssues: [],
+      localRepair: {
+        attempted: true,
+        applied: true,
+        patchCount: 1,
+        inputContentHash: "a".repeat(64),
+        outputContentHash: "b".repeat(64),
+      },
+      providerCallTelemetry: {
+        total: 2,
+        byStage: { "initial-auditor": 1, "post-candidate-auditor": 1 },
+        transportRetries: 0,
+        outputRetries: 0,
+      },
       loadChapterIndex: async () => [],
       prepareCanonicalFiles,
       commitCanonicalFiles,
@@ -241,6 +254,11 @@ describe("persistChapterArtifacts", () => {
       expect.objectContaining({ relativePath: join("chapters", "0003_Chapter_Title.md") }),
       auditRunWrite,
     ]);
+    expect(result.entry.localRepair).toMatchObject({ applied: true, patchCount: 1 });
+    expect(result.entry.providerCallTelemetry).toMatchObject({
+      total: 2,
+      byStage: { "initial-auditor": 1, "post-candidate-auditor": 1 },
+    });
   });
 
   it("derives rejected attempt metadata from an initial-only audit run", async () => {

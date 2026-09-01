@@ -6,6 +6,8 @@ import {
   type ChapterIntent,
 } from "../models/input-governance.js";
 import { parseMemo, PlannerParseError } from "../utils/chapter-memo-parser.js";
+import type { StoredHook } from "../state/memory-db.js";
+import { assertHookContractCurrent } from "../models/hook-operation-intent.js";
 
 /**
  * Persisted governed plans are stored as a human-readable markdown file.
@@ -48,6 +50,7 @@ export async function savePersistedPlan(
 export async function loadPersistedPlan(
   bookDir: string,
   chapterNumber: number,
+  activeHooks?: ReadonlyArray<StoredHook>,
 ): Promise<PlanChapterOutput | null> {
   let raw: string;
   try {
@@ -81,6 +84,10 @@ export async function loadPersistedPlan(
     const expectedHookOps = expectedHookOpsRaw === undefined
       ? undefined
       : JSON.parse(expectedHookOpsRaw) as unknown;
+    const expectedHookContractRaw = readField(raw, "Expected Hook Contract V2");
+    const expectedHookContract = expectedHookContractRaw === undefined
+      ? undefined
+      : JSON.parse(expectedHookContractRaw) as unknown;
     intent = ChapterIntentSchema.parse({
       chapter: chapterNumber,
       goal: readField(raw, "Intent Goal") ?? memo.goal,
@@ -93,7 +100,11 @@ export async function loadPersistedPlan(
       pacingCode: readField(raw, "Pacing Code"),
       pacingOverrideReason: readOptionalField(raw, "Pacing Override Reason"),
       expectedHookOps,
+      expectedHookContract,
     });
+    if (intent.expectedHookContract && activeHooks) {
+      assertHookContractCurrent(intent.expectedHookContract, activeHooks);
+    }
   } catch {
     return null;
   }
@@ -142,6 +153,9 @@ function renderPersistedPlanMarkdown(
     `Pacing Code: ${intent.pacingCode}`,
     `Pacing Override Reason: ${intent.pacingOverrideReason ?? "(none)"}`,
     `Expected Hook Ops: ${JSON.stringify(intent.expectedHookOps)}`,
+    ...(intent.expectedHookContract
+      ? [`Expected Hook Contract V2: ${JSON.stringify(intent.expectedHookContract)}`]
+      : []),
     "",
     "### Acceptance Criteria",
     renderList(intent.acceptanceCriteria),
