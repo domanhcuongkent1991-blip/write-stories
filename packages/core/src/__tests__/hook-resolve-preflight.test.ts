@@ -104,6 +104,28 @@ describe("HookResolvePreflightAgent", () => {
     expect(chatSpy).toHaveBeenCalledTimes(1);
   });
 
+  it("unwraps one whole-response JSON fence without accepting trailing prose", async () => {
+    const chatSpy = vi.spyOn(llmProvider, "chatCompletion").mockResolvedValueOnce({
+      content: `\`\`\`json\n${JSON.stringify({ hookId: "H006", decision: "pass" })}\n\`\`\``,
+      usage: { promptTokens: 5, completionTokens: 2, totalTokens: 7 },
+    } as Awaited<ReturnType<typeof llmProvider.chatCompletion>>).mockResolvedValueOnce({
+      content: `\`\`\`json\n${JSON.stringify({ hookId: "H006", decision: "pass" })}\n\`\`\`\nextra`,
+      usage: { promptTokens: 5, completionTokens: 2, totalTokens: 7 },
+    } as Awaited<ReturnType<typeof llmProvider.chatCompletion>>);
+
+    await expect(makeAgent().validate({
+      contract: contract("resolve"),
+      chapterGoal: "Confirm only the physical device.",
+      relevantMemoBeat: "The inspection scene stays focused on the device.",
+    })).resolves.toMatchObject({ results: [{ hookId: "H006", decision: "pass" }] });
+    await expect(makeAgent().validate({
+      contract: contract("resolve"),
+      chapterGoal: "Confirm only the physical device.",
+      relevantMemoBeat: "The inspection scene stays focused on the device.",
+    })).rejects.toBeInstanceOf(HookResolvePreflightError);
+    expect(chatSpy).toHaveBeenCalledTimes(2);
+  });
+
   it("fails closed on malformed, missing, duplicate, or extra result IDs", async () => {
     const chatSpy = vi.spyOn(llmProvider, "chatCompletion");
     for (const content of [

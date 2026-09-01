@@ -153,7 +153,13 @@ Do not infer identities, causes, or actors that are not stated. Return strict JS
 
   private parseStrictResult(content: string): z.infer<typeof HookResolvePreflightBatchSchema> {
     try {
-      const parsed: unknown = JSON.parse(content.trim());
+      const trimmed = content.trim();
+      // Gemini on the internal OpenAI-compatible gateway may wrap strict JSON
+      // in one markdown JSON fence. Unwrap only an anchored, whole-response
+      // fence; prose or trailing content remains invalid and fails closed.
+      const fenced = trimmed.match(/^```(?:json)?\s*\r?\n([\s\S]*?)\r?\n```$/u);
+      const jsonText = fenced ? fenced[1].trim() : trimmed;
+      const parsed: unknown = JSON.parse(jsonText);
       const batch = HookResolvePreflightBatchSchema.safeParse(parsed);
       if (batch.success) return batch.data;
 
