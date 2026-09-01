@@ -44,7 +44,17 @@
   "pnpm": {
     "overrides": {
       "@mariozechner/pi-ai": "0.67.1",
-      "@mariozechner/pi-agent-core": "0.67.1"
+      "@mariozechner/pi-agent-core": "0.67.1",
+      "basic-ftp": "5.3.1",
+      "brace-expansion@2": "2.1.4",
+      "brace-expansion@5": "5.0.9",
+      "fast-uri": "3.1.5",
+      "fast-xml-builder": "1.1.7",
+      "ip-address": "10.3.1",
+      "protobufjs": "7.6.1",
+      "undici@7": "7.29.0",
+      "uuid@11": "11.1.1",
+      "ws@8": "8.21.0"
     }
   }
 }
