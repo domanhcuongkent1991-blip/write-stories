@@ -153,7 +153,24 @@ Do not infer identities, causes, or actors that are not stated. Return strict JS
 
   private parseStrictResult(content: string): z.infer<typeof HookResolvePreflightBatchSchema> {
     try {
-      return HookResolvePreflightBatchSchema.parse(JSON.parse(content.trim()));
+      const parsed: unknown = JSON.parse(content.trim());
+      const batch = HookResolvePreflightBatchSchema.safeParse(parsed);
+      if (batch.success) return batch.data;
+
+      // Some OpenAI-compatible gateways wrap a one-item structured response
+      // as the item itself and append transport metadata. Keep the governance
+      // contract strict by allowing only those two documented metadata keys,
+      // then normalize the single item into the required batch shape. Unknown
+      // keys and multi-item shape mismatches still fail closed below.
+      if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+        const normalized = Object.fromEntries(
+          Object.entries(parsed).filter(([key]) => key !== "status" && key !== "processed"),
+        );
+        const single = HookResolvePreflightResultSchema.safeParse(normalized);
+        if (single.success) return { results: [single.data] };
+      }
+
+      throw new Error("structured output shape mismatch");
     } catch (error) {
       throw new HookResolvePreflightError(
         "INCONCLUSIVE_PROVIDER",

@@ -83,6 +83,27 @@ describe("HookResolvePreflightAgent", () => {
     });
   });
 
+  it("normalizes a single-result gateway envelope without weakening hook validation", async () => {
+    const chatSpy = vi.spyOn(llmProvider, "chatCompletion").mockResolvedValue({
+      content: JSON.stringify({
+        hookId: "H006",
+        decision: "pass",
+        status: "completed",
+        processed: true,
+      }),
+      usage: { promptTokens: 7, completionTokens: 2, totalTokens: 9 },
+    } as Awaited<ReturnType<typeof llmProvider.chatCompletion>>);
+
+    await expect(makeAgent().validate({
+      contract: contract("resolve"),
+      chapterGoal: "Confirm only the physical device.",
+      relevantMemoBeat: "The inspection scene stays focused on the device.",
+    })).resolves.toMatchObject({
+      results: [{ hookId: "H006", decision: "pass" }],
+    });
+    expect(chatSpy).toHaveBeenCalledTimes(1);
+  });
+
   it("fails closed on malformed, missing, duplicate, or extra result IDs", async () => {
     const chatSpy = vi.spyOn(llmProvider, "chatCompletion");
     for (const content of [
@@ -96,6 +117,7 @@ describe("HookResolvePreflightAgent", () => {
         { hookId: "H006", decision: "pass" },
         { hookId: "H999", decision: "pass" },
       ] }),
+      JSON.stringify({ hookId: "H006", decision: "pass", unexpected: true }),
     ]) {
       chatSpy.mockResolvedValueOnce({
         content,
