@@ -1,0 +1,11 @@
+[extend]
+useDefault = true
+
+[[rules]]
+id = "generic-api-key"
+  [[rules.allowlists]]
+  description = "Allow SHA-256 hashes in scripts/i18n-source-lock.json"
+  matchCondition = "AND"
+  regexTarget = "line"
+  regexes = ['''^\s*"[^"]+"\s*:\s*"[0-9a-f]{64}"\s*,?\s*$''']
+  paths = ['''^scripts/i18n-source-lock\.json$''']
