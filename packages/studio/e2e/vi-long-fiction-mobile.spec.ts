@@ -47,6 +47,15 @@ test("creates and writes one Vietnamese chapter on a narrow mobile viewport", as
   });
 
   try {
+    // The deterministic agent stub still goes through the normal model-picker
+    // guard. Seed a non-real key so the local API exposes DeepSeek's static
+    // model catalog and ChatPage auto-selects its first model. No provider
+    // request is possible while INKOS_AGENT_LLM_STUB=1 is enabled.
+    const modelSecretResponse = await page.request.put("/api/v1/services/deepseek/secret", {
+      data: { apiKey: "stub-key-e2e-not-real" },
+    });
+    expect(modelSecretResponse.ok()).toBe(true);
+
     await page.goto("/#/book/new");
   const composer = page.getByRole("textbox", { name: /command|lệnh/i });
   await expect(composer).toBeVisible({ timeout: 20_000 });
