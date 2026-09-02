@@ -68,3 +68,41 @@ test("maps only pass results to a successful process exit code", async () => {
   assert.equal(scopeModule.resolveQualificationExitCode("FAIL_QUALITY_CHAPTER_1"), 1);
   assert.equal(scopeModule.resolveQualificationExitCode("BLOCKED_PROVIDER_HEALTH"), 1);
 });
+
+test("accepts only a pristine manifest-less checkpoint zero for resume", async () => {
+  const scopeModule = await import("./promotion-runner-scope.mjs");
+  assert.equal(typeof scopeModule.assessQualificationResumeCheckpoint, "function");
+  if (typeof scopeModule.assessQualificationResumeCheckpoint !== "function") return;
+
+  assert.deepEqual(scopeModule.assessQualificationResumeCheckpoint({
+    startChapter: 1,
+    manifestPresent: false,
+    manifestLastAppliedChapter: null,
+    indexCount: 0,
+    chapterFileCount: 0,
+  }), {
+    expectedChapter: 0,
+    mode: "pristine-clone",
+    aligned: true,
+  });
+
+  assert.deepEqual(scopeModule.assessQualificationResumeCheckpoint({
+    startChapter: 2,
+    manifestPresent: true,
+    manifestLastAppliedChapter: 1,
+    indexCount: 1,
+    chapterFileCount: 1,
+  }), {
+    expectedChapter: 1,
+    mode: "state-manifest",
+    aligned: true,
+  });
+
+  for (const input of [
+    { startChapter: 2, manifestPresent: false, manifestLastAppliedChapter: null, indexCount: 0, chapterFileCount: 0 },
+    { startChapter: 1, manifestPresent: false, manifestLastAppliedChapter: null, indexCount: 1, chapterFileCount: 0 },
+    { startChapter: 1, manifestPresent: false, manifestLastAppliedChapter: null, indexCount: 0, chapterFileCount: 1 },
+  ]) {
+    assert.equal(scopeModule.assessQualificationResumeCheckpoint(input).aligned, false);
+  }
+});

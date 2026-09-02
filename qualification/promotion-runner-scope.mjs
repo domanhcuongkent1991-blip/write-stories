@@ -7,6 +7,26 @@ export function resolveQualificationExitCode(exitReason) {
     : 1;
 }
 
+export function assessQualificationResumeCheckpoint({
+  startChapter,
+  manifestPresent,
+  manifestLastAppliedChapter,
+  indexCount,
+  chapterFileCount,
+}) {
+  const expectedChapter = startChapter - 1;
+  const pristineClone = expectedChapter === 0
+    && manifestPresent === false
+    && indexCount === 0
+    && chapterFileCount === 0;
+  return Object.freeze({
+    expectedChapter,
+    mode: pristineClone ? "pristine-clone" : "state-manifest",
+    aligned: pristineClone
+      || (manifestPresent === true && manifestLastAppliedChapter === expectedChapter),
+  });
+}
+
 export function resolveQualificationRunScope({
   candidateSha,
   evidenceDate,

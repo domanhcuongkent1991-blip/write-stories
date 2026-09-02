@@ -5,7 +5,11 @@ import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { promisify } from "node:util";
 import { resolveCandidateSha } from "./candidate-config.mjs";
-import { resolveQualificationExitCode, resolveQualificationRunScope } from "./promotion-runner-scope.mjs";
+import {
+  assessQualificationResumeCheckpoint,
+  resolveQualificationExitCode,
+  resolveQualificationRunScope,
+} from "./promotion-runner-scope.mjs";
 
 const execFile = promisify(execFileCallback);
 const worktreeRoot = "C:/tmp/CodexScratch/2026-09-01-inkos-promotion-hardening";
@@ -155,6 +159,15 @@ function safeIssues(issues) {
 
 async function readJson(path) {
   return JSON.parse(await readFile(path, "utf8"));
+}
+
+async function readOptionalJson(path) {
+  try {
+    return await readJson(path);
+  } catch (error) {
+    if (error && typeof error === "object" && error.code === "ENOENT") return undefined;
+    throw error;
+  }
 }
 
 async function collectStateInvariants(expectedChapter) {
@@ -440,7 +453,7 @@ try {
   } else {
     const existingBook = await readJson(join(bookDir, "book.json"));
     const existingIndex = await readJson(join(bookDir, "chapters", "index.json"));
-    const manifest = await readJson(join(bookDir, "story", "state", "manifest.json"));
+    const manifest = await readOptionalJson(join(bookDir, "story", "state", "manifest.json"));
     const acceptedStatuses = new Set(["audit-passed", "ready-for-review", "approved", "published", "imported"]);
     const priorChapters = Array.from({ length: startChapter - 1 }, (_, index) => index + 1);
     const retryEntry = existingIndex.find((chapter) => chapter.number === startChapter);
@@ -448,9 +461,21 @@ try {
     const transactionDirs = (await readdir(bookDir, { withFileTypes: true }))
       .filter((entry) => entry.isDirectory() && entry.name.startsWith(".inkos-file-txn-"))
       .map((entry) => entry.name);
+    const chapterFileCount = (await readdir(join(bookDir, "chapters")))
+      .filter((name) => /^\d+_.+\.md$/u.test(name))
+      .length;
+    const resumeCheckpoint = assessQualificationResumeCheckpoint({
+      startChapter,
+      manifestPresent: manifest !== undefined,
+      manifestLastAppliedChapter: manifest?.lastAppliedChapter ?? null,
+      indexCount: existingIndex.length,
+      chapterFileCount,
+    });
     safe.resumePreflight = {
       targetChapters: existingBook.targetChapters ?? null,
-      manifestLastAppliedChapter: manifest.lastAppliedChapter ?? null,
+      manifestLastAppliedChapter: manifest?.lastAppliedChapter ?? null,
+      checkpointMode: resumeCheckpoint.mode,
+      checkpointAligned: resumeCheckpoint.aligned,
       priorChaptersAccepted: priorChapters.every((number) => existingIndex.some((chapter) =>
         chapter.number === number
         && acceptedStatuses.has(chapter.status)
@@ -460,11 +485,12 @@ try {
         ? { number: retryEntry.number, status: retryEntry.status, auditDecision: retryEntry.auditDecision ?? null }
         : null,
       futureEntryCount: futureEntries.length,
+      chapterFileCount,
       transactionDirs,
     };
     if (
       existingBook.targetChapters !== targetChapters
-      || manifest.lastAppliedChapter !== startChapter - 1
+      || !resumeCheckpoint.aligned
       || !safe.resumePreflight.priorChaptersAccepted
       || (retryEntry !== undefined && retryEntry.status !== "audit-failed")
       || futureEntries.length !== 0
