@@ -78,8 +78,9 @@ test("accepts only a pristine manifest-less checkpoint zero for resume", async (
     startChapter: 1,
     manifestPresent: false,
     manifestLastAppliedChapter: null,
-    indexCount: 0,
-    chapterFileCount: 0,
+    indexNumbers: [],
+    chapterFileNumbers: [],
+    retryChapterPresent: false,
   }), {
     expectedChapter: 0,
     mode: "pristine-clone",
@@ -90,8 +91,9 @@ test("accepts only a pristine manifest-less checkpoint zero for resume", async (
     startChapter: 2,
     manifestPresent: true,
     manifestLastAppliedChapter: 1,
-    indexCount: 1,
-    chapterFileCount: 1,
+    indexNumbers: [1],
+    chapterFileNumbers: [1],
+    retryChapterPresent: false,
   }), {
     expectedChapter: 1,
     mode: "state-manifest",
@@ -99,10 +101,35 @@ test("accepts only a pristine manifest-less checkpoint zero for resume", async (
   });
 
   for (const input of [
-    { startChapter: 2, manifestPresent: false, manifestLastAppliedChapter: null, indexCount: 0, chapterFileCount: 0 },
-    { startChapter: 1, manifestPresent: false, manifestLastAppliedChapter: null, indexCount: 1, chapterFileCount: 0 },
-    { startChapter: 1, manifestPresent: false, manifestLastAppliedChapter: null, indexCount: 0, chapterFileCount: 1 },
+    { startChapter: 2, manifestPresent: false, manifestLastAppliedChapter: null, indexNumbers: [], chapterFileNumbers: [], retryChapterPresent: false },
+    { startChapter: 1, manifestPresent: false, manifestLastAppliedChapter: null, indexNumbers: [1], chapterFileNumbers: [], retryChapterPresent: true },
+    { startChapter: 1, manifestPresent: false, manifestLastAppliedChapter: null, indexNumbers: [], chapterFileNumbers: [1], retryChapterPresent: false },
   ]) {
     assert.equal(scopeModule.assessQualificationResumeCheckpoint(input).aligned, false);
   }
+});
+
+test("rejects non-canonical index and chapter file sets at a resume checkpoint", async () => {
+  const { assessQualificationResumeCheckpoint } = await import("./promotion-runner-scope.mjs");
+  const checkpoint = {
+    startChapter: 3,
+    manifestPresent: true,
+    manifestLastAppliedChapter: 2,
+    indexNumbers: [1, 2, 3],
+    retryChapterPresent: true,
+  };
+
+  assert.equal(assessQualificationResumeCheckpoint({
+    ...checkpoint,
+    chapterFileNumbers: [1, 2, 3],
+  }).aligned, true);
+  assert.equal(assessQualificationResumeCheckpoint({
+    ...checkpoint,
+    chapterFileNumbers: [1, 2, 4],
+  }).aligned, false);
+  assert.equal(assessQualificationResumeCheckpoint({
+    ...checkpoint,
+    indexNumbers: [1, 2, 2],
+    chapterFileNumbers: [1, 2, 3],
+  }).aligned, false);
 });

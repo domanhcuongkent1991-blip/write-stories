@@ -461,15 +461,17 @@ try {
     const transactionDirs = (await readdir(bookDir, { withFileTypes: true }))
       .filter((entry) => entry.isDirectory() && entry.name.startsWith(".inkos-file-txn-"))
       .map((entry) => entry.name);
-    const chapterFileCount = (await readdir(join(bookDir, "chapters")))
+    const chapterFileNumbers = (await readdir(join(bookDir, "chapters")))
       .filter((name) => /^\d+_.+\.md$/u.test(name))
-      .length;
+      .map((name) => Number.parseInt(name.slice(0, name.indexOf("_")), 10));
+    const chapterFileCount = chapterFileNumbers.length;
     const resumeCheckpoint = assessQualificationResumeCheckpoint({
       startChapter,
       manifestPresent: manifest !== undefined,
       manifestLastAppliedChapter: manifest?.lastAppliedChapter ?? null,
-      indexCount: existingIndex.length,
-      chapterFileCount,
+      indexNumbers: existingIndex.map((chapter) => chapter.number),
+      chapterFileNumbers,
+      retryChapterPresent: retryEntry !== undefined,
     });
     safe.resumePreflight = {
       targetChapters: existingBook.targetChapters ?? null,

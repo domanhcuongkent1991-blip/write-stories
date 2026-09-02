@@ -11,19 +11,34 @@ export function assessQualificationResumeCheckpoint({
   startChapter,
   manifestPresent,
   manifestLastAppliedChapter,
-  indexCount,
-  chapterFileCount,
+  indexNumbers,
+  chapterFileNumbers,
+  retryChapterPresent,
 }) {
   const expectedChapter = startChapter - 1;
+  const expectedNumbers = Array.from(
+    { length: expectedChapter + (retryChapterPresent === true ? 1 : 0) },
+    (_, index) => index + 1,
+  );
+  const hasExactNumbers = (actual) => Array.isArray(actual)
+    && actual.length === expectedNumbers.length
+    && [...actual].sort((left, right) => left - right)
+      .every((number, index) => number === expectedNumbers[index]);
+  const canonicalChapterSet = hasExactNumbers(indexNumbers)
+    && hasExactNumbers(chapterFileNumbers);
   const pristineClone = expectedChapter === 0
     && manifestPresent === false
-    && indexCount === 0
-    && chapterFileCount === 0;
+    && retryChapterPresent !== true
+    && canonicalChapterSet;
   return Object.freeze({
     expectedChapter,
     mode: pristineClone ? "pristine-clone" : "state-manifest",
     aligned: pristineClone
-      || (manifestPresent === true && manifestLastAppliedChapter === expectedChapter),
+      || (
+        manifestPresent === true
+        && manifestLastAppliedChapter === expectedChapter
+        && canonicalChapterSet
+      ),
   });
 }
 
