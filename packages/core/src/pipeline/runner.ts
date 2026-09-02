@@ -121,6 +121,22 @@ import {
   snapshotProviderCallTelemetry,
   type ProviderCallTelemetry,
 } from "../llm/provider-call-telemetry.js";
+import {
+  assertViPipelineOperationAllowed,
+  createAuditReport,
+  createCommitDecision,
+  createDraftArtifact,
+  createValidationReport,
+  resolveViPipelineMode,
+  type AuditDisposition,
+  type AuditFinding,
+  type AuditReport,
+  type CommitDecision,
+  type DraftArtifact,
+  type ValidationReport,
+  type ViPipelineModeResolution,
+  type ViPipelineOperation,
+} from "./three-gate-contracts.js";
 
 const SEQUENCE_LEVEL_CATEGORIES = new Set([
   "Pacing Monotony", "节奏单调",
@@ -323,6 +339,13 @@ export interface PipelineConfig {
   readonly logger?: Logger;
   readonly onStreamProgress?: OnStreamProgress;
   readonly onContextCompression?: ContextCompressionCallback;
+  /** Typed Vietnamese rollout mode. Missing or invalid values resolve to legacy. */
+  readonly viPipelineMode?: unknown;
+  /** Explicit internal book allowlist for canary mode. */
+  readonly viPipelineCanaryBookIds?: ReadonlyArray<string>;
+  /** Separate approvals required before default mode can mutate canonical state. */
+  readonly viPipelinePromotionApproved?: boolean;
+  readonly viPipelineDefaultOn?: boolean;
 }
 
 export interface TokenUsageSummary {
@@ -358,6 +381,18 @@ export interface ChapterPipelineResult {
   readonly tokenUsageBySource?: ChapterTrace["tokenUsageBySource"];
   readonly localRepair?: ChapterReviewCycleResult["localRepair"];
   readonly providerCallTelemetry?: ProviderCallTelemetry;
+}
+
+export interface PreviewChapterResult {
+  readonly mode: "preview";
+  readonly chapterNumber: number;
+  readonly title: string;
+  readonly content: string;
+  readonly wordCount: number;
+  readonly draftArtifact: DraftArtifact;
+  readonly validationReport: ValidationReport;
+  readonly auditReport?: AuditReport;
+  readonly commitDecision: CommitDecision;
 }
 
 export interface WriteChaptersOptions {
@@ -513,6 +548,7 @@ export interface InitBookOptions {
 export class PipelineRunner {
   private readonly state: StateManager;
   private readonly config: PipelineConfig;
+  private readonly viPipelineMode: ViPipelineModeResolution;
   private readonly agentClients = new Map<string, LLMClient>();
   private readonly operationContext = new AsyncLocalStorage<{
     readonly signal?: AbortSignal;
@@ -522,7 +558,28 @@ export class PipelineRunner {
 
   constructor(config: PipelineConfig) {
     this.config = config;
+    this.viPipelineMode = resolveViPipelineMode(config.viPipelineMode ?? process.env.INKOS_VI_PIPELINE_MODE);
     this.state = new StateManager(config.projectRoot);
+  }
+
+  getViPipelineMode(): ViPipelineModeResolution {
+    return this.viPipelineMode;
+  }
+
+  private assertViPipelineOperation(
+    operation: ViPipelineOperation,
+    language: WritingLanguage,
+    bookId?: string,
+  ): void {
+    if (language !== "vi") return;
+    assertViPipelineOperationAllowed({
+      mode: this.viPipelineMode,
+      operation,
+      bookId,
+      canaryBookIds: this.config.viPipelineCanaryBookIds,
+      promotionApproved: this.config.viPipelinePromotionApproved,
+      defaultOn: this.config.viPipelineDefaultOn,
+    });
   }
 
   async runWithAbortSignal<T>(
@@ -634,13 +691,16 @@ export class PipelineRunner {
     operation: LongFictionOperation,
     telemetry?: LengthTelemetry,
   ): Promise<WritingLanguageProfile> {
+    const preflightEnv = this.viPipelineMode.mode === "legacy"
+      ? process.env
+      : { ...process.env, INKOS_EXPERIMENTAL_WRITING_VI: "1" };
     return preflightWritingLanguage({
       projectRoot: this.config.projectRoot,
       bookDir: this.state.bookDir(book.id),
       language,
       operation,
       telemetry,
-      env: process.env,
+      env: preflightEnv,
     });
   }
 
@@ -1389,7 +1449,9 @@ export class PipelineRunner {
 
   async initBook(book: BookConfig, options: InitBookOptions = {}): Promise<void> {
     const bookDir = this.state.bookDir(book.id);
-    const profile = await this.preflightBook(book, "create");
+    const language = await this.resolveExplicitBookLanguage(book);
+    this.assertViPipelineOperation("create", language, book.id);
+    const profile = await this.preflightResolvedBook(book, language, "create");
     if (profile.language === "vi" && await this.pathExists(bookDir)) {
       throw new Error(`Book "${book.id}" already exists at books/${book.id}/. Vietnamese creation will not replace a partial directory.`);
     }
@@ -1484,6 +1546,7 @@ export class PipelineRunner {
   async reviseFoundation(bookId: string, feedback: string): Promise<void> {
     const book = await this.state.loadBookConfig(bookId);
     const language = await this.resolveExplicitBookLanguage(book);
+    this.assertViPipelineOperation("revise", language, bookId);
     this.assertLegacyOnlyLanguage(language, "foundation revision");
     const bookDir = this.state.bookDir(bookId);
     const storyDir = join(bookDir, "story");
@@ -1625,6 +1688,7 @@ export class PipelineRunner {
   ): Promise<string> {
     const book = await this.state.loadBookConfig(bookId);
     const language = await this.resolveExplicitBookLanguage(book);
+    this.assertViPipelineOperation("create", language, bookId);
     this.assertLegacyOnlyLanguage(language, "fanfiction canon import");
     const { FanficCanonImporter } = await import("../agents/fanfic-canon-importer.js");
     const importer = new FanficCanonImporter(this.agentCtxFor("fanfic-canon-importer", bookId));
@@ -1646,6 +1710,7 @@ export class PipelineRunner {
     fanficMode: FanficMode,
   ): Promise<void> {
     const language = await this.resolveExplicitBookLanguage(book);
+    this.assertViPipelineOperation("create", language, book.id);
     this.assertLegacyOnlyLanguage(language, "fanfiction creation");
     const bookDir = this.state.bookDir(book.id);
     const stageLanguage = await this.resolveBookScaffoldLanguage(book);
@@ -1709,6 +1774,7 @@ export class PipelineRunner {
    */
   async initSpinoffBook(book: BookConfig, parentBookId: string, direction?: string): Promise<void> {
     const language = await this.resolveExplicitBookLanguage(book);
+    this.assertViPipelineOperation("create", language, book.id);
     this.assertLegacyOnlyLanguage(language, "side-story creation");
     const parentBook = await this.state.loadBookConfig(parentBookId);
     const parentLanguage = await this.resolveExplicitBookLanguage(parentBook);
@@ -1776,6 +1842,7 @@ export class PipelineRunner {
   async writeDraft(bookId: string, context?: string, wordCount?: number): Promise<DraftResult> {
     const initialBook = await this.state.loadBookConfig(bookId);
     const initialProfile = await this.preflightBook(initialBook, "write");
+    this.assertViPipelineOperation("draft", initialProfile.language, bookId);
     return this.runWithWritingProfile(initialProfile, async () => {
     const releaseLock = await this.state.acquireBookLock(bookId);
     try {
@@ -1919,6 +1986,7 @@ export class PipelineRunner {
   async planChapter(bookId: string, context?: string): Promise<PlanChapterResult> {
     const book = await this.state.loadBookConfig(bookId);
     const profile = await this.preflightBook(book, "plan");
+    this.assertViPipelineOperation("plan", profile.language, bookId);
     return this.runWithWritingProfile(profile, async () => {
     await this.state.ensureControlDocuments(bookId);
     const bookDir = this.state.bookDir(bookId);
@@ -1946,6 +2014,7 @@ export class PipelineRunner {
   async composeChapter(bookId: string, context?: string): Promise<ComposeChapterResult> {
     const book = await this.state.loadBookConfig(bookId);
     const profile = await this.preflightBook(book, "compose");
+    this.assertViPipelineOperation("compose", profile.language, bookId);
     return this.runWithWritingProfile(profile, async () => {
     await this.state.ensureControlDocuments(bookId);
     const bookDir = this.state.bookDir(bookId);
@@ -1978,6 +2047,7 @@ export class PipelineRunner {
     const book = await this.state.loadBookConfig(bookId);
     const frozenTarget = await this.selectChapterTargetReadOnly(book, chapterNumber);
     const initialProfile = await this.preflightBook(book, "audit", frozenTarget.telemetry);
+    this.assertViPipelineOperation("audit", initialProfile.language, bookId);
     return this.runWithWritingProfile(initialProfile, async () => {
       const releaseLock = await this.state.acquireBookLock(bookId);
       try {
@@ -2123,6 +2193,7 @@ export class PipelineRunner {
     const book = await this.state.loadBookConfig(bookId);
     const frozenTarget = await this.selectChapterTargetReadOnly(book, chapterNumber);
     const initialProfile = await this.preflightBook(book, "revise", frozenTarget.telemetry);
+    this.assertViPipelineOperation("revise", initialProfile.language, bookId);
     return this.runWithWritingProfile(initialProfile, async () => {
     const releaseLock = await this.state.acquireBookLock(bookId);
     try {
@@ -2873,6 +2944,7 @@ export class PipelineRunner {
     this.throwIfOperationAborted();
     const initialBook = await this.state.loadBookConfig(bookId);
     const initialProfile = await this.preflightBook(initialBook, "write");
+    this.assertViPipelineOperation("write", initialProfile.language, bookId);
     return this.runWithWritingProfile(initialProfile, async () => {
     const releaseLock = await this.state.acquireBookLock(bookId);
     try {
@@ -2896,6 +2968,210 @@ export class PipelineRunner {
     });
   }
 
+  /**
+   * Generate and inspect a chapter candidate without touching canonical state.
+   * Preview intentionally does not acquire a mutation lock, persist governed
+   * plans/runtime traces, write chapter files, or update any index/snapshot.
+   */
+  async previewNextChapter(
+    bookId: string,
+    wordCount?: number,
+    temperatureOverride?: number,
+    externalContext?: string,
+  ): Promise<PreviewChapterResult> {
+    if (this.viPipelineMode.mode !== "preview") {
+      throw new Error("PREVIEW_MODE_REQUIRED: previewNextChapter requires viPipelineMode=preview.");
+    }
+    this.throwIfOperationAborted();
+    const book = await this.state.loadBookConfig(bookId);
+    const profile = await this.preflightBook(book, "write");
+    return this.runWithWritingProfile(profile, async () => {
+      const bookDir = this.state.bookDir(bookId);
+      const chapterNumber = await this.state.getNextChapterNumber(bookId);
+      const writeInput = await this.prepareWriteInput(
+        book,
+        bookDir,
+        chapterNumber,
+        externalContext ?? this.config.externalContext,
+        { persistArtifacts: false },
+      );
+      const { profile: genreProfile } = await this.loadGenreProfile(book.genre);
+      const lengthSpec = buildLengthSpec(
+        wordCount ?? book.chapterWordCount,
+        profile.language,
+      );
+      const writer = new WriterAgent(this.agentCtxFor("writer", bookId));
+      const output = await runWithProviderCallStage("writer-draft", () => writer.writeChapter({
+        book,
+        bookDir,
+        chapterNumber,
+        ...writeInput,
+        lengthSpec,
+        ...(wordCount ? { wordCountOverride: wordCount } : {}),
+        ...(temperatureOverride ? { temperatureOverride } : {}),
+      }));
+      const contentHash = computeChapterContentHash(output.content);
+      const writerCount = countChapterLength(output.content, lengthSpec.countingMode);
+      const surfaceIssues = profile.language === "vi"
+        ? validateVietnameseSurface(output.content)
+        : [];
+      const hardBlockers = [
+        ...(isOutsideHardRange(writerCount, lengthSpec) ? ["HARD_RANGE_FAIL"] : []),
+        ...surfaceIssues
+          .filter((issue) => issue.severity === "error")
+          .map((issue) => issue.rule),
+      ];
+      const draftArtifact = createDraftArtifact({
+        draftId: randomUUID(),
+        runId: randomUUID(),
+        bookId,
+        chapterNumber,
+        parentCanonicalCheckpoint: await this.loadPreviewParentCheckpoint(bookDir, chapterNumber),
+        contentHash,
+        contentLength: { count: writerCount, countingMode: lengthSpec.countingMode },
+        provider: {
+          provider: this.config.defaultLLMConfig?.service ?? "configured",
+          model: this.config.model,
+          transport: this.config.defaultLLMConfig?.apiFormat === "responses" ? "responses" : "chat",
+        },
+        createdAt: new Date().toISOString(),
+        storagePath: `preview/${bookId}/chapter-${String(chapterNumber).padStart(4, "0")}/${contentHash}.json`,
+      });
+      const validationReport = createValidationReport({
+        validatorVersion: "inkos-deterministic-preview-v1",
+        checks: [
+          { id: "content-hash", passed: true },
+          { id: "hard-range", passed: !hardBlockers.includes("HARD_RANGE_FAIL") },
+          { id: "vietnamese-surface", passed: surfaceIssues.every((issue) => issue.severity !== "error") },
+        ],
+        hardBlockers,
+        warnings: surfaceIssues
+          .filter((issue) => issue.severity !== "error")
+          .map((issue) => issue.description),
+        contentHash,
+        sourceDraftHash: contentHash,
+        noSecretAssertion: true,
+      });
+
+      let auditReport: AuditReport | undefined;
+      if (validationReport.passed) {
+        const auditor = new ContinuityAuditor(this.agentCtxFor("auditor", bookId));
+        const evaluation = await this.evaluateMergedAudit({
+          auditor,
+          book,
+          bookDir,
+          chapterContent: output.content,
+          chapterNumber,
+          language: profile.scaffoldLanguage,
+          lengthSpec,
+          operation: "audit",
+          provenance: {
+            source: "pipeline-preview",
+            operationId: randomUUID(),
+            attemptId: randomUUID(),
+            phase: "initial",
+          },
+          auditOptions: {
+            chapterIntent: writeInput.chapterIntent,
+            chapterMemo: writeInput.chapterMemo,
+            contextPackage: writeInput.contextPackage,
+            ruleStack: writeInput.ruleStack,
+          },
+        });
+        auditReport = createAuditReport({
+          auditorVersion: "inkos-auditor-preview-v1",
+          findings: evaluation.auditResult.issues.map((issue) => this.toPreviewAuditFinding(issue)),
+          contentHash,
+          auditedAt: new Date().toISOString(),
+        });
+        if (evaluation.auditResult.parseFailed) {
+          auditReport = createAuditReport({
+            auditorVersion: "inkos-auditor-preview-v1",
+            findings: [
+              ...auditReport.findings,
+              {
+                ruleId: "AUDIT_INCONCLUSIVE",
+                category: "audit",
+                severity: "critical",
+                disposition: "blocked",
+                description: "Auditor output was not parseable; preview cannot be accepted.",
+              },
+            ],
+            contentHash,
+            auditedAt: new Date().toISOString(),
+          });
+        }
+      }
+
+      const unresolvedBlockers = [
+        ...validationReport.hardBlockers,
+        ...(auditReport?.findings
+          .filter((finding) => finding.disposition === "blocked" || finding.disposition === "repair-required")
+          .map((finding) => finding.ruleId) ?? []),
+      ];
+      const commitDecision = createCommitDecision({
+        decision: "preview",
+        unresolvedBlockers,
+        acceptedWarnings: auditReport?.findings
+          .filter((finding) => finding.disposition === "warning")
+          .map((finding) => finding.ruleId) ?? [],
+        canonicalCheckpointBeforeCommit: draftArtifact.parentCanonicalCheckpoint,
+        finalInvariants: { aligned: true, passed: unresolvedBlockers.length === 0 },
+        atomicCommit: { status: "not-started" },
+        rollbackReference: draftArtifact.runId,
+      });
+      return {
+        mode: "preview",
+        chapterNumber,
+        title: output.title,
+        content: output.content,
+        wordCount: writerCount,
+        draftArtifact,
+        validationReport,
+        ...(auditReport ? { auditReport } : {}),
+        commitDecision,
+      };
+    });
+  }
+
+  private async loadPreviewParentCheckpoint(
+    bookDir: string,
+    chapterNumber: number,
+  ): Promise<{ readonly hash: string; readonly chapterNumber: number }> {
+    if (chapterNumber <= 1) return { hash: "genesis", chapterNumber: 0 };
+    try {
+      const content = await this.readChapterContent(bookDir, chapterNumber - 1);
+      return { hash: computeChapterContentHash(content), chapterNumber: chapterNumber - 1 };
+    } catch {
+      throw new WritingLanguagePreflightError(
+        "STATE_PREFLIGHT_FAILED",
+        `Preview requires the canonical previous chapter ${chapterNumber - 1}.`,
+      );
+    }
+  }
+
+  private toPreviewAuditFinding(issue: AuditIssue): AuditFinding {
+    const disposition: AuditDisposition = issue.severity === "critical"
+      ? (issue.repairHint ? "repair-required" : "blocked")
+      : issue.severity === "warning" ? "warning" : "passed";
+    return {
+      ruleId: issue.ruleId ?? issue.category,
+      category: issue.category,
+      severity: issue.severity,
+      disposition,
+      description: issue.description,
+      ...(issue.evidence?.excerpt ? { evidence: issue.evidence.excerpt } : {}),
+      ...(issue.repairHint?.targetText && issue.repairHint.replacementText
+        ? {
+            repairHint: {
+              targetText: issue.repairHint.targetText,
+              replacementText: issue.repairHint.replacementText,
+            },
+          }
+        : {}),
+    };
+  }
+
   async writeChapters(
     bookId: string,
     chapterCount: number,
@@ -2908,6 +3184,7 @@ export class PipelineRunner {
     this.throwIfOperationAborted();
     const initialBook = await this.state.loadBookConfig(bookId);
     const initialProfile = await this.preflightBook(initialBook, "write");
+    this.assertViPipelineOperation("write", initialProfile.language, bookId);
     return this.runWithWritingProfile(initialProfile, async () => {
     const releaseLock = await this.state.acquireBookLock(bookId);
     try {
@@ -2940,6 +3217,7 @@ export class PipelineRunner {
   async repairChapterState(bookId: string, chapterNumber?: number): Promise<ChapterPipelineResult> {
     const book = await this.state.loadBookConfig(bookId);
     const language = await this.resolveExplicitBookLanguage(book);
+    this.assertViPipelineOperation("repair", language, bookId);
     this.assertLegacyOnlyLanguage(language, "chapter state repair");
     const releaseLock = await this.state.acquireBookLock(bookId);
     try {
@@ -2952,6 +3230,7 @@ export class PipelineRunner {
   async resyncChapterArtifacts(bookId: string, chapterNumber?: number): Promise<ChapterPipelineResult> {
     const book = await this.state.loadBookConfig(bookId);
     const language = await this.resolveExplicitBookLanguage(book);
+    this.assertViPipelineOperation("resync", language, bookId);
     const frozenTarget = await this.selectChapterTargetReadOnly(book, chapterNumber, language);
     const initialProfile = await this.preflightResolvedBook(book, language, "revise", frozenTarget.telemetry);
     return await this.runWithWritingProfile(initialProfile, async () => {
@@ -2995,6 +3274,7 @@ export class PipelineRunner {
   }> {
     const book = await this.state.loadBookConfig(bookId);
     const language = await this.resolveExplicitBookLanguage(book);
+    this.assertViPipelineOperation("resync", language, bookId);
     const frozenTarget = await this.selectChapterTargetReadOnly(
       book,
       chapterNumber,
@@ -5135,6 +5415,7 @@ ${matrix}`,
     bookDir: string,
     chapterNumber: number,
     externalContext?: string,
+    options?: { readonly persistArtifacts?: boolean },
   ): Promise<Pick<WriteChapterInput, "externalContext" | "chapterIntent" | "chapterMemo" | "chapterIntentData" | "contextPackage" | "ruleStack"> & {
     readonly contextTrace?: ChapterContextTraceSummary;
   }> {
@@ -5151,7 +5432,10 @@ ${matrix}`,
       bookDir,
       chapterNumber,
       plannerContext,
-      { reuseExistingIntentWhenContextMissing: true },
+      {
+        reuseExistingIntentWhenContextMissing: true,
+        persistArtifacts: options?.persistArtifacts,
+      },
     );
 
     return {
@@ -5738,6 +6022,7 @@ ${matrix}`,
     externalContext?: string,
     options?: {
       readonly reuseExistingIntentWhenContextMissing?: boolean;
+      readonly persistArtifacts?: boolean;
     },
   ): Promise<{
     plan: PlanChapterOutput;
@@ -5762,6 +6047,7 @@ ${matrix}`,
         (selectionRequest) => composer.selectReferenceSections(selectionRequest),
       ),
       onContextCompression: this.config.onContextCompression,
+      persistRuntimeArtifacts: options?.persistArtifacts,
     });
 
     return { plan, composed };
@@ -5774,6 +6060,7 @@ ${matrix}`,
     externalContext?: string,
     options?: {
       readonly reuseExistingIntentWhenContextMissing?: boolean;
+      readonly persistArtifacts?: boolean;
     },
   ): Promise<PlanChapterOutput> {
     if (
@@ -5798,10 +6085,13 @@ ${matrix}`,
       bookDir,
       chapterNumber,
       externalContext,
+      persistRuntimeArtifacts: options?.persistArtifacts,
     });
     // Persist in the new memo format so subsequent compose/write phases can
     // skip the planner LLM call when no new context is supplied.
-    await savePersistedPlan(bookDir, plan);
+    if (options?.persistArtifacts !== false) {
+      await savePersistedPlan(bookDir, plan);
+    }
     return plan;
   }
 

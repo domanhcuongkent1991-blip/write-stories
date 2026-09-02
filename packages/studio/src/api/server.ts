@@ -2967,6 +2967,15 @@ export function createStudioServer(
         });
       },
       externalContext: overrides?.externalContext,
+      // Resolve the rollout mode on the server boundary. The core runner
+      // validates the value and falls back to legacy for invalid input.
+      viPipelineMode: process.env.INKOS_VI_PIPELINE_MODE,
+      viPipelineCanaryBookIds: process.env.INKOS_VI_CANARY_BOOK_IDS
+        ?.split(",")
+        .map((item) => item.trim())
+        .filter(Boolean),
+      viPipelinePromotionApproved: process.env.INKOS_VI_PROMOTION_APPROVED === "1",
+      viPipelineDefaultOn: process.env.INKOS_VI_DEFAULT_ON === "1",
     };
   }
 
@@ -6042,6 +6051,9 @@ export function createStudioServer(
       const result = await pipeline.resyncChapterArtifacts(id, chapterNum);
       return c.json(result);
     } catch (e) {
+      if (e instanceof WritingLanguagePreflightError) {
+        mapWritingLanguagePreflightError(e);
+      }
       return c.json({ error: String(e) }, 500);
     }
   });

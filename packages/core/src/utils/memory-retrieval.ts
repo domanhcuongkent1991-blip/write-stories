@@ -95,15 +95,19 @@ export async function retrieveMemorySelection(params: {
   readonly outlineNode?: string;
   readonly mustKeep?: ReadonlyArray<string>;
   readonly semanticSelector?: MemorySemanticSelector;
+  /** Preview callers may rebuild the search projection in memory only. */
+  readonly persistProjections?: boolean;
 }): Promise<MemorySelection> {
   const storyDir = join(params.bookDir, "story");
   const stateDir = join(storyDir, "state");
   const fallbackChapter = Math.max(0, params.chapterNumber - 1);
 
-  await bootstrapStructuredStateFromMarkdown({
-    bookDir: params.bookDir,
-    fallbackChapter,
-  }).catch(() => undefined);
+  if (params.persistProjections !== false) {
+    await bootstrapStructuredStateFromMarkdown({
+      bookDir: params.bookDir,
+      fallbackChapter,
+    }).catch(() => undefined);
+  }
 
   const [
     currentStateMarkdown,
@@ -140,15 +144,15 @@ export async function retrieveMemorySelection(params: {
   const summaries = structuredSummaries?.rows ?? parseChapterSummariesMarkdown(
     await readFile(join(storyDir, "chapter_summaries.md"), "utf-8").catch(() => ""),
   );
-  const memoryDb = new MemoryDB(params.bookDir);
+  const memoryDb = params.persistProjections === false ? null : new MemoryDB(params.bookDir);
   try {
-    memoryDb.replaceSummaries(summaries);
-    memoryDb.replaceCurrentFacts(facts);
+    memoryDb?.replaceSummaries(summaries);
+    memoryDb?.replaceCurrentFacts(facts);
 
     // Markdown/structured hook state is authoritative. SQLite is a rebuildable
     // search projection and is never allowed to resurrect stale hook rows.
     const effectiveActiveHooks = activeHooks;
-    const dbPath = join(storyDir, "memory.db");
+    const dbPath = params.persistProjections === false ? ":memory:" : join(storyDir, "memory.db");
     const searchIndex = new LocalSearchIndex(dbPath);
     try {
       searchIndex.replaceScope(
@@ -198,7 +202,7 @@ export async function retrieveMemorySelection(params: {
       searchIndex.close();
     }
   } finally {
-    memoryDb.close();
+    memoryDb?.close();
   }
 }
 

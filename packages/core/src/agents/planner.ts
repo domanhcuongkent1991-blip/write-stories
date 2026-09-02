@@ -60,6 +60,8 @@ export interface PlanChapterInput {
   readonly bookDir: string;
   readonly chapterNumber: number;
   readonly externalContext?: string;
+  /** Preview callers may keep intent and search projections in memory only. */
+  readonly persistRuntimeArtifacts?: boolean;
 }
 
 export interface PlanChapterOutput {
@@ -130,7 +132,9 @@ export class PlannerAgent extends BaseAgent {
   async planChapter(input: PlanChapterInput): Promise<PlanChapterOutput> {
     const storyDir = join(input.bookDir, "story");
     const runtimeDir = join(storyDir, "runtime");
-    await mkdir(runtimeDir, { recursive: true });
+    if (input.persistRuntimeArtifacts !== false) {
+      await mkdir(runtimeDir, { recursive: true });
+    }
 
     const seedMaterials = await loadPlanningSeedMaterials({
       bookDir: input.bookDir,
@@ -161,6 +165,7 @@ export class PlannerAgent extends BaseAgent {
       outlineNode,
       mustKeep,
       seed: seedMaterials,
+      persistProjections: input.persistRuntimeArtifacts,
     });
     const memorySelection = materials.memorySelection;
     // The memo may reference any authoritative hook that retrieval explicitly
@@ -312,7 +317,9 @@ export class PlannerAgent extends BaseAgent {
       renderSummarySnapshot(memorySelection.summaries, scaffoldLanguage),
       activeHookCount,
     );
-    await writeFile(runtimePath, intentMarkdown, "utf-8");
+    if (input.persistRuntimeArtifacts !== false) {
+      await writeFile(runtimePath, intentMarkdown, "utf-8");
+    }
 
     return {
       intent,

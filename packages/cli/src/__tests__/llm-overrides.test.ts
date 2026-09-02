@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { parseLLMOverridesFromArgv } from "../utils.js";
+import { parseLLMOverridesFromArgv, parseViPipelineModeFromArgv } from "../utils.js";
 
 describe("parseLLMOverridesFromArgv", () => {
   it("parses service/model/api key env and transport overrides from CLI argv", () => {
@@ -21,5 +21,20 @@ describe("parseLLMOverridesFromArgv", () => {
       apiFormat: "chat",
       stream: false,
     });
+  });
+});
+
+describe("parseViPipelineModeFromArgv", () => {
+  it("reads the typed rollout mode without interpreting invalid values", () => {
+    expect(parseViPipelineModeFromArgv([
+      "write",
+      "next",
+      "--vi-pipeline-mode=preview",
+    ])).toBe("preview");
+    expect(parseViPipelineModeFromArgv([
+      "--vi-pipeline-mode",
+      "future-mode",
+    ])).toBe("future-mode");
+    expect(parseViPipelineModeFromArgv(["write", "next"])).toBeUndefined();
   });
 });

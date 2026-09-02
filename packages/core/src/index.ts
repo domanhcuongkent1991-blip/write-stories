@@ -635,7 +635,7 @@ export { arbitrateRuntimeStateDeltaHooks, type HookArbiterDecision } from "./uti
 export { analyzeHookHealth } from "./utils/hook-health.js";
 
 // Pipeline
-export { PipelineRunner, type PipelineConfig, type ChapterPipelineResult, type WriteChaptersOptions, type DraftResult, type PlanChapterResult, type ComposeChapterResult, type ReviseResult, type TruthFiles, type BookStatusInfo, type ImportChaptersInput, type ImportChaptersResult, type TokenUsageSummary } from "./pipeline/runner.js";
+export { PipelineRunner, type PipelineConfig, type ChapterPipelineResult, type PreviewChapterResult, type WriteChaptersOptions, type DraftResult, type PlanChapterResult, type ComposeChapterResult, type ReviseResult, type TruthFiles, type BookStatusInfo, type ImportChaptersInput, type ImportChaptersResult, type TokenUsageSummary } from "./pipeline/runner.js";
 export { Scheduler, type SchedulerConfig } from "./pipeline/scheduler.js";
 export { detectChapter, detectAndRewrite, loadDetectionHistory, type DetectChapterResult, type DetectAndRewriteResult } from "./pipeline/detection-runner.js";
 export { runScriptCreation, runStoryboardCreation, runInteractiveFilmCreation, createStoryboardAssetsManifest, type ScriptCreationRunOptions, type ScriptCreationRunResult, type StoryboardAssetsManifest, type StoryboardCreationRunOptions, type StoryboardCreationRunResult, type InteractiveFilmCreationRunOptions, type InteractiveFilmCreationRunResult, type StoryboardImageAsset, type StoryboardImageAssetVariant } from "./pipeline/script-storyboard-runner.js";
@@ -805,3 +805,56 @@ export { exportInk } from "./interactive-film/export-ink.js";
 export { buildPlayableHtml } from "./interactive-film/export-html.js";
 export { ingestMaterial, type IngestMaterialInput, type MaterialAsset } from "./materials/ingest.js";
 export { runWorkerAgent, type WorkerAgentOptions } from "./agent/worker-agent.js";
+export {
+  VI_PIPELINE_MODES,
+  THREE_GATE_ARTIFACT_SCHEMA_VERSION,
+  assertChapterTransition,
+  assertViPipelineOperationAllowed,
+  describePipelineError,
+  evaluateThreeGateDecision,
+  resolveViPipelineMode,
+  ViPipelineModePolicyError,
+  createAuditReport,
+  createCommitDecision,
+  createDraftArtifact,
+  createRepairCandidate,
+  createValidationReport,
+  type AuditDisposition,
+  type AuditFinding,
+  type AuditReport,
+  type AuditReportInput,
+  type AuditSeverity,
+  type ActivationGateDecision,
+  type CanonicalCheckpoint,
+  type CommitDecision,
+  type CommitDecisionInput,
+  type CommitDecisionKind,
+  type ContentLengthMetadata,
+  type DraftArtifact,
+  type DraftArtifactInput,
+  type IntegrationGateDecision,
+  type PromotionGateDecision,
+  type ProviderGateDecision,
+  type ProviderLineage,
+  type RepairAcceptance,
+  type RepairCandidate,
+  type RepairCandidateInput,
+  type ValidationCheck,
+  type ValidationReport as ThreeGateValidationReport,
+  type ValidationReportInput as ThreeGateValidationReportInput,
+  type ThreeGateDecision,
+  type ThreeGateDecisionInput,
+  type ChapterPipelineState,
+  type PipelineErrorCode,
+  type PipelineErrorDescriptor,
+  type PipelineErrorFamily,
+  type PipelineModeSource,
+  type PipelineRetryPolicy,
+  type PipelineStage,
+  type PipelineUserDisposition,
+  type ViPipelineModePolicyErrorCode,
+  type ViPipelineOperation,
+  type ViPipelineOperationPolicyInput,
+  type ViPipelineMode,
+  type ViPipelineModeResolution,
+} from "./pipeline/three-gate-contracts.js";

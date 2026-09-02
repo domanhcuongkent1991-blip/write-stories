@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, mkdir, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { PlannerAgent } from "../agents/planner.js";
@@ -179,6 +179,24 @@ describe("PlannerAgent.planChapter memo generation", () => {
       expect.stringContaining("S004"),
     ]));
     expect(result.intent.pacingCode).toBe("reveal");
+  });
+
+  it("can plan a preview entirely in memory without projection or intent writes", async () => {
+    vi.spyOn(llmProvider, "chatCompletion").mockResolvedValue({
+      content: validMemoRaw(1),
+      usage: ZERO_USAGE,
+    } as unknown as Awaited<ReturnType<typeof llmProvider.chatCompletion>>);
+
+    const result = await makePlanner().planChapter({
+      book: makeBook(),
+      bookDir,
+      chapterNumber: 1,
+      persistRuntimeArtifacts: false,
+    });
+
+    await expect(stat(result.runtimePath)).rejects.toMatchObject({ code: "ENOENT" });
+    await expect(stat(join(bookDir, "story", "memory.db"))).rejects.toMatchObject({ code: "ENOENT" });
+    await expect(stat(join(bookDir, "story", "state"))).rejects.toMatchObject({ code: "ENOENT" });
   });
 
   it("aggregates provider usage across planner attempts", async () => {

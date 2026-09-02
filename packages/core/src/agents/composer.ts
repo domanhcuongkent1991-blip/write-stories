@@ -43,6 +43,8 @@ export interface ComposeChapterInput {
   readonly referenceContextProvider?: BookReferenceContextProvider;
   readonly memorySemanticSelector?: MemorySemanticSelector;
   readonly onContextCompression?: ContextCompressionCallback;
+  /** Preview callers may keep the assembled artifacts in memory only. */
+  readonly persistRuntimeArtifacts?: boolean;
 }
 
 export type BookReferenceContextProvider = (
@@ -93,7 +95,9 @@ export interface ComposeChapterOutput {
 export async function composeGovernedChapter(input: ComposeChapterInput): Promise<ComposeChapterOutput> {
   const storyDir = join(input.bookDir, "story");
   const runtimeDir = join(storyDir, "runtime");
-  await mkdir(runtimeDir, { recursive: true });
+  if (input.persistRuntimeArtifacts !== false) {
+    await mkdir(runtimeDir, { recursive: true });
+  }
   const scaffoldLanguage = resolveWritingLanguageProfile(
     input.book.language ?? "zh",
   ).scaffoldLanguage;
@@ -104,6 +108,7 @@ export async function composeGovernedChapter(input: ComposeChapterInput): Promis
     scaffoldLanguage,
     input.outlineSectionSelector,
     input.memorySemanticSelector,
+    input.persistRuntimeArtifacts,
   );
   const referenceContext = await loadReferenceContext(input);
   const selectedContext = [...baseContext.entries, ...referenceContext.entries];
@@ -150,6 +155,7 @@ export async function composeGovernedChapter(input: ComposeChapterInput): Promis
     contextPackage,
     ruleStack,
     trace,
+    persist: input.persistRuntimeArtifacts !== false,
   });
 
   return {
@@ -584,6 +590,7 @@ async function collectSelectedContext(
   language: ScaffoldLanguage,
   outlineSectionSelector?: OutlineSectionSelector,
   memorySemanticSelector?: MemorySemanticSelector,
+  persistProjections?: boolean,
 ): Promise<{
   readonly entries: ContextPackage["selectedContext"];
   readonly retrievalTrace: MemoryRetrievalTrace;
@@ -669,6 +676,7 @@ async function collectSelectedContext(
       outlineNode: plan.intent.outlineNode,
       mustKeep: retrievalHints,
       semanticSelector: memorySemanticSelector,
+      persistProjections,
     });
     const hookDebtEntries = await buildHookDebtEntries(
       storyDir,

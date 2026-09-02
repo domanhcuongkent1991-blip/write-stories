@@ -1,3 +1,5 @@
+import { createHash } from "node:crypto";
+
 const RUN_LABEL_PATTERN = /^[a-z0-9](?:[a-z0-9-]{0,31})$/u;
 
 export function resolveQualificationExitCode(exitReason) {
@@ -5,6 +7,50 @@ export function resolveQualificationExitCode(exitReason) {
     || (typeof exitReason === "string" && /^PASS_CHECKPOINT_CHAPTER_[1-9]\d*$/u.test(exitReason))
     ? 0
     : 1;
+}
+
+export function recordProviderBudgetRejection(safe, observation) {
+  safe.providerBudgetRejections = (safe.providerBudgetRejections ?? 0) + 1;
+  safe.providerBudgetRejectionObservations = [
+    ...(safe.providerBudgetRejectionObservations ?? []),
+    {
+      stage: observation?.stage ?? null,
+      method: observation?.method ?? null,
+      endpoint: observation?.endpoint ?? null,
+      errorName: "ProviderCallBudgetExceeded",
+    },
+  ];
+}
+
+export function createQualificationRolloutConfig(bookId) {
+  if (typeof bookId !== "string" || bookId.trim().length === 0) {
+    throw new Error("qualification book id must be a non-empty string");
+  }
+
+  const normalizedBookId = bookId.trim();
+  const featureConfiguration = {
+    mode: "canary",
+    canaryBookIds: [normalizedBookId],
+    promotionApproved: false,
+    defaultOn: false,
+  };
+  const featureConfigurationHash = createHash("sha256")
+    .update(JSON.stringify(featureConfiguration), "utf8")
+    .digest("hex");
+
+  return Object.freeze({
+    pipeline: Object.freeze({
+      viPipelineMode: featureConfiguration.mode,
+      viPipelineCanaryBookIds: Object.freeze([...featureConfiguration.canaryBookIds]),
+      viPipelinePromotionApproved: featureConfiguration.promotionApproved,
+      viPipelineDefaultOn: featureConfiguration.defaultOn,
+    }),
+    evidence: Object.freeze({
+      resolvedMode: featureConfiguration.mode,
+      flagSource: "qualification-runner-explicit",
+      featureConfigurationHash,
+    }),
+  });
 }
 
 export function assessQualificationResumeCheckpoint({

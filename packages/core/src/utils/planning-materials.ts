@@ -151,6 +151,7 @@ export async function gatherPlanningMaterials(params: {
   readonly outlineNode?: string;
   readonly mustKeep?: ReadonlyArray<string>;
   readonly seed?: PlanningSeedMaterials;
+  readonly persistProjections?: boolean;
 }): Promise<PlanningMaterials> {
   const seed = params.seed ?? await loadPlanningSeedMaterials({
     bookDir: params.bookDir,
@@ -163,6 +164,7 @@ export async function gatherPlanningMaterials(params: {
     goal: params.goal,
     outlineNode: params.outlineNode,
     mustKeep: params.mustKeep,
+    persistProjections: params.persistProjections,
   });
 
   return {

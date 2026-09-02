@@ -7,6 +7,8 @@ import { promisify } from "node:util";
 import { resolveCandidateSha } from "./candidate-config.mjs";
 import {
   assessQualificationResumeCheckpoint,
+  createQualificationRolloutConfig,
+  recordProviderBudgetRejection,
   resolveQualificationExitCode,
   resolveQualificationRunScope,
 } from "./promotion-runner-scope.mjs";
@@ -73,6 +75,7 @@ if (resumeBookId && resumeBookId !== runScope.bookId) {
 }
 const runId = `${new Date().toISOString().replace(/[-:TZ.]/gu, "").slice(0, 14)}-${randomUUID().slice(0, 8)}`;
 const bookId = resumeBookId ?? runScope.bookId;
+const rollout = createQualificationRolloutConfig(bookId);
 const bookDir = join(scratchRoot, "books", bookId);
 const evidencePath = join(scratchRoot, resumeBookId
   ? `qualification-resume-ch${startChapter}-to-${runThroughChapter}-${runId}.json`
@@ -91,6 +94,9 @@ const safe = {
   startedAt: startedAt.toISOString(),
   baselineBookId,
   candidateSha,
+  viPipelineMode: rollout.evidence.resolvedMode,
+  viPipelineModeSource: rollout.evidence.flagSource,
+  viPipelineFeatureConfigurationHash: rollout.evidence.featureConfigurationHash,
   bookId,
   resumeBookId,
   startChapter,
@@ -117,6 +123,8 @@ const safe = {
   healthGate: null,
   resumePreflight: null,
   providerRequests: [],
+  providerBudgetRejections: 0,
+  providerBudgetRejectionObservations: [],
   providerCallBudget,
   checkpoints: [],
   recoveryDrill: null,
@@ -376,8 +384,7 @@ globalThis.fetch = async (input, init) => {
     errorName: null,
   };
   if (url.hostname === "ecoapi.net" && safe.providerRequests.length >= safe.providerCallBudget) {
-    observation.errorName = "ProviderCallBudgetExceeded";
-    safe.providerRequests.push(observation);
+    recordProviderBudgetRejection(safe, observation);
     const budgetError = new Error(`Qualification provider call budget exceeded (${safe.providerCallBudget})`);
     budgetError.code = "QUALIFICATION_PROVIDER_CALL_BUDGET";
     throw budgetError;
@@ -571,7 +578,13 @@ try {
     writingReviewRetries: 1,
     chapterReviewMode: "auto",
     revisionGate: "strict",
+    ...rollout.pipeline,
   });
+  const resolvedRollout = runner.getViPipelineMode();
+  if (resolvedRollout.mode !== rollout.evidence.resolvedMode || resolvedRollout.source !== "explicit") {
+    throw new Error("qualification rollout mode did not resolve to the explicit canary configuration");
+  }
+  safe.viPipelineModeResolution = resolvedRollout;
 
   const abortDrillEnabled = targetChapters === 15
     && startChapter <= 4
@@ -736,6 +749,7 @@ try {
   safe.completedAt = new Date().toISOString();
   safe.totalDurationMs = new Date(safe.completedAt).getTime() - startedAt.getTime();
   safe.providerRequestCount = safe.providerRequests.length;
+  safe.providerBudgetRejectionCount = safe.providerBudgetRejections;
   await mkdir(scratchRoot, { recursive: true });
   await writeFile(evidencePath, `${JSON.stringify(safe, null, 2)}\n`, { encoding: "utf8", flag: "wx" });
   process.stdout.write(JSON.stringify({

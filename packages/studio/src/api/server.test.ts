@@ -3449,6 +3449,47 @@ describe("createStudioServer daemon lifecycle", () => {
     expect(resyncChapterArtifactsMock).toHaveBeenCalledWith("demo-book", 3);
   });
 
+  it("passes the server-side Vietnamese rollout mode into every pipeline config", async () => {
+    const previousMode = process.env.INKOS_VI_PIPELINE_MODE;
+    process.env.INKOS_VI_PIPELINE_MODE = "preview";
+    try {
+      const { createStudioServer } = await import("./server.js");
+      const app = createStudioServer(cloneProjectConfig() as never, root);
+
+      const response = await app.request("http://localhost/api/v1/books/demo-book/resync/3", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({}),
+      });
+
+      expect(response.status).toBe(200);
+      expect(pipelineConfigs.at(-1)).toMatchObject({ viPipelineMode: "preview" });
+    } finally {
+      if (previousMode === undefined) delete process.env.INKOS_VI_PIPELINE_MODE;
+      else process.env.INKOS_VI_PIPELINE_MODE = previousMode;
+    }
+  });
+
+  it("maps typed preflight failures from resync to the stable API error shape", async () => {
+    const { WritingLanguagePreflightError } = await import("@actalk/inkos-core");
+    resyncChapterArtifactsMock.mockRejectedValueOnce(
+      new WritingLanguagePreflightError("WRITING_LANGUAGE_DISABLED", "Vietnamese writing is disabled."),
+    );
+    const { createStudioServer } = await import("./server.js");
+    const app = createStudioServer(cloneProjectConfig() as never, root);
+
+    const response = await app.request("http://localhost/api/v1/books/demo-book/resync/3", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({}),
+    });
+
+    expect(response.status).toBe(409);
+    await expect(response.json()).resolves.toMatchObject({
+      error: { code: "WRITING_LANGUAGE_DISABLED", message: "Vietnamese writing is disabled." },
+    });
+  });
+
   it("routes export-save through the shared structured interaction runtime", async () => {
     const { createStudioServer } = await import("./server.js");
     const app = createStudioServer(cloneProjectConfig() as never, root);

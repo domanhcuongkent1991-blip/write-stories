@@ -124,6 +124,23 @@ describe("ComposerAgent", () => {
     await expect(readFile(result.contextPath, "utf-8")).resolves.toContain("current_focus.md");
   });
 
+  it("can build preview context without writing runtime artifacts", async () => {
+    const result = await composeGovernedChapter({
+      book,
+      bookDir,
+      chapterNumber: 4,
+      plan,
+      persistRuntimeArtifacts: false,
+    });
+
+    expect(result.contextPath).toContain("chapter-0004.context.json");
+    await expect(stat(result.contextPath)).rejects.toMatchObject({ code: "ENOENT" });
+    await expect(stat(result.ruleStackPath)).rejects.toMatchObject({ code: "ENOENT" });
+    await expect(stat(result.tracePath)).rejects.toMatchObject({ code: "ENOENT" });
+    await expect(stat(join(storyDir, "memory.db"))).rejects.toMatchObject({ code: "ENOENT" });
+    await expect(stat(join(storyDir, "state"))).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
   it("adds semantically selected book references as traceable compressible context", async () => {
     const result = await composeGovernedChapter({
       book,

@@ -103,10 +103,34 @@ export function parseLLMOverridesFromArgv(argv: readonly string[]): LLMConfigCli
   return overrides;
 }
 
+/**
+ * Read the rollout mode as untrusted input. Validation and fail-closed
+ * fallback are owned by the core pipeline, so the CLI must preserve invalid
+ * values for a safe diagnostic instead of silently rewriting them here.
+ */
+export function parseViPipelineModeFromArgv(argv: readonly string[]): string | undefined {
+  for (let i = 0; i < argv.length; i++) {
+    const arg = argv[i];
+    if (!arg) continue;
+    const [flag, inlineValue] = arg.split("=", 2) as [string, string | undefined];
+    if (flag !== "--vi-pipeline-mode") continue;
+    return inlineValue ?? argv[i + 1];
+  }
+  return undefined;
+}
+
+function parseBookIdAllowlist(value: string | undefined): ReadonlyArray<string> | undefined {
+  const ids = value
+    ?.split(",")
+    .map((item) => item.trim())
+    .filter(Boolean);
+  return ids && ids.length > 0 ? ids : undefined;
+}
+
 export function buildPipelineConfig(
   config: ProjectConfig,
   root: string,
-  extra?: Partial<Pick<PipelineConfig, "notifyChannels" | "radarSources" | "externalContext" | "chapterReviewMode" | "revisionGate">> & {
+  extra?: Partial<Pick<PipelineConfig, "notifyChannels" | "radarSources" | "externalContext" | "chapterReviewMode" | "revisionGate" | "viPipelineMode" | "viPipelineCanaryBookIds" | "viPipelinePromotionApproved" | "viPipelineDefaultOn">> & {
     readonly quiet?: boolean;
     readonly logFile?: NodeJS.WritableStream;
   },
@@ -147,6 +171,15 @@ export function buildPipelineConfig(
     externalContext: extra?.externalContext,
     logger,
     onStreamProgress,
+    viPipelineMode: extra?.viPipelineMode
+      ?? parseViPipelineModeFromArgv(process.argv.slice(2))
+      ?? process.env.INKOS_VI_PIPELINE_MODE,
+    viPipelineCanaryBookIds: extra?.viPipelineCanaryBookIds
+      ?? parseBookIdAllowlist(process.env.INKOS_VI_CANARY_BOOK_IDS),
+    viPipelinePromotionApproved: extra?.viPipelinePromotionApproved
+      ?? process.env.INKOS_VI_PROMOTION_APPROVED === "1",
+    viPipelineDefaultOn: extra?.viPipelineDefaultOn
+      ?? process.env.INKOS_VI_DEFAULT_ON === "1",
   };
 }
 

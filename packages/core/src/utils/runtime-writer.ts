@@ -19,13 +19,18 @@ export async function writeGovernedRuntimeArtifacts(params: {
   readonly contextPackage: ContextPackage;
   readonly ruleStack: RuleStack;
   readonly trace: ChapterTrace;
+  readonly persist?: boolean;
 }): Promise<RuntimeArtifactWriteResult> {
-  await mkdir(params.runtimeDir, { recursive: true });
-
   const chapterSlug = `chapter-${String(params.chapterNumber).padStart(4, "0")}`;
   const contextPath = join(params.runtimeDir, `${chapterSlug}.context.json`);
   const ruleStackPath = join(params.runtimeDir, `${chapterSlug}.rule-stack.yaml`);
   const tracePath = join(params.runtimeDir, `${chapterSlug}.trace.json`);
+
+  if (params.persist === false) {
+    return { contextPath, ruleStackPath, tracePath };
+  }
+
+  await mkdir(params.runtimeDir, { recursive: true });
 
   await Promise.all([
     writeFile(contextPath, JSON.stringify(params.contextPackage, null, 2), "utf-8"),

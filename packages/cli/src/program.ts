@@ -61,6 +61,7 @@ export function createProgram(hooks: ProgramHooks = {}): Command {
     .option("--api-format <chat|responses>", "Override LLM API format for this CLI run")
     .option("--stream", "Force streaming LLM responses for this CLI run")
     .option("--no-stream", "Force non-streaming LLM responses for this CLI run")
+    .option("--vi-pipeline-mode <legacy|preview|canary|default>", "Set the Vietnamese pipeline rollout mode for this CLI run")
     .action(async () => {
       await launchStudioEntry(process.cwd(), "4567", { launchStudio: hooks.launchStudio });
     });

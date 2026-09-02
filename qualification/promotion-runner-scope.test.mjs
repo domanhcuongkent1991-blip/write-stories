@@ -69,6 +69,40 @@ test("maps only pass results to a successful process exit code", async () => {
   assert.equal(scopeModule.resolveQualificationExitCode("BLOCKED_PROVIDER_HEALTH"), 1);
 });
 
+test("keeps budget-guard rejections separate from actual provider requests", async () => {
+  const { recordProviderBudgetRejection } = await import("./promotion-runner-scope.mjs");
+  const safe = { providerRequests: [] };
+  recordProviderBudgetRejection(safe, {
+    stage: "writer-draft",
+    method: "POST",
+    endpoint: "https://ecoapi.net/v1/chat/completions",
+  });
+
+  assert.equal(safe.providerRequests.length, 0);
+  assert.equal(safe.providerBudgetRejections, 1);
+  assert.equal(safe.providerBudgetRejectionObservations.length, 1);
+  assert.equal(safe.providerBudgetRejectionObservations[0].errorName, "ProviderCallBudgetExceeded");
+});
+
+test("builds a bounded canary rollout config and stable safe evidence hash", async () => {
+  const { createQualificationRolloutConfig } = await import("./promotion-runner-scope.mjs");
+  const first = createQualificationRolloutConfig("qualification-book-1");
+  const same = createQualificationRolloutConfig("qualification-book-1");
+  const other = createQualificationRolloutConfig("qualification-book-2");
+
+  assert.deepEqual(first.pipeline, {
+    viPipelineMode: "canary",
+    viPipelineCanaryBookIds: ["qualification-book-1"],
+    viPipelinePromotionApproved: false,
+    viPipelineDefaultOn: false,
+  });
+  assert.equal(first.evidence.resolvedMode, "canary");
+  assert.equal(first.evidence.flagSource, "qualification-runner-explicit");
+  assert.match(first.evidence.featureConfigurationHash, /^[a-f0-9]{64}$/u);
+  assert.equal(first.evidence.featureConfigurationHash, same.evidence.featureConfigurationHash);
+  assert.notEqual(first.evidence.featureConfigurationHash, other.evidence.featureConfigurationHash);
+});
+
 test("accepts only a pristine manifest-less checkpoint zero for resume", async () => {
   const scopeModule = await import("./promotion-runner-scope.mjs");
   assert.equal(typeof scopeModule.assessQualificationResumeCheckpoint, "function");
