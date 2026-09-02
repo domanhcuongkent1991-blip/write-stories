@@ -1,0 +1,3 @@
+[[IgnoredVulns]]
+id = "GHSA-g7r4-m6w7-qqqr"
+reason = "esbuild is used only through Vite and tsx for build and TypeScript transforms; the repository has no esbuild serve API usage. Keep esbuild 0.27.4 because esbuild 0.28.1 breaks the Vite 6 browser-target build. Re-evaluate during the next dependency update with a compatible Vite/plugin chain."
