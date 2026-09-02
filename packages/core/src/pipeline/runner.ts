@@ -2952,24 +2952,37 @@ export class PipelineRunner {
   async resyncChapterArtifacts(bookId: string, chapterNumber?: number): Promise<ChapterPipelineResult> {
     const book = await this.state.loadBookConfig(bookId);
     const language = await this.resolveExplicitBookLanguage(book);
-    this.assertLegacyOnlyLanguage(language, "chapter artifact resync");
-    const releaseLock = await this.state.acquireBookLock(bookId);
-    try {
-      const lockedBook = await this.state.loadBookConfig(bookId);
-      const lockedLanguage = await this.resolveExplicitBookLanguage(lockedBook);
-      this.assertLegacyOnlyLanguage(lockedLanguage, "chapter artifact resync");
-      const lockedProfile = resolveWritingLanguageProfile(lockedLanguage);
-      return await this.runWithWritingProfile(
-        lockedProfile,
-        () => this._resyncChapterArtifactsLocked(
+    const frozenTarget = await this.selectChapterTargetReadOnly(book, chapterNumber, language);
+    const initialProfile = await this.preflightResolvedBook(book, language, "revise", frozenTarget.telemetry);
+    return await this.runWithWritingProfile(initialProfile, async () => {
+      const releaseLock = await this.state.acquireBookLock(bookId);
+      try {
+        const lockedBook = await this.state.loadBookConfig(bookId);
+        const lockedLanguage = await this.resolveExplicitBookLanguage(lockedBook);
+        await this.preflightResolvedBook(lockedBook, lockedLanguage, "revise", frozenTarget.telemetry);
+        const lockedTarget = await this.reselectFrozenChapterTargetReadOnly(
           lockedBook,
+          frozenTarget,
+          lockedLanguage,
+        );
+        const lockedProfile = await this.preflightResolvedBook(
+          lockedBook,
+          lockedLanguage,
+          "revise",
+          lockedTarget.telemetry,
+        );
+        return await this.runWithWritingProfile(
           lockedProfile,
-          chapterNumber,
-        ),
-      );
-    } finally {
-      await releaseLock();
-    }
+          () => this._resyncChapterArtifactsLocked(
+            lockedBook,
+            lockedProfile,
+            lockedTarget.chapterNumber,
+          ),
+        );
+      } finally {
+        await releaseLock();
+      }
+    });
   }
 
   async resyncChapterStateAndAudit(
@@ -2982,45 +2995,51 @@ export class PipelineRunner {
   }> {
     const book = await this.state.loadBookConfig(bookId);
     const language = await this.resolveExplicitBookLanguage(book);
-    this.assertLegacyOnlyLanguage(language, "chapter state resync and audit");
     const frozenTarget = await this.selectChapterTargetReadOnly(
       book,
       chapterNumber,
       language,
     );
-    const releaseLock = await this.state.acquireBookLock(bookId);
-    try {
-      const lockedBook = await this.state.loadBookConfig(bookId);
-      const lockedLanguage = await this.resolveExplicitBookLanguage(lockedBook);
-      this.assertLegacyOnlyLanguage(lockedLanguage, "chapter state resync and audit");
-      const lockedTarget = await this.reselectFrozenChapterTargetReadOnly(
-        lockedBook,
-        frozenTarget,
-        lockedLanguage,
-      );
-      const lockedProfile = await this.preflightResolvedBook(
-        lockedBook,
-        lockedLanguage,
-        "audit",
-        lockedTarget.telemetry,
-      );
-      return await this.runWithWritingProfile(lockedProfile, async () => {
-        const chapter = await this._resyncChapterArtifactsLocked(
+    const initialProfile = await this.preflightResolvedBook(
+      book,
+      language,
+      "audit",
+      frozenTarget.telemetry,
+    );
+    return await this.runWithWritingProfile(initialProfile, async () => {
+      const releaseLock = await this.state.acquireBookLock(bookId);
+      try {
+        const lockedBook = await this.state.loadBookConfig(bookId);
+        const lockedLanguage = await this.resolveExplicitBookLanguage(lockedBook);
+        const lockedTarget = await this.reselectFrozenChapterTargetReadOnly(
           lockedBook,
-          lockedProfile,
-          lockedTarget.chapterNumber,
-          options,
+          frozenTarget,
+          lockedLanguage,
         );
-        const audit = await this._auditDraftLocked(
+        const lockedProfile = await this.preflightResolvedBook(
           lockedBook,
-          chapter.chapterNumber,
-          lockedProfile,
+          lockedLanguage,
+          "audit",
+          lockedTarget.telemetry,
         );
-        return { chapter, audit };
-      });
-    } finally {
-      await releaseLock();
-    }
+        return await this.runWithWritingProfile(lockedProfile, async () => {
+          const chapter = await this._resyncChapterArtifactsLocked(
+            lockedBook,
+            lockedProfile,
+            lockedTarget.chapterNumber,
+            options,
+          );
+          const audit = await this._auditDraftLocked(
+            lockedBook,
+            chapter.chapterNumber,
+            lockedProfile,
+          );
+          return { chapter, audit };
+        });
+      } finally {
+        await releaseLock();
+      }
+    });
   }
 
   private async _writeNextChapterLocked(
@@ -4141,6 +4160,12 @@ export class PipelineRunner {
     const bookId = book.id;
     const bookDir = this.state.bookDir(bookId);
     const pipelineLang = profile.scaffoldLanguage;
+    const writingLanguage = profile.language;
+    // A manual resync must not silently mint replacement hook IDs. Chat can
+    // override this explicitly, while Studio/CLI retain the safe default.
+    const allowNewHooks = writingLanguage === "vi"
+      ? options.allowNewHooks ?? false
+      : options.allowNewHooks;
     const stageLanguage = pipelineLang;
     const index = [...(await this.state.loadChapterIndex(bookId))];
     if (index.length === 0) {
@@ -4164,9 +4189,12 @@ export class PipelineRunner {
     const content = await this.readChapterContent(bookDir, targetChapter);
     const baselineChapter = targetChapter - 1;
     const baselineStoryDir = join(bookDir, "story", "snapshots", String(baselineChapter));
-    const [oldState, oldHooks] = await Promise.all([
+    const [oldState, oldHooks, authorityStoryFrame, authorityBookRules, authorityChapterSummaries] = await Promise.all([
       readFile(join(baselineStoryDir, "current_state.md"), "utf-8"),
       readFile(join(baselineStoryDir, "pending_hooks.md"), "utf-8"),
+      readStoryFrame(bookDir).catch(() => ""),
+      readFile(join(bookDir, "story", "book_rules.md"), "utf-8").catch(() => ""),
+      readFile(join(bookDir, "story", "chapter_summaries.md"), "utf-8").catch(() => ""),
     ]).catch((error) => {
       throw new Error(
         `Cannot sync chapter ${targetChapter} safely: baseline snapshot ${baselineChapter} is unavailable (${String(error)})`,
@@ -4187,7 +4215,7 @@ export class PipelineRunner {
       bookDir,
       chapterNumber: targetChapter,
       baselineChapter,
-      allowNewHooks: options.allowNewHooks,
+      allowNewHooks,
       title: targetMeta.title,
       content,
       chapterIntent: reducedControlInput?.plan.intentMarkdown,
@@ -4195,6 +4223,14 @@ export class PipelineRunner {
       ruleStack: reducedControlInput?.composed.ruleStack,
       allowReapply: true,
     });
+    if (writingLanguage === "vi") {
+      syncedOutput = await this.promotePersistenceHooks(
+        bookDir,
+        targetChapter,
+        syncedOutput,
+        pipelineLang,
+      );
+    }
     const validator = new StateValidatorAgent(this.agentCtxFor("state-validator", bookId));
     let validation = await validator.validate(
       content,
@@ -4204,9 +4240,14 @@ export class PipelineRunner {
       oldHooks,
       syncedOutput.updatedHooks,
       pipelineLang,
+      {
+        storyFrame: authorityStoryFrame,
+        bookRules: authorityBookRules,
+        chapterSummaries: authorityChapterSummaries,
+      },
     );
 
-    if (!validation.passed) {
+    if (!validation.passed || validation.repairRequired) {
       const recovery = await retrySettlementAfterValidationFailure({
         writer,
         validator,
@@ -4214,7 +4255,7 @@ export class PipelineRunner {
         bookDir,
         chapterNumber: targetChapter,
         baselineChapter,
-        allowNewHooks: options.allowNewHooks,
+        allowNewHooks,
         title: targetMeta.title,
         content,
         reducedControlInput: reducedControlInput
@@ -4228,6 +4269,19 @@ export class PipelineRunner {
         oldHooks,
         originalValidation: validation,
         language: pipelineLang,
+        authorityContext: {
+          storyFrame: authorityStoryFrame,
+          bookRules: authorityBookRules,
+          chapterSummaries: authorityChapterSummaries,
+        },
+        ...(writingLanguage === "vi" ? {
+          normalizeSettledOutput: (output: WriteChapterOutput) => this.promotePersistenceHooks(
+            bookDir,
+            targetChapter,
+            output,
+            pipelineLang,
+          ),
+        } : {}),
         logWarn: (message) => this.logWarn(pipelineLang, message),
         logger: this.config.logger,
       });
@@ -4243,6 +4297,102 @@ export class PipelineRunner {
 
     if (!validation.passed) {
       throw new Error(`Chapter sync still failed for chapter ${targetChapter}.`);
+    }
+
+    if (writingLanguage === "vi") {
+      if (
+        !syncedOutput.runtimeStateDelta
+        || !syncedOutput.runtimeStateSnapshot
+        || syncedOutput.runtimeStateDelta.chapter !== targetChapter
+        || syncedOutput.runtimeStateSnapshot.manifest.language !== "vi"
+        || syncedOutput.runtimeStateSnapshot.manifest.lastAppliedChapter !== targetChapter
+        || syncedOutput.runtimeStateSnapshot.currentState.chapter !== targetChapter
+        || !syncedOutput.runtimeStateSnapshot.chapterSummaries.rows.some(
+          (row) => row.chapter === targetChapter,
+        )
+      ) {
+        throw new WritingLanguagePreflightError(
+          "STATE_PREFLIGHT_FAILED",
+          "Vietnamese chapter resync requires a typed delta and snapshot aligned to the latest chapter.",
+        );
+      }
+
+      const lengthSpec: LengthSpec = targetMeta.lengthTelemetry
+        ? {
+            target: targetMeta.lengthTelemetry.target,
+            softMin: targetMeta.lengthTelemetry.softMin,
+            softMax: targetMeta.lengthTelemetry.softMax,
+            hardMin: targetMeta.lengthTelemetry.hardMin,
+            hardMax: targetMeta.lengthTelemetry.hardMax,
+            countingMode: targetMeta.lengthTelemetry.countingMode,
+          }
+        : buildLengthSpec(book.chapterWordCount, writingLanguage);
+      const finalWordCount = countChapterLength(content, lengthSpec.countingMode);
+      const lengthWarnings = this.buildLengthWarnings(
+        targetChapter,
+        finalWordCount,
+        lengthSpec,
+        pipelineLang,
+      );
+      const persistedOutput: WriteChapterOutput = {
+        ...syncedOutput,
+        chapterNumber: targetChapter,
+        title: targetMeta.title,
+        content,
+        wordCount: finalWordCount,
+      };
+      const fileSet = await writer.prepareChapterFileSet(
+        bookDir,
+        persistedOutput,
+        gp.numericalSystem,
+        writingLanguage,
+      );
+      index[targetIndex] = {
+        ...targetMeta,
+        status: "audit-failed",
+        wordCount: finalWordCount,
+        updatedAt: new Date().toISOString(),
+        auditIssues: ["[warning] Vietnamese resync requires a fresh audit before continuation."],
+        auditDecision: "inconclusive",
+        auditAttemptId: undefined,
+        auditRunPaths: [],
+        verifiedBlockerCount: 0,
+        auditProvenance: undefined,
+        lengthWarnings,
+        lengthTelemetry: this.buildLengthTelemetry({
+          language: writingLanguage,
+          lengthSpec,
+          writerCount: finalWordCount,
+          postReviseCount: 0,
+          finalCount: finalWordCount,
+          repairApplied: false,
+          lengthWarning: lengthWarnings.length > 0,
+        }),
+        reviewNote: undefined,
+      };
+      await this.commitCanonicalChapterFileSet(bookDir, fileSet, index);
+      await this.runDerivedStep(stageLanguage, "sync narrative memory", () =>
+        this.syncNarrativeMemoryIndex(bookId));
+      await this.runDerivedStep(stageLanguage, "snapshot state", () =>
+        this.state.snapshotState(bookId, targetChapter));
+      await this.runDerivedStep(stageLanguage, "sync current-state facts", () =>
+        this.syncCurrentStateFactHistory(bookId, targetChapter));
+
+      return {
+        chapterNumber: targetChapter,
+        title: targetMeta.title,
+        wordCount: finalWordCount,
+        auditResult: {
+          passed: false,
+          issues: [],
+          summary: "chapter truth/state resynced from edited body, but chapter still needs audit",
+        },
+        revised: false,
+        status: "audit-failed",
+        lengthWarnings,
+        lengthTelemetry: index[targetIndex]!.lengthTelemetry,
+        tokenUsage: targetMeta.tokenUsage,
+      };
     }
 
     await writer.saveChapter(bookDir, syncedOutput, gp.numericalSystem, pipelineLang);

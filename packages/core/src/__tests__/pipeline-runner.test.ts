@@ -4,7 +4,7 @@ import { createRequire } from "node:module";
 import { mkdtemp, mkdir, readFile, readdir, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
-import { buildImportFoundationSource, PipelineRunner } from "../pipeline/runner.js";
+import { buildImportFoundationSource, PipelineRunner, type ChapterPipelineResult } from "../pipeline/runner.js";
 import * as llmProvider from "../llm/provider.js";
 import { StateManager } from "../state/manager.js";
 import { ArchitectAgent } from "../agents/architect.js";
@@ -1413,6 +1413,343 @@ describe("PipelineRunner", () => {
       await rm(root, { recursive: true, force: true });
     }
   });
+
+  it("allows Vietnamese resync through the locked public path", async () => {
+    const { root, runner, state, bookId } = await createRunnerFixture();
+    const restoreVi = await enableViWriting(root);
+    const profile = resolveWritingLanguageProfile("vi");
+    const chapterResult = {
+      chapterNumber: 1,
+      title: "Mưa",
+      wordCount: 4,
+      auditResult: createAuditResult({ passed: false }),
+      revised: false,
+      status: "audit-failed" as const,
+    };
+    const auditResult = { ...createAuditResult({ passed: true }), chapterNumber: 1 };
+    const lockedProfile = vi.fn(async () => profile);
+    const resync = vi.fn(async () => chapterResult);
+    const audit = vi.fn(async () => auditResult);
+    Object.assign(runner as object, {
+      resolveExplicitBookLanguage: vi.fn(async () => "vi"),
+      selectChapterTargetReadOnly: vi.fn(async () => ({
+        chapterNumber: 1,
+        telemetry: { language: "vi", countingMode: "vi_wordlike_tokens_v1" },
+      })),
+      reselectFrozenChapterTargetReadOnly: vi.fn(async () => ({
+        chapterNumber: 1,
+        telemetry: { language: "vi", countingMode: "vi_wordlike_tokens_v1" },
+      })),
+      preflightResolvedBook: lockedProfile,
+      _resyncChapterArtifactsLocked: resync,
+      _auditDraftLocked: audit,
+    });
+
+    try {
+      await state.saveBookConfig(bookId, {
+        ...(await state.loadBookConfig(bookId)),
+        language: "vi",
+      });
+      const result = await runner.resyncChapterStateAndAudit(bookId, 1);
+
+      expect(result).toEqual({ chapter: chapterResult, audit: auditResult });
+      expect(resync).toHaveBeenCalledWith(expect.objectContaining({ language: "vi" }), profile, 1, {});
+      expect(audit).toHaveBeenCalledWith(expect.objectContaining({ language: "vi" }), 1, profile);
+    } finally {
+      restoreVi();
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("atomically resyncs the latest Vietnamese chapter from typed baseline truth", async () => {
+    const { root, runner, state, bookId } = await createRunnerFixture();
+    const restoreVi = await enableViWriting(root);
+    const book = await state.loadBookConfig(bookId);
+    const bookDir = state.bookDir(bookId);
+    const chaptersDir = join(bookDir, "chapters");
+    const body = "Lan bước qua hiên mưa và giữ chặt cuốn sổ cũ.";
+    const chapter: ChapterMeta = {
+      number: 1,
+      title: "Mưa",
+      status: "audit-failed",
+      wordCount: 999,
+      createdAt: "2026-08-28T00:00:00.000Z",
+      updatedAt: "2026-08-28T00:00:00.000Z",
+      auditIssues: ["fresh audit required"],
+      lengthWarnings: [],
+      lengthTelemetry: {
+        language: "vi",
+        target: 2000,
+        softMin: 1700,
+        softMax: 2300,
+        hardMin: 1,
+        hardMax: 100,
+        countingMode: "vi_wordlike_tokens_v1",
+        writerCount: 999,
+        postReviseCount: 999,
+        finalCount: 999,
+        repairApplied: false,
+        lengthWarning: false,
+      },
+    };
+    await writeFile(join(chaptersDir, "0001_Mua.md"), `# Chương 1: Mưa\n\n${body}`, "utf-8");
+    await state.saveChapterIndex(bookId, [chapter]);
+    await snapshotRevisionBaseline(state, bookId, 0);
+    const settled = createSettledRevisionOutput({
+      book: { ...book, language: "vi" },
+      bookDir,
+      chapterNumber: 1,
+      baselineChapter: 0,
+      title: chapter.title,
+      content: body,
+    });
+    const commitAtomicFileSet = vi.spyOn(atomicFileSetModule, "commitAtomicFileSet");
+    const saveChapter = vi.spyOn(WriterAgent.prototype, "saveChapter");
+    const saveChapterIndex = vi.spyOn(StateManager.prototype, "saveChapterIndex");
+    const snapshotState = vi.spyOn(StateManager.prototype, "snapshotState");
+    const settleChapterState = vi.spyOn(WriterAgent.prototype, "settleChapterState").mockResolvedValue(settled);
+    vi.spyOn(StateValidatorAgent.prototype, "validate").mockResolvedValue({
+      passed: true,
+      repairRequired: false,
+      warnings: [],
+    });
+    Object.assign(runner as object, {
+      createGovernedArtifacts: vi.fn(async () => undefined),
+      loadGenreProfile: vi.fn(async () => ({ profile: { numericalSystem: false } })),
+      syncNarrativeMemoryIndex: vi.fn(async () => undefined),
+      syncCurrentStateFactHistory: vi.fn(async () => undefined),
+    });
+
+    try {
+    const result = await (runner as unknown as {
+        _resyncChapterArtifactsLocked(
+          lockedBook: BookConfig,
+          profile: WritingLanguageProfile,
+          chapterNumber?: number,
+          options?: { readonly allowNewHooks?: boolean },
+        ): Promise<ChapterPipelineResult>;
+      })._resyncChapterArtifactsLocked({ ...book, language: "vi" }, resolveWritingLanguageProfile("vi"), 1);
+      const committedPaths = commitAtomicFileSet.mock.calls[0]?.[0].writes.map((write) => write.relativePath);
+      const savedChapter = await readFile(join(chaptersDir, "0001_Mưa.md"), "utf-8");
+      const savedIndex = await state.loadChapterIndex(bookId);
+
+      expect(result).toMatchObject({ chapterNumber: 1, status: "audit-failed" });
+      expect(settleChapterState).toHaveBeenCalledWith(expect.objectContaining({
+        allowNewHooks: false,
+      }));
+      expect(result.wordCount).toBe(countChapterLength(body, "vi_wordlike_tokens_v1"));
+      expect(savedChapter).toBe(`# Chương 1: Mưa\n\n${body}`);
+      expect(savedIndex[0]).toMatchObject({
+        status: "audit-failed",
+        wordCount: countChapterLength(body, "vi_wordlike_tokens_v1"),
+        auditDecision: "inconclusive",
+        auditRunPaths: [],
+        verifiedBlockerCount: 0,
+      });
+      expect(savedIndex[0]?.auditIssues).toEqual([
+        "[warning] Vietnamese resync requires a fresh audit before continuation.",
+      ]);
+      expect(committedPaths).toEqual(expect.arrayContaining([
+        join("chapters", "0001_Mưa.md"),
+        join("chapters", "index.json"),
+        join("story", "state", "manifest.json"),
+        join("story", "state", "current_state.json"),
+        join("story", "state", "hooks.json"),
+        join("story", "state", "chapter_summaries.json"),
+      ]));
+      expect(commitAtomicFileSet).toHaveBeenCalledTimes(1);
+      expect(saveChapter).not.toHaveBeenCalled();
+      expect(saveChapterIndex).not.toHaveBeenCalled();
+      expect(snapshotState).toHaveBeenCalledTimes(1);
+      await expect(stat(join(bookDir, "story", "snapshots", "1", "state", "manifest.json"))).resolves.toBeTruthy();
+    } finally {
+      restoreVi();
+      await rm(root, { recursive: true, force: true });
+    }
+  }, SLOW_PIPELINE_TEST_TIMEOUT_MS);
+
+  it("runs Vietnamese resync and fresh audit as two ordered atomic phases", async () => {
+    const { root, runner, state, bookId } = await createRunnerFixture();
+    const restoreVi = await enableViWriting(root);
+    const book = await state.loadBookConfig(bookId);
+    const bookDir = state.bookDir(bookId);
+    const chaptersDir = join(bookDir, "chapters");
+    const body = "Lan đặt cuốn sổ lên bàn rồi đọc dấu mực mới dưới ngọn đèn.";
+    const telemetry = {
+      language: "vi" as const,
+      target: 2000,
+      softMin: 1700,
+      softMax: 2300,
+      hardMin: 1,
+      hardMax: 100,
+      countingMode: "vi_wordlike_tokens_v1" as const,
+      writerCount: 12,
+      postReviseCount: 0,
+      finalCount: 12,
+      repairApplied: false,
+      lengthWarning: false,
+    };
+    await state.saveBookConfig(bookId, { ...book, language: "vi" });
+    await writeFile(join(chaptersDir, "0001_So.md"), `# Chương 1: Sổ\n\n${body}`, "utf-8");
+    await state.saveChapterIndex(bookId, [{
+      number: 1,
+      title: "Sổ",
+      status: "audit-failed",
+      wordCount: 12,
+      createdAt: "2026-08-28T00:00:00.000Z",
+      updatedAt: "2026-08-28T00:00:00.000Z",
+      auditIssues: ["old audit must not remain attached"],
+      lengthWarnings: [],
+      lengthTelemetry: telemetry,
+      auditDecision: "fail",
+      auditRunPaths: ["story/audit/runs/chapter-0001/old.json"],
+      verifiedBlockerCount: 2,
+    }]);
+    await snapshotRevisionBaseline(state, bookId, 0);
+    const settled = createSettledRevisionOutput({
+      book: { ...book, language: "vi" },
+      bookDir,
+      chapterNumber: 1,
+      baselineChapter: 0,
+      title: "Sổ",
+      content: body,
+    });
+    const settle = vi.spyOn(WriterAgent.prototype, "settleChapterState").mockResolvedValue(settled);
+    vi.spyOn(StateValidatorAgent.prototype, "validate").mockResolvedValue({
+      passed: true,
+      repairRequired: false,
+      warnings: [],
+    });
+    const acquireBookLock = vi.spyOn(StateManager.prototype, "acquireBookLock");
+    const commitAtomicFileSet = vi.spyOn(atomicFileSetModule, "commitAtomicFileSet");
+    const auditedBodies: string[] = [];
+    const evaluateMergedAudit = vi.fn(async (params: { readonly chapterContent: string }) => {
+      auditedBodies.push(params.chapterContent);
+      return {
+        auditResult: createAuditResult({
+          passed: true,
+          decision: "pass",
+          contentHash: computeChapterContentHash(params.chapterContent),
+        }),
+        aiTellCount: 0,
+        blockingCount: 0,
+        criticalCount: 0,
+        revisionBlockingIssues: [],
+      };
+    });
+    Object.assign(runner as object, {
+      createGovernedArtifacts: vi.fn(async () => undefined),
+      loadGenreProfile: vi.fn(async () => ({ profile: { numericalSystem: false } })),
+      syncNarrativeMemoryIndex: vi.fn(async () => undefined),
+      syncCurrentStateFactHistory: vi.fn(async () => undefined),
+      persistAuditDriftGuidance: vi.fn(async () => undefined),
+      emitWebhook: vi.fn(async () => undefined),
+      evaluateMergedAudit,
+    });
+
+    try {
+      const result = await runner.resyncChapterStateAndAudit(bookId, 1, { allowNewHooks: false });
+      const savedIndex = await state.loadChapterIndex(bookId);
+      const runPath = savedIndex[0]?.auditRunPaths?.at(-1);
+      const auditRun = JSON.parse(await readFile(join(bookDir, runPath!), "utf-8")) as {
+        readonly contentHash: string;
+        readonly canonicalCommitOutcome: string;
+      };
+
+      expect(result.audit.decision).toBe("pass");
+      expect(result.chapter.status).toBe("audit-failed");
+      expect(auditedBodies).toEqual([body]);
+      expect(settle).toHaveBeenCalledWith(expect.objectContaining({
+        baselineChapter: 0,
+        allowNewHooks: false,
+        allowReapply: true,
+      }));
+      expect(acquireBookLock).toHaveBeenCalledTimes(1);
+      expect(commitAtomicFileSet).toHaveBeenCalledTimes(2);
+      expect(savedIndex[0]).toMatchObject({
+        status: "ready-for-review",
+        auditDecision: "pass",
+        verifiedBlockerCount: 0,
+      });
+      expect(auditRun).toMatchObject({
+        contentHash: computeChapterContentHash(body),
+        canonicalCommitOutcome: "unchanged",
+      });
+
+      evaluateMergedAudit.mockRejectedValue(new Error("auditor unavailable"));
+      await expect(runner.resyncChapterStateAndAudit(bookId, 1, { allowNewHooks: false }))
+        .rejects.toThrow("auditor unavailable");
+      const failedIndex = await state.loadChapterIndex(bookId);
+      expect(failedIndex[0]).toMatchObject({
+        status: "audit-failed",
+        auditDecision: "inconclusive",
+        auditRunPaths: [],
+      });
+      expect(commitAtomicFileSet).toHaveBeenCalledTimes(3);
+    } finally {
+      restoreVi();
+      await rm(root, { recursive: true, force: true });
+    }
+  }, SLOW_PIPELINE_TEST_TIMEOUT_MS);
+
+  it("fails closed without mutating a Vietnamese chapter when typed settlement is missing", async () => {
+    const { root, runner, state, bookId } = await createRunnerFixture();
+    const restoreVi = await enableViWriting(root);
+    const book = await state.loadBookConfig(bookId);
+    const bookDir = state.bookDir(bookId);
+    const chaptersDir = join(bookDir, "chapters");
+    const body = "Lan nhìn thấy dấu mực mới trên cuốn sổ.";
+    const chapter: ChapterMeta = {
+      number: 1,
+      title: "Mực mới",
+      status: "audit-failed",
+      wordCount: 8,
+      createdAt: "2026-08-28T00:00:00.000Z",
+      updatedAt: "2026-08-28T00:00:00.000Z",
+      auditIssues: [],
+      lengthWarnings: [],
+    };
+    const chapterPath = join(chaptersDir, "0001_Muc_moi.md");
+    await writeFile(chapterPath, `# Chương 1: Mực mới\n\n${body}`, "utf-8");
+    await state.saveChapterIndex(bookId, [chapter]);
+    await snapshotRevisionBaseline(state, bookId, 0);
+    const indexBefore = await readFile(join(chaptersDir, "index.json"), "utf-8");
+    const chapterBefore = await readFile(chapterPath, "utf-8");
+    const commitAtomicFileSet = vi.spyOn(atomicFileSetModule, "commitAtomicFileSet");
+    vi.spyOn(WriterAgent.prototype, "settleChapterState").mockResolvedValue(createWriterOutput({
+      chapterNumber: 1,
+      title: chapter.title,
+      content: body,
+      updatedState: "legacy state",
+      updatedHooks: "legacy hooks",
+    }));
+    vi.spyOn(StateValidatorAgent.prototype, "validate").mockResolvedValue({
+      passed: true,
+      repairRequired: false,
+      warnings: [],
+    });
+    Object.assign(runner as object, {
+      createGovernedArtifacts: vi.fn(async () => undefined),
+      loadGenreProfile: vi.fn(async () => ({ profile: { numericalSystem: false } })),
+    });
+
+    try {
+      await expect((runner as unknown as {
+        _resyncChapterArtifactsLocked(
+          lockedBook: BookConfig,
+          profile: WritingLanguageProfile,
+          chapterNumber?: number,
+        ): Promise<ChapterPipelineResult>;
+      })._resyncChapterArtifactsLocked({ ...book, language: "vi" }, resolveWritingLanguageProfile("vi"), 1))
+        .rejects.toMatchObject({ code: "STATE_PREFLIGHT_FAILED" });
+      expect(await readFile(join(chaptersDir, "index.json"), "utf-8")).toBe(indexBefore);
+      expect(await readFile(chapterPath, "utf-8")).toBe(chapterBefore);
+      expect(commitAtomicFileSet).not.toHaveBeenCalled();
+    } finally {
+      restoreVi();
+      await rm(root, { recursive: true, force: true });
+    }
+  }, SLOW_PIPELINE_TEST_TIMEOUT_MS);
 
   it("keeps explicit telemetry language independent from its counting mode", async () => {
     const { root, runner } = await createRunnerFixture();
