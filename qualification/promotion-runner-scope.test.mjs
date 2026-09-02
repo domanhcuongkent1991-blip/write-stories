@@ -38,3 +38,14 @@ test("rejects run labels that could escape or blur the evidence namespace", asyn
     );
   }
 });
+
+test("maps only pass results to a successful process exit code", async () => {
+  const scopeModule = await import("./promotion-runner-scope.mjs");
+  assert.equal(typeof scopeModule.resolveQualificationExitCode, "function");
+  if (typeof scopeModule.resolveQualificationExitCode !== "function") return;
+
+  assert.equal(scopeModule.resolveQualificationExitCode("PASS"), 0);
+  assert.equal(scopeModule.resolveQualificationExitCode("PASS_CHECKPOINT_CHAPTER_3"), 0);
+  assert.equal(scopeModule.resolveQualificationExitCode("FAIL_QUALITY_CHAPTER_1"), 1);
+  assert.equal(scopeModule.resolveQualificationExitCode("BLOCKED_PROVIDER_HEALTH"), 1);
+});

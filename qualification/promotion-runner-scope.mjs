@@ -1,5 +1,12 @@
 const RUN_LABEL_PATTERN = /^[a-z0-9](?:[a-z0-9-]{0,31})$/u;
 
+export function resolveQualificationExitCode(exitReason) {
+  return exitReason === "PASS"
+    || (typeof exitReason === "string" && /^PASS_CHECKPOINT_CHAPTER_[1-9]\d*$/u.test(exitReason))
+    ? 0
+    : 1;
+}
+
 export function resolveQualificationRunScope({
   candidateSha,
   evidenceDate,

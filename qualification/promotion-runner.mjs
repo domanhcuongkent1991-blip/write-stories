@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { promisify } from "node:util";
 import { resolveCandidateSha } from "./candidate-config.mjs";
-import { resolveQualificationRunScope } from "./promotion-runner-scope.mjs";
+import { resolveQualificationExitCode, resolveQualificationRunScope } from "./promotion-runner-scope.mjs";
 
 const execFile = promisify(execFileCallback);
 const worktreeRoot = "C:/tmp/CodexScratch/2026-09-01-inkos-promotion-hardening";
@@ -737,4 +737,5 @@ try {
     })),
     error: safe.error,
   }, null, 2));
+  process.exitCode = resolveQualificationExitCode(safe.exitReason);
 }
