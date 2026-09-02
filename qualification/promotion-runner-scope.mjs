@@ -17,9 +17,10 @@ export function resolveQualificationRunScope({
     throw new Error("qualification run label must be 1-32 lowercase letters, digits, or hyphens");
   }
 
-  const suffix = `${evidenceDate}-${candidateSha}-${probeVariant}-${runLabel}`;
+  const candidatePathId = candidateSha.slice(0, 16);
+  const suffix = `${evidenceDate}-${candidatePathId}-${probeVariant}-${runLabel}`;
   return Object.freeze({
     scratchRoot: `C:/Users/Admin/Documents/Codex/InkOS/promotion-evidence/${suffix}`,
-    bookId: `promotion-vi-${evidenceDate.replaceAll("-", "")}-${candidateSha}-${probeVariant}-${runLabel}`,
+    bookId: `promotion-vi-${evidenceDate.replaceAll("-", "")}-${candidatePathId}-${probeVariant}-${runLabel}`,
   });
 }
