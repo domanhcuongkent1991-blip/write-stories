@@ -54,7 +54,7 @@
       "browserslist": "4.28.7",
       "dompurify": "3.4.13",
       "esbuild": "0.27.4",
-      "fast-uri": "3.1.5",
+      "fast-uri": "3.1.6",
       "fast-xml-builder": "1.1.7",
       "fast-xml-parser": "5.7.0",
       "mermaid": "11.16.1",
