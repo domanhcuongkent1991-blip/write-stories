@@ -5,6 +5,7 @@ import { readCharacterContext } from "../utils/outline-paths.js";
 import { readBookRules as readStructuredBookRules } from "./rules-reader.js";
 import type { StoredHook } from "../state/memory-db.js";
 import type { ScaffoldLanguage } from "../models/writing-language.js";
+import { getLegalHookActions } from "../models/hook-operation-intent.js";
 
 async function readOrEmpty(path: string): Promise<string> {
   try {
@@ -238,14 +239,22 @@ export function formatRelevantThreads(
   hooks: ReadonlyArray<StoredHook>,
   subplotBoardRaw: string,
   language: ScaffoldLanguage = "zh",
+  options: { readonly includeAllowedActions?: boolean } = {},
 ): string {
-  const hookRows = hooks.map((hook) => `- ${hook.hookId}: ${[
-    hook.type,
-    hook.status,
-    hook.expectedPayoff,
-    hook.payoffTiming,
-    hook.notes,
-  ].filter(Boolean).join(" | ")}`);
+  const hookRows = hooks.map((hook) => {
+    const base = [
+      hook.type,
+      hook.status,
+      hook.expectedPayoff,
+      hook.payoffTiming,
+      hook.notes,
+    ].filter(Boolean).join(" | ");
+    if (!options.includeAllowedActions) return `- ${hook.hookId}: ${base}`;
+    const allowedActions = getLegalHookActions(hook)
+      .filter((action) => action !== "mention")
+      .join("|") || "none";
+    return `- ${hook.hookId}: ${base} | allowed_actions=${allowedActions}`;
+  });
   const subplotRows = extractActiveSubplotLines(subplotBoardRaw).map((line) => `- ${line}`);
   const lines = [...hookRows, ...subplotRows];
   if (lines.length === 0) {

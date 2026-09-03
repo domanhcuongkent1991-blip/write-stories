@@ -240,6 +240,56 @@ describe("PlannerAgent.planChapter memo generation", () => {
     expect(memo.body).toContain("## 当前任务");
   });
 
+  it("renders legal deferred-hook actions only when Vietnamese guidance is enabled", async () => {
+    const deferredHook = {
+      hookId: "H-deferred",
+      startChapter: 1,
+      type: "mystery",
+      status: "deferred",
+      lastAdvancedChapter: 1,
+      expectedPayoff: "the sealed room",
+      notes: "keep the pressure alive",
+    } as const;
+    const input = {
+      storyDir: join(bookDir, "story"),
+      bookDir,
+      chapterNumber: 1,
+      isGoldenOpening: true,
+      fallbackGoal: "advance the sealed-room investigation",
+      chapterSummariesRaw: "",
+      relevantHooks: [deferredHook],
+      lengthSpec: {
+        target: 3000,
+        softMin: 2700,
+        softMax: 3300,
+        hardMin: 2400,
+        hardMax: 3600,
+        countingMode: "zh_chars" as const,
+      },
+      language: "en" as const,
+    };
+    const chatSpy = vi.spyOn(llmProvider, "chatCompletion").mockResolvedValue({
+      content: validMemoRaw(1),
+      usage: ZERO_USAGE,
+    } as unknown as Awaited<ReturnType<typeof llmProvider.chatCompletion>>);
+
+    await makePlanner().planChapterMemo({
+      ...input,
+      includeAllowedHookActions: true,
+    });
+    const guidedMessages = chatSpy.mock.calls[0]![2] as ReadonlyArray<{ role: string; content: string }>;
+    expect(guidedMessages.find((message) => message.role === "user")?.content)
+      .toContain("allowed_actions=advance|defer");
+    expect(guidedMessages.find((message) => message.role === "user")?.content)
+      .not.toContain("allowed_actions=advance|resolve|defer");
+
+    chatSpy.mockClear();
+    await makePlanner().planChapterMemo(input);
+    const legacyMessages = chatSpy.mock.calls[0]![2] as ReadonlyArray<{ role: string; content: string }>;
+    expect(legacyMessages.find((message) => message.role === "user")?.content)
+      .not.toContain("allowed_actions=");
+  });
+
   it("does not hard-cap memo generation below the configured model output budget", async () => {
     const chatSpy = vi.spyOn(llmProvider, "chatCompletion").mockResolvedValue({
       content: validMemoRaw(1),

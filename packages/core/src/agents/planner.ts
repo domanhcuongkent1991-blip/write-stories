@@ -222,6 +222,7 @@ export class PlannerAgent extends BaseAgent {
       // English prompts (system + user template + golden opening guidance)
       // for English books instead of always-Chinese.
       language: scaffoldLanguage,
+      includeAllowedHookActions: writingLanguage === "vi",
       lengthSpec,
     } as const;
     let memoResult = await this.planChapterMemoWithUsage(memoInput);
@@ -350,6 +351,7 @@ export class PlannerAgent extends BaseAgent {
     readonly recyclableHooks?: ReadonlyArray<StoredHook>;
     readonly authoritativeActiveHooks?: ReadonlyArray<StoredHook>;
     readonly language?: ScaffoldLanguage;
+    readonly includeAllowedHookActions?: boolean;
     readonly lengthSpec: LengthSpec;
   }): Promise<ChapterMemo> {
     const result = await this.planChapterMemoWithUsage(input);
@@ -370,6 +372,7 @@ export class PlannerAgent extends BaseAgent {
     readonly recyclableHooks?: ReadonlyArray<StoredHook>;
     readonly authoritativeActiveHooks?: ReadonlyArray<StoredHook>;
     readonly language?: ScaffoldLanguage;
+    readonly includeAllowedHookActions?: boolean;
     readonly lengthSpec: LengthSpec;
   }, policy: MemoGenerationPolicy = {
     parseAttemptLimit: MEMO_RETRY_LIMIT,
@@ -406,7 +409,12 @@ export class PlannerAgent extends BaseAgent {
       protagonistMatrixRow: extractProtagonistRow(characterMatrix),
       opponentRows: extractOpponentRows(characterMatrix, 3),
       collaboratorRows: extractCollaboratorRows(characterMatrix, 3),
-      relevantThreads: formatRelevantThreads(input.relevantHooks ?? [], subplotBoard, language),
+      relevantThreads: formatRelevantThreads(
+        input.relevantHooks ?? [],
+        subplotBoard,
+        language,
+        { includeAllowedActions: input.includeAllowedHookActions === true },
+      ),
       recyclableHooks: formatRecyclableHooks(
         input.recyclableHooks ?? [],
         input.chapterNumber,

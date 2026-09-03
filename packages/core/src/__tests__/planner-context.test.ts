@@ -137,4 +137,38 @@ describe("formatRelevantThreads", () => {
     expect(threads).toContain("S001");
     expect(threads).not.toContain("S007");
   });
+
+  it("renders validator-derived planner actions for deferred hooks when opted in", () => {
+    const threads = formatRelevantThreads([
+      {
+        hookId: "H-deferred",
+        startChapter: 1,
+        type: "mystery",
+        status: "paused",
+        lastAdvancedChapter: 1,
+        expectedPayoff: "the sealed room",
+        notes: "keep the pressure alive",
+      },
+    ], "", "en", { includeAllowedActions: true });
+
+    expect(threads).toContain("H-deferred");
+    expect(threads).toContain("allowed_actions=advance|defer");
+    expect(threads).not.toContain("allowed_actions=advance|resolve|defer");
+  });
+
+  it("does not add action guidance unless explicitly requested", () => {
+    const threads = formatRelevantThreads([
+      {
+        hookId: "H-open",
+        startChapter: 1,
+        type: "mystery",
+        status: "open",
+        lastAdvancedChapter: 1,
+        expectedPayoff: "the sealed room",
+        notes: "",
+      },
+    ], "", "en");
+
+    expect(threads).not.toContain("allowed_actions=");
+  });
 });
