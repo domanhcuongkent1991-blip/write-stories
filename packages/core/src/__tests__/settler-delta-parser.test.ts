@@ -51,6 +51,60 @@ describe("parseSettlerDeltaOutput", () => {
     expect(result.runtimeStateDelta.chapterSummary?.title).toBe("河埠对账");
   });
 
+  it("normalizes known narrative hook-status aliases before schema validation", () => {
+    const result = parseSettlerDeltaOutput([
+      "=== RUNTIME_STATE_DELTA ===",
+      "```json",
+      JSON.stringify({
+        chapter: 12,
+        hookOps: {
+          upsert: [
+            {
+              hookId: "mentor-oath",
+              startChapter: 8,
+              type: "relationship",
+              status: "pressured",
+              lastAdvancedChapter: 12,
+              expectedPayoff: "揭开师债真相",
+            },
+          ],
+          mention: [],
+          resolve: [],
+          defer: [],
+        },
+      }),
+      "```",
+    ].join("\n"));
+
+    expect(result.runtimeStateDelta.hookOps.upsert[0]?.status).toBe("progressing");
+  });
+
+  it("keeps unknown hook-status values fail-closed", () => {
+    expect(() => parseSettlerDeltaOutput([
+      "=== RUNTIME_STATE_DELTA ===",
+      "```json",
+      JSON.stringify({
+        chapter: 12,
+        hookOps: {
+          upsert: [
+            {
+              hookId: "mentor-oath",
+              startChapter: 8,
+              type: "relationship",
+              status: "invented-status",
+              lastAdvancedChapter: 12,
+              expectedPayoff: "揭开师债真相",
+            },
+          ],
+          mention: [],
+          resolve: [],
+          defer: [],
+        },
+      }),
+      "```",
+    ].join("\n"))).toThrow(/runtime state delta failed schema validation/i);
+  });
+
   it("rejects invalid runtime-state delta payloads", () => {
     expect(() =>
       parseSettlerDeltaOutput([

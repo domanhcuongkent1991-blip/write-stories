@@ -2,6 +2,7 @@ import {
   RuntimeStateDeltaSchema,
   type RuntimeStateDelta,
 } from "../models/runtime-state.js";
+import { resolveHookStatusAlias } from "../utils/hook-lifecycle.js";
 
 export interface SettlerDeltaOutput {
   readonly postSettlement: string;
@@ -73,7 +74,7 @@ export function parseSettlerDeltaOutput(content: string): SettlerDeltaOutput {
   try {
     return {
       postSettlement: extract("POST_SETTLEMENT"),
-      runtimeStateDelta: RuntimeStateDeltaSchema.parse(parsed),
+      runtimeStateDelta: RuntimeStateDeltaSchema.parse(normalizeHookStatusAliases(parsed)),
     };
   } catch (error) {
     throw new SettlerDeltaParseError(
@@ -81,6 +82,47 @@ export function parseSettlerDeltaOutput(content: string): SettlerDeltaOutput {
       `runtime state delta failed schema validation: ${String(error)}`,
     );
   }
+}
+
+/**
+ * Models sometimes use a narrative hook-status alias (for example,
+ * "pressured") even though the persisted runtime schema uses the canonical
+ * status "progressing". Normalize only aliases already recognized by the
+ * hook lifecycle module; unknown values remain untouched so schema validation
+ * still fails closed.
+ */
+function normalizeHookStatusAliases(value: unknown): unknown {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return value;
+
+  const root = value as Record<string, unknown>;
+  const hookOps = root.hookOps;
+  if (!hookOps || typeof hookOps !== "object" || Array.isArray(hookOps)) return value;
+
+  const upsert = (hookOps as Record<string, unknown>).upsert;
+  if (!Array.isArray(upsert)) return value;
+
+  let changed = false;
+  const normalizedUpsert = upsert.map((hook) => {
+    if (!hook || typeof hook !== "object" || Array.isArray(hook)) return hook;
+
+    const record = hook as Record<string, unknown>;
+    if (typeof record.status !== "string") return hook;
+
+    const normalized = resolveHookStatusAlias(record.status);
+    if (!normalized || normalized === record.status) return hook;
+
+    changed = true;
+    return { ...record, status: normalized };
+  });
+
+  if (!changed) return value;
+  return {
+    ...root,
+    hookOps: {
+      ...(hookOps as Record<string, unknown>),
+      upsert: normalizedUpsert,
+    },
+  };
 }
 
 function jsonCandidates(value: string): string[] {
