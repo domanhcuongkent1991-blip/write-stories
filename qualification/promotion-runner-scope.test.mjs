@@ -84,6 +84,138 @@ test("keeps budget-guard rejections separate from actual provider requests", asy
   assert.equal(safe.providerBudgetRejectionObservations[0].errorName, "ProviderCallBudgetExceeded");
 });
 
+test("resolves an explicit HTTPS qualification provider without leaking credentials", async () => {
+  const { resolveQualificationProviderConfig } = await import("./promotion-runner-scope.mjs");
+  assert.equal(typeof resolveQualificationProviderConfig, "function");
+  if (typeof resolveQualificationProviderConfig !== "function") return;
+
+  assert.deepEqual(resolveQualificationProviderConfig({
+    INKOS_QUALIFICATION_BASE_URL: "https://api.zpro.io.vn/v1/",
+    INKOS_QUALIFICATION_SERVICE_KEY: "custom:Zpro",
+    INKOS_QUALIFICATION_MODEL: "gpt-5.5",
+  }), {
+    baseUrl: "https://api.zpro.io.vn/v1",
+    baseHost: "api.zpro.io.vn",
+    basePath: "/v1",
+    serviceKey: "custom:Zpro",
+    model: "gpt-5.5",
+  });
+});
+
+test("rejects unsafe or ambiguous qualification provider URLs", async () => {
+  const { resolveQualificationProviderConfig } = await import("./promotion-runner-scope.mjs");
+
+  for (const baseUrl of [
+    "http://api.zpro.io.vn/v1",
+    "https://user:password@api.zpro.io.vn/v1",
+    "https://api.zpro.io.vn/v1?key=secret",
+    "https://api.zpro.io.vn/v1#fragment",
+  ]) {
+    assert.throws(
+      () => resolveQualificationProviderConfig({ INKOS_QUALIFICATION_BASE_URL: baseUrl }),
+      /base url/i,
+    );
+  }
+});
+
+test("matches provider requests only inside the configured API path", async () => {
+  const { isQualificationProviderRequest } = await import("./promotion-runner-scope.mjs");
+  const baseUrl = "https://api.zpro.io.vn/v1";
+
+  assert.equal(isQualificationProviderRequest("https://api.zpro.io.vn/v1/models", baseUrl), true);
+  assert.equal(isQualificationProviderRequest("https://api.zpro.io.vn/v1/chat/completions", baseUrl), true);
+  assert.equal(isQualificationProviderRequest("https://api.zpro.io.vn/v10/chat/completions", baseUrl), false);
+  assert.equal(isQualificationProviderRequest("https://ecoapi.net/v1/chat/completions", baseUrl), false);
+  assert.equal(isQualificationProviderRequest("not a URL", baseUrl), false);
+});
+
+test("uses an ephemeral environment credential before a project secret", async () => {
+  const { resolveQualificationCredential } = await import("./promotion-runner-scope.mjs");
+  const credential = resolveQualificationCredential({
+    environmentApiKey: "temporary-test-key",
+    serviceKey: "custom:Zpro",
+    services: {
+      "custom:Zpro": { apiKey: "persisted-test-key" },
+    },
+  });
+
+  assert.equal(credential.apiKey, "temporary-test-key");
+  assert.equal(credential.source, "environment");
+  assert.throws(
+    () => resolveQualificationCredential({
+      environmentApiKey: "  ",
+      serviceKey: "custom:Missing",
+      services: {},
+    }),
+    /credential is not configured/i,
+  );
+});
+
+test("sums provider requests across a single qualification namespace", async () => {
+  const { summarizeQualificationCampaignHistory } = await import("./promotion-runner-scope.mjs");
+  const lineage = {
+    candidateSha: "candidate-sha",
+    bookId: "qualification-book",
+    runLabel: "zpro-gpt55-01",
+    baseHost: "api.zpro.io.vn",
+    basePath: "/v1",
+    serviceKey: "custom:Zpro",
+    model: "gpt-5.5",
+    probeVariant: "stream",
+  };
+  const result = summarizeQualificationCampaignHistory([
+    { ...lineage, providerRequestCount: 17 },
+    { ...lineage, providerRequestCount: 22 },
+  ], lineage);
+
+  assert.deepEqual(result, {
+    evidenceRecordCount: 2,
+    providerRequestCount: 39,
+  });
+});
+
+test("rejects cross-provider evidence and malformed request counts in campaign history", async () => {
+  const { summarizeQualificationCampaignHistory } = await import("./promotion-runner-scope.mjs");
+  const lineage = {
+    candidateSha: "candidate-sha",
+    bookId: "qualification-book",
+    runLabel: "zpro-gpt55-01",
+    baseHost: "api.zpro.io.vn",
+    basePath: "/v1",
+    serviceKey: "custom:Zpro",
+    model: "gpt-5.5",
+    probeVariant: "stream",
+  };
+
+  assert.throws(
+    () => summarizeQualificationCampaignHistory([
+      { ...lineage, model: "another-model", providerRequestCount: 5 },
+    ], lineage),
+    /lineage/i,
+  );
+  assert.throws(
+    () => summarizeQualificationCampaignHistory([
+      { ...lineage, providerRequestCount: -1 },
+    ], lineage),
+    /request count/i,
+  );
+});
+
+test("enforces the provider budget against prior and current namespace requests", async () => {
+  const { isQualificationProviderBudgetExhausted } = await import("./promotion-runner-scope.mjs");
+
+  assert.equal(isQualificationProviderBudgetExhausted({
+    priorProviderRequestCount: 17,
+    currentProviderRequestCount: 7,
+    providerCallBudget: 25,
+  }), false);
+  assert.equal(isQualificationProviderBudgetExhausted({
+    priorProviderRequestCount: 17,
+    currentProviderRequestCount: 8,
+    providerCallBudget: 25,
+  }), true);
+});
+
 test("builds a bounded canary rollout config and stable safe evidence hash", async () => {
   const { createQualificationRolloutConfig } = await import("./promotion-runner-scope.mjs");
   const first = createQualificationRolloutConfig("qualification-book-1");

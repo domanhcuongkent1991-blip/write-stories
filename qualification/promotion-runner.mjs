@@ -8,9 +8,14 @@ import { resolveCandidateSha } from "./candidate-config.mjs";
 import {
   assessQualificationResumeCheckpoint,
   createQualificationRolloutConfig,
+  isQualificationProviderBudgetExhausted,
+  isQualificationProviderRequest,
   recordProviderBudgetRejection,
+  resolveQualificationCredential,
   resolveQualificationExitCode,
+  resolveQualificationProviderConfig,
   resolveQualificationRunScope,
+  summarizeQualificationCampaignHistory,
 } from "./promotion-runner-scope.mjs";
 
 const execFile = promisify(execFileCallback);
@@ -67,8 +72,8 @@ if (!Number.isInteger(startChapter) || startChapter < 1 || startChapter > target
 if (!Number.isInteger(runThroughChapter) || runThroughChapter < startChapter || runThroughChapter > targetChapters) {
   throw new Error("run-through chapter must be between start chapter and target chapter count");
 }
-if (!Number.isInteger(providerCallBudget) || providerCallBudget < 1 || providerCallBudget > 90) {
-  throw new Error("provider call budget must be between 1 and 90");
+if (!Number.isInteger(providerCallBudget) || providerCallBudget < 1 || providerCallBudget > 300) {
+  throw new Error("provider call budget must be between 1 and 300");
 }
 if (resumeBookId && resumeBookId !== runScope.bookId) {
   throw new Error("resume book id is outside the qualification namespace");
@@ -81,9 +86,31 @@ const evidencePath = join(scratchRoot, resumeBookId
   ? `qualification-resume-ch${startChapter}-to-${runThroughChapter}-${runId}.json`
   : `qualification-${runId}.json`);
 const startedAt = new Date();
-const serviceKey = "custom:Ecoapi";
-const model = process.env.INKOS_QUALIFICATION_MODEL?.trim() || "claude-sonnet-4-6";
-const baseUrl = "https://ecoapi.net/v1";
+const providerConfig = resolveQualificationProviderConfig(process.env);
+const { baseUrl, baseHost, basePath, serviceKey, model } = providerConfig;
+let priorEvidenceRecords = [];
+try {
+  const evidenceFiles = (await readdir(scratchRoot))
+    .filter((name) => /^qualification(?:-resume)?-.+\.json$/u.test(name));
+  priorEvidenceRecords = await Promise.all(
+    evidenceFiles.map((name) => readJson(join(scratchRoot, name))),
+  );
+} catch (error) {
+  if (!error || typeof error !== "object" || error.code !== "ENOENT") throw error;
+}
+const campaignHistory = summarizeQualificationCampaignHistory(priorEvidenceRecords, {
+  candidateSha,
+  bookId,
+  runLabel,
+  baseHost,
+  basePath,
+  serviceKey,
+  model,
+  probeVariant,
+});
+if (!resumeBookId && campaignHistory.evidenceRecordCount > 0) {
+  throw new Error("qualification namespace already contains evidence and cannot be reused as a fresh run");
+}
 const lengthSpec = buildLengthSpec(1150, "vi");
 
 const safe = {
@@ -104,8 +131,8 @@ const safe = {
   scratchRoot,
   evidencePath,
   serviceKey,
-  baseHost: "ecoapi.net",
-  basePath: "/v1",
+  baseHost,
+  basePath,
   model,
   runLabel,
   apiFormat: "chat",
@@ -114,6 +141,7 @@ const safe = {
   probeVariant,
   providerCallsAuthorized: true,
   keyPresent: false,
+  credentialSource: null,
   credentialValueEmitted: false,
   rawPromptStored: false,
   rawResponseStored: false,
@@ -126,6 +154,9 @@ const safe = {
   providerBudgetRejections: 0,
   providerBudgetRejectionObservations: [],
   providerCallBudget,
+  providerCallBudgetScope: "qualification-namespace-total",
+  priorEvidenceRecordCount: campaignHistory.evidenceRecordCount,
+  priorProviderRequestCount: campaignHistory.providerRequestCount,
   checkpoints: [],
   recoveryDrill: null,
   operations: [],
@@ -337,7 +368,7 @@ function isProviderFailure(operationRecord) {
   return Boolean(
     error?.status
     || (typeof error?.code === "string" && /^(?:LLM_|PROVIDER_|HTTP_)/u.test(error.code))
-    || (typeof error?.message === "string" && /(?:provider|ecoapi|reasoning|network|chat completion|llm)/iu.test(error.message))
+    || (typeof error?.message === "string" && /(?:provider|reasoning|network|chat completion|llm)/iu.test(error.message))
     || providerObservation?.errorName
     || (typeof providerObservation?.status === "number" && providerObservation.status >= 400)
   );
@@ -383,7 +414,15 @@ globalThis.fetch = async (input, init) => {
     latencyMs: null,
     errorName: null,
   };
-  if (url.hostname === "ecoapi.net" && safe.providerRequests.length >= safe.providerCallBudget) {
+  const providerRequest = isQualificationProviderRequest(url, baseUrl);
+  if (
+    providerRequest
+    && isQualificationProviderBudgetExhausted({
+      priorProviderRequestCount: safe.priorProviderRequestCount,
+      currentProviderRequestCount: safe.providerRequests.length,
+      providerCallBudget: safe.providerCallBudget,
+    })
+  ) {
     recordProviderBudgetRejection(safe, observation);
     const budgetError = new Error(`Qualification provider call budget exceeded (${safe.providerCallBudget})`);
     budgetError.code = "QUALIFICATION_PROVIDER_CALL_BUDGET";
@@ -393,12 +432,12 @@ globalThis.fetch = async (input, init) => {
     const response = await originalFetch(input, init);
     observation.status = response.status;
     observation.latencyMs = Math.round(performance.now() - started);
-    safe.providerRequests.push(observation);
+    if (providerRequest) safe.providerRequests.push(observation);
     return response;
   } catch (error) {
     observation.latencyMs = Math.round(performance.now() - started);
     observation.errorName = error instanceof Error ? error.name : "UnknownError";
-    safe.providerRequests.push(observation);
+    if (providerRequest) safe.providerRequests.push(observation);
     throw error;
   }
 };
@@ -510,9 +549,14 @@ try {
   }
 
   const secrets = await readJson(join(baselineRoot, ".inkos", "secrets.json"));
-  const apiKey = secrets.services?.[serviceKey]?.apiKey;
-  if (typeof apiKey !== "string" || apiKey.length === 0) throw new Error("Ecoapi key is not configured");
+  const credential = resolveQualificationCredential({
+    environmentApiKey: process.env.INKOS_QUALIFICATION_API_KEY,
+    services: secrets.services,
+    serviceKey,
+  });
+  const { apiKey } = credential;
   safe.keyPresent = true;
+  safe.credentialSource = credential.source;
 
   currentStage = "health-models";
   const probedModels = await probeModelsFromUpstream(baseUrl, apiKey, 15_000);
@@ -540,7 +584,7 @@ try {
   };
   if (!safe.healthGate.modelPresent || !nonStreamProbe.ok || !streamProbe.ok) {
     safe.exitReason = "BLOCKED_PROVIDER_HEALTH";
-    throw new Error("Ecoapi health gate did not return final answers");
+    throw new Error("Qualification provider health gate did not return final answers");
   }
 
   process.env.INKOS_EXPERIMENTAL_WRITING_VI = "1";
@@ -705,7 +749,7 @@ try {
     if (chapterNumber === 3 || chapterNumber === 8) {
       safe.checkpoints.push({
         chapterNumber,
-        providerRequestCount: safe.providerRequests.length,
+        providerRequestCount: safe.priorProviderRequestCount + safe.providerRequests.length,
         hardPassCount: safe.operations.filter((operation) =>
           operation.status === "completed"
           && operation.chapter?.auditDecision === "pass"
@@ -749,6 +793,7 @@ try {
   safe.completedAt = new Date().toISOString();
   safe.totalDurationMs = new Date(safe.completedAt).getTime() - startedAt.getTime();
   safe.providerRequestCount = safe.providerRequests.length;
+  safe.campaignProviderRequestCount = safe.priorProviderRequestCount + safe.providerRequestCount;
   safe.providerBudgetRejectionCount = safe.providerBudgetRejections;
   await mkdir(scratchRoot, { recursive: true });
   await writeFile(evidencePath, `${JSON.stringify(safe, null, 2)}\n`, { encoding: "utf8", flag: "wx" });
@@ -757,6 +802,7 @@ try {
     bookId,
     evidencePath,
     providerRequestCount: safe.providerRequestCount,
+    campaignProviderRequestCount: safe.campaignProviderRequestCount,
     operationCount: safe.operations.length,
     hardPassCount,
     preferredPassCount,

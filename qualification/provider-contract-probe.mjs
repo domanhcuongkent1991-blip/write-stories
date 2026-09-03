@@ -1,17 +1,26 @@
 import { readFile } from "node:fs/promises";
 import { pathToFileURL } from "node:url";
+import {
+  isQualificationProviderRequest,
+  resolveQualificationCredential,
+  resolveQualificationProviderConfig,
+} from "./promotion-runner-scope.mjs";
 
 const worktreeRoot = "C:/tmp/CodexScratch/2026-09-01-inkos-promotion-hardening";
 const baselineRoot = "C:/Users/Admin/Documents/Codex/InkOS/vi-writing-sandbox";
-const baseUrl = "https://ecoapi.net/v1";
-const model = process.env.INKOS_QUALIFICATION_MODEL?.trim() || "claude-sonnet-4-6";
+const providerConfig = resolveQualificationProviderConfig(process.env);
+const { baseUrl, baseHost, basePath, serviceKey, model } = providerConfig;
 const maxAttempts = 6;
 const timeoutMs = 30_000;
 const core = await import(pathToFileURL(`${worktreeRoot}/packages/core/dist/index.js`).href);
 const { chatCompletion, createLLMClient, probeModelsFromUpstream } = core;
 const secrets = JSON.parse(await readFile(`${baselineRoot}/.inkos/secrets.json`, "utf8"));
-const apiKey = secrets.services?.["custom:Ecoapi"]?.apiKey;
-if (typeof apiKey !== "string" || apiKey.length === 0) throw new Error("Ecoapi key is not configured");
+const credential = resolveQualificationCredential({
+  environmentApiKey: process.env.INKOS_QUALIFICATION_API_KEY,
+  services: secrets.services,
+  serviceKey,
+});
+const { apiKey } = credential;
 
 const structuredOutput = {
   name: "hook_resolve_preflight",
@@ -101,6 +110,8 @@ let attempts = 0;
 const observations = [];
 const originalFetch = globalThis.fetch;
 globalThis.fetch = async (input, init) => {
+  const requestUrl = typeof Request !== "undefined" && input instanceof Request ? input.url : String(input);
+  if (!isQualificationProviderRequest(requestUrl, baseUrl)) return originalFetch(input, init);
   attempts += 1;
   if (attempts > maxAttempts) {
     const error = new Error(`provider contract probe exceeded ${maxAttempts} attempts`);
@@ -138,7 +149,7 @@ async function runCell(cell) {
   const timer = setTimeout(() => controller.abort(new Error("provider contract probe timeout")), timeoutMs);
   const client = createLLMClient({
     provider: "custom",
-    service: "custom:Ecoapi",
+    service: serviceKey,
     baseUrl,
     apiKey,
     model,
@@ -193,8 +204,10 @@ async function runCell(cell) {
 
 const result = {
   model,
-  baseHost: "ecoapi.net",
-  basePath: "/v1",
+  serviceKey,
+  baseHost,
+  basePath,
+  credentialSource: credential.source,
   maxAttempts,
   timeoutMs,
   attempts: 0,

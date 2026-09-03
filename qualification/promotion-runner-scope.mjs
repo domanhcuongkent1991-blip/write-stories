@@ -1,6 +1,123 @@
 import { createHash } from "node:crypto";
 
 const RUN_LABEL_PATTERN = /^[a-z0-9](?:[a-z0-9-]{0,31})$/u;
+const SERVICE_KEY_PATTERN = /^custom:[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/u;
+const MODEL_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}$/u;
+const DEFAULT_PROVIDER = Object.freeze({
+  baseUrl: "https://ecoapi.net/v1",
+  serviceKey: "custom:Ecoapi",
+  model: "claude-sonnet-4-6",
+});
+
+export function resolveQualificationProviderConfig(environment = {}) {
+  const configuredBaseUrl = environment.INKOS_QUALIFICATION_BASE_URL?.trim()
+    || DEFAULT_PROVIDER.baseUrl;
+  let parsedBaseUrl;
+  try {
+    parsedBaseUrl = new URL(configuredBaseUrl);
+  } catch {
+    throw new Error("qualification base URL must be an absolute HTTPS URL");
+  }
+  if (
+    parsedBaseUrl.protocol !== "https:"
+    || parsedBaseUrl.username.length > 0
+    || parsedBaseUrl.password.length > 0
+    || parsedBaseUrl.search.length > 0
+    || parsedBaseUrl.hash.length > 0
+  ) {
+    throw new Error("qualification base URL must use HTTPS without credentials, query, or fragment");
+  }
+
+  const serviceKey = environment.INKOS_QUALIFICATION_SERVICE_KEY?.trim()
+    || DEFAULT_PROVIDER.serviceKey;
+  if (!SERVICE_KEY_PATTERN.test(serviceKey)) {
+    throw new Error("qualification service key must use the custom:<name> format");
+  }
+  const model = environment.INKOS_QUALIFICATION_MODEL?.trim()
+    || DEFAULT_PROVIDER.model;
+  if (!MODEL_ID_PATTERN.test(model)) {
+    throw new Error("qualification model id contains unsupported characters");
+  }
+
+  const basePath = parsedBaseUrl.pathname.replace(/\/+$/u, "") || "/";
+  return Object.freeze({
+    baseUrl: `${parsedBaseUrl.origin}${basePath}`,
+    baseHost: parsedBaseUrl.hostname,
+    basePath,
+    serviceKey,
+    model,
+  });
+}
+
+export function isQualificationProviderRequest(requestUrl, configuredBaseUrl) {
+  try {
+    const request = requestUrl instanceof URL ? requestUrl : new URL(String(requestUrl));
+    const configured = new URL(configuredBaseUrl);
+    const basePath = configured.pathname.replace(/\/+$/u, "") || "/";
+    const pathMatches = basePath === "/"
+      || request.pathname === basePath
+      || request.pathname.startsWith(`${basePath}/`);
+    return request.origin === configured.origin && pathMatches;
+  } catch {
+    return false;
+  }
+}
+
+export function resolveQualificationCredential({ environmentApiKey, services, serviceKey }) {
+  const ephemeralKey = typeof environmentApiKey === "string" ? environmentApiKey.trim() : "";
+  if (ephemeralKey.length > 0) {
+    return Object.freeze({ apiKey: ephemeralKey, source: "environment" });
+  }
+  const storedKey = services?.[serviceKey]?.apiKey;
+  if (typeof storedKey === "string" && storedKey.trim().length > 0) {
+    return Object.freeze({ apiKey: storedKey.trim(), source: "project-secret" });
+  }
+  throw new Error(`qualification credential is not configured for ${serviceKey}`);
+}
+
+export function summarizeQualificationCampaignHistory(records, expectedLineage) {
+  if (!Array.isArray(records)) {
+    throw new Error("qualification campaign history must be an array");
+  }
+  const lineageEntries = Object.entries(expectedLineage ?? {});
+  let providerRequestCount = 0;
+  for (const record of records) {
+    if (!record || typeof record !== "object") {
+      throw new Error("qualification campaign history contains an invalid evidence record");
+    }
+    if (lineageEntries.some(([key, expected]) => !Object.is(record[key], expected))) {
+      throw new Error("qualification campaign evidence lineage does not match this run");
+    }
+    if (!Number.isInteger(record.providerRequestCount) || record.providerRequestCount < 0) {
+      throw new Error("qualification campaign evidence has an invalid provider request count");
+    }
+    providerRequestCount += record.providerRequestCount;
+  }
+  return Object.freeze({
+    evidenceRecordCount: records.length,
+    providerRequestCount,
+  });
+}
+
+export function isQualificationProviderBudgetExhausted({
+  priorProviderRequestCount,
+  currentProviderRequestCount,
+  providerCallBudget,
+}) {
+  for (const [label, value] of Object.entries({
+    priorProviderRequestCount,
+    currentProviderRequestCount,
+    providerCallBudget,
+  })) {
+    if (!Number.isInteger(value) || value < 0) {
+      throw new Error(`${label} must be a non-negative integer`);
+    }
+  }
+  if (providerCallBudget < 1) {
+    throw new Error("providerCallBudget must be at least 1");
+  }
+  return priorProviderRequestCount + currentProviderRequestCount >= providerCallBudget;
+}
 
 export function resolveQualificationExitCode(exitReason) {
   return exitReason === "PASS"
