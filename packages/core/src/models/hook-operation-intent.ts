@@ -98,17 +98,26 @@ export function assertHookContractCurrent(
   }
 }
 
+export function getLegalHookActions(
+  hook: Pick<StoredHook, "status">,
+): ReadonlyArray<ExpectedHookOperationAction> {
+  const status = normalizeStoredHookStatus(hook.status);
+  if (status === "resolved") return [];
+  if (status === "deferred") return ["advance", "mention", "defer"];
+  return ["advance", "mention", "resolve", "defer"];
+}
+
 export function assertLegalHookTransition(
   hook: StoredHook,
   action: ExpectedHookOperationAction,
 ): void {
   const status = normalizeStoredHookStatus(hook.status);
-  if (status === "resolved") {
-    throw new HookOperationContractError(
-      `illegal ${action} transition for resolved hook ${hook.hookId}`,
-    );
-  }
-  if (status === "deferred" && action === "resolve") {
+  if (!getLegalHookActions(hook).includes(action)) {
+    if (status === "resolved") {
+      throw new HookOperationContractError(
+        `illegal ${action} transition for resolved hook ${hook.hookId}`,
+      );
+    }
     throw new HookOperationContractError(
       `illegal resolve transition for deferred hook ${hook.hookId}`,
     );

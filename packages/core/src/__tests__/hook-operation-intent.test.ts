@@ -6,6 +6,7 @@ import type { StoredHook } from "../state/memory-db.js";
 import {
   HookOperationContractError,
   assertHookContractCurrent,
+  getLegalHookActions,
   hashCanonicalHookPayoff,
 } from "../models/hook-operation-intent.js";
 import {
@@ -78,6 +79,21 @@ defer:
 - Do not invent or identify the remote attacker.`;
 
 describe("canonical hook-operation intent V2", () => {
+  it("derives legal actions from normalized hook status", () => {
+    expect(getLegalHookActions({ status: "resolved" })).toEqual([]);
+    expect(getLegalHookActions({ status: "paused" })).toEqual([
+      "advance",
+      "mention",
+      "defer",
+    ]);
+    expect(getLegalHookActions({ status: "open" })).toEqual([
+      "advance",
+      "mention",
+      "resolve",
+      "defer",
+    ]);
+  });
+
   it("binds resolve evidence to the host-owned canonical payoff hash", () => {
     const contract = bindExpectedHookOperationsV2(governedMemoBody, {
       activeHooks,
