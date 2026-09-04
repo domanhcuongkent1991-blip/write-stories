@@ -74,18 +74,18 @@ If a check fails, retain the generated artifacts and WIP, document the failure, 
 **Files:**
 - Git refs only; no source rewrite
 
-- [ ] **Step 1: Archive current refs before branch movement**
+- [x] **Step 1: Archive current refs before branch movement**
 
 Create recoverable archive refs for the existing local `master` and hardening candidate. Do not delete the hardening branch.
 
-- [ ] **Step 2: Create `main` from the verified cleanup commit**
+- [x] **Step 2: Create `main` from the verified cleanup commit**
 
 `main` must point at the verified operational candidate, including hardening changes. Existing evidence must continue to reference the exact candidate SHA that produced it.
 
-- [ ] **Step 3: Normalize `master` to `origin/master`**
+- [x] **Step 3: Normalize `master` to `origin/master`**
 
 Only after WIP checks and archive refs succeed, make local `master` equal to `origin/master`. Use fast-forward-only updates thereafter; never merge `main` into `master`.
 
-- [ ] **Step 4: Document the ongoing update flow**
+- [x] **Step 4: Document the ongoing update flow**
 
 Keep the branch contract in `REPOSITORY-CLEANUP-MAP.md` and update it whenever the topology changes.

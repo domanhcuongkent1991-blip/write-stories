@@ -94,4 +94,33 @@ Security outputs and the three relocated OSV reports are stored in `D:\InkOS\ink
 
 ## Cleanup pass decision
 
-The safe workspace cleanup is eligible for a small documentation/ignore commit. Branch archival, `main` creation, local `master` normalization, document archiving, history rewriting, `git gc`, and object pruning remain deliberately out of scope until that commit is recorded and the branch-transition targets are rechecked.
+The safe workspace cleanup was recorded in the independent documentation/ignore commit `c3bcbc5e`. Branch archival, `main` creation, and local `master` normalization were deferred until that commit existed and the branch-transition targets were rechecked. Document archiving, history rewriting, `git gc`, and object pruning remain deliberately out of scope.
+
+## Branch migration result
+
+Migration was performed after the verified cleanup commit `c3bcbc5ef8ceb263e4e74849f1bd4349e3cd8fc5`:
+
+| Ref/worktree | Result |
+| --- | --- |
+| `main` | Created from the verified cleanup commit; checked out in the promotion-hardening worktree; no remote upstream assigned |
+| `master` | Recreated at `5da9fad03d65882adc030dc0043da8e8bc197dbd`, exactly matching and tracking `origin/master` |
+| `archive/master-local-20260904` | Preserves the former local `master` at `ba5758b954c54f55ca32ec5adb5800aaa0ce5d5a` |
+| `archive/hardening-pre-main-20260904` | Preserves the verified hardening/cleanup point at `c3bcbc5ef8ceb263e4e74849f1bd4349e3cd8fc5` |
+| `hardening/vi-stable-promotion-20260901` | Retained at `c3bcbc5ef8ceb263e4e74849f1bd4349e3cd8fc5`; not deleted |
+| `start-inkos-studio.bat` | Remains untracked and untouched in the `master` worktree |
+
+No branch was pushed and the GitHub default branch was not changed. Historical documents, evidence-bearing commits, unreachable objects, and scanner binaries were not deleted.
+
+### Routine upstream update
+
+Update the mirror first, then integrate into the operational branch:
+
+```powershell
+git -C D:\InkOS\write-stories fetch --prune origin
+git -C D:\InkOS\write-stories merge --ff-only origin/master
+
+git -C C:\tmp\CodexScratch\2026-09-01-inkos-promotion-hardening switch main
+git -C C:\tmp\CodexScratch\2026-09-01-inkos-promotion-hardening merge master
+```
+
+Run tests, typecheck, build, Gitleaks, and OSV after merging `master` into `main`. Resolve any upstream conflict only on `main`; do not put local operational changes on `master`.
