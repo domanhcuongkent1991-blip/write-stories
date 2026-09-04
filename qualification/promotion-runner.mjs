@@ -7,6 +7,7 @@ import { promisify } from "node:util";
 import { resolveCandidateSha } from "./candidate-config.mjs";
 import {
   assessQualificationResumeCheckpoint,
+  createQualificationProviderDiagnosticObserver,
   createQualificationRolloutConfig,
   isQualificationProviderBudgetExhausted,
   isQualificationProviderRequest,
@@ -151,6 +152,7 @@ const safe = {
   healthGate: null,
   resumePreflight: null,
   providerRequests: [],
+  providerDiagnostics: [],
   providerBudgetRejections: 0,
   providerBudgetRejectionObservations: [],
   providerCallBudget,
@@ -376,6 +378,10 @@ function isProviderFailure(operationRecord) {
 
 const originalFetch = globalThis.fetch;
 let currentStage = "setup";
+const providerDiagnosticObserver = createQualificationProviderDiagnosticObserver(
+  safe.providerDiagnostics,
+  () => currentStage,
+);
 globalThis.fetch = async (input, init) => {
   const started = performance.now();
   const url = typeof Request !== "undefined" && input instanceof Request ? new URL(input.url) : new URL(String(input));
@@ -600,7 +606,7 @@ try {
     apiFormat: "chat",
     stream: pipelineStream,
     extra: { reasoning_effort: "none" },
-  });
+  }, { diagnostics: providerDiagnosticObserver });
   const defaultLLMConfig = {
     provider: "custom",
     service: serviceKey,

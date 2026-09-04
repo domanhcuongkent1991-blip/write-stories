@@ -1,6 +1,61 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
+test("records provider diagnostics with the current qualification stage", async () => {
+  const { createQualificationProviderDiagnosticObserver } = await import("./promotion-runner-scope.mjs");
+  const target = [];
+  let stage = "health-chat-stream";
+  const observer = createQualificationProviderDiagnosticObserver(target, () => stage);
+
+  observer.observe(Object.freeze({
+    schemaVersion: 1,
+    requestedModel: "fixture",
+    markerPresence: Object.freeze({}),
+  }));
+  stage = "chapter-1";
+  observer.observe(Object.freeze({
+    schemaVersion: 1,
+    requestedModel: "fixture",
+    markerPresence: Object.freeze({ CHAPTER_CONTENT: true }),
+  }));
+
+  assert.deepEqual(target, [
+    {
+      stage: "health-chat-stream",
+      schemaVersion: 1,
+      requestedModel: "fixture",
+      markerPresence: {},
+    },
+    {
+      stage: "chapter-1",
+      schemaVersion: 1,
+      requestedModel: "fixture",
+      markerPresence: { CHAPTER_CONTENT: true },
+    },
+  ]);
+  assert.ok(target.every(Object.isFrozen));
+  assert.deepEqual(observer.markers, [
+    "PRE_WRITE_CHECK",
+    "CHAPTER_TITLE",
+    "CHAPTER_CONTENT",
+    "RUNTIME_STATE_DELTA",
+    "POST_SETTLEMENT",
+  ]);
+  assert.ok(Object.isFrozen(observer.markers));
+});
+
+test("rejects invalid provider diagnostic recorder dependencies", async () => {
+  const { createQualificationProviderDiagnosticObserver } = await import("./promotion-runner-scope.mjs");
+  assert.throws(
+    () => createQualificationProviderDiagnosticObserver({}, () => "stage"),
+    /target.*array/i,
+  );
+  assert.throws(
+    () => createQualificationProviderDiagnosticObserver([], null),
+    /stage.*function/i,
+  );
+});
+
 test("creates an isolated qualification namespace for an explicit run label", async () => {
   const scopeModule = await import("./promotion-runner-scope.mjs").catch(() => null);
   assert.ok(scopeModule, "promotion runner scope module must exist");

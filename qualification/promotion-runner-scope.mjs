@@ -8,6 +8,31 @@ const DEFAULT_PROVIDER = Object.freeze({
   serviceKey: "custom:Ecoapi",
   model: "claude-sonnet-4-6",
 });
+const QUALIFICATION_DIAGNOSTIC_MARKERS = Object.freeze([
+  "PRE_WRITE_CHECK",
+  "CHAPTER_TITLE",
+  "CHAPTER_CONTENT",
+  "RUNTIME_STATE_DELTA",
+  "POST_SETTLEMENT",
+]);
+
+export function createQualificationProviderDiagnosticObserver(target, readStage) {
+  if (!Array.isArray(target)) {
+    throw new TypeError("provider diagnostic target must be an array");
+  }
+  if (typeof readStage !== "function") {
+    throw new TypeError("provider diagnostic stage reader must be a function");
+  }
+  return Object.freeze({
+    markers: QUALIFICATION_DIAGNOSTIC_MARKERS,
+    observe(observation) {
+      target.push(Object.freeze({
+        ...observation,
+        stage: readStage(),
+      }));
+    },
+  });
+}
 
 export function resolveQualificationProviderConfig(environment = {}) {
   const configuredBaseUrl = environment.INKOS_QUALIFICATION_BASE_URL?.trim()
