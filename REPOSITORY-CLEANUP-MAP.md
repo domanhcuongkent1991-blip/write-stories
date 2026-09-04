@@ -27,13 +27,15 @@ This is a traceability map for the cleanup and branch split. It is intentionally
 | `.codex/osv-*.json` | KEEP / generated evidence inputs | Preserve under `.codex/`; never commit secrets | Redacted/local scan outputs; useful for audit and reproducibility |
 | `.codex/gitleaks-current.json` | GENERATED / empty output | Keep until verification closes, then archive or remove with explicit scope | Current scan output, not source code |
 | `.codex/gitleaks-evidence-current.json` | GENERATED / empty output | Keep until verification closes, then archive or remove with explicit scope | Current scan output, not source code |
-| `osv-build-postcommit-manager.json` | GENERATED / root clutter | Moved to `D:\InkOS\inkos-cleanup-evidence-20260904\` with SHA-256 preserved | OSV report for the workspace lockfile |
-| `osv-post-parser.json` | GENERATED / root clutter | Moved to `D:\InkOS\inkos-cleanup-evidence-20260904\` with SHA-256 preserved | OSV report for the workspace lockfile |
-| `osv-runtime-precommit.json` | GENERATED / root clutter | Moved to `D:\InkOS\inkos-cleanup-evidence-20260904\` with SHA-256 preserved | OSV report for the workspace lockfile |
+| `osv-build-postcommit-manager.json` | GENERATED / root clutter | Archived at `C:\Users\Admin\Documents\Codex\InkOS\repository-cleanup\2026-09-04\` with SHA-256 preserved | OSV report for the workspace lockfile |
+| `osv-post-parser.json` | GENERATED / root clutter | Archived at `C:\Users\Admin\Documents\Codex\InkOS\repository-cleanup\2026-09-04\` with SHA-256 preserved | OSV report for the workspace lockfile |
+| `osv-runtime-precommit.json` | GENERATED / root clutter | Archived at `C:\Users\Admin\Documents\Codex\InkOS\repository-cleanup\2026-09-04\` with SHA-256 preserved | OSV report for the workspace lockfile |
 | `node_modules/` | IGNORED / dependency cache | Preserve; do not commit or delete in this pass | Avoid an unnecessary reinstall/download |
 | `start-inkos-studio.bat` in `D:\InkOS\write-stories` | WIP / untracked | Preserve and do not stage | Belongs to another active worktree |
 
-The `.codex` directory is ACL-protected in this environment, so no subdirectory was created and no scanner binary was moved. The three root reports were moved to the external archive above through an approved filesystem operation.
+The `.codex` directory is ACL-protected in this environment, so no subdirectory was created and no scanner binary was moved. The three root reports were moved out of the worktree and preserved in the durable archive above through approved filesystem operations.
+
+The temporary staging directory `D:\InkOS\inkos-cleanup-evidence-20260904\` still contains six duplicate files: five empty Gitleaks JSON reports and `README.md`. Each duplicate was verified byte-for-byte by SHA-256 against the durable archive, but Windows denied deletion even after a narrowly scoped approval. Treat the Documents archive as canonical. At a future cleanup checkpoint, remove only this exact staging directory from an elevated Administrator session after rechecking the hashes; do not broaden the deletion target.
 
 ## Documentation classification
 
@@ -90,7 +92,7 @@ Before moving or deleting any historical document, inspect references and confir
 | OSV lockfile scan | PASS supplemental evidence: 1,074 packages scanned, no unfiltered vulnerability returned; one esbuild advisory remains explicitly filtered by `osv-scanner.toml` |
 | Framework security wrapper coverage | LIMITED: this repository does not contain `.codex/autopilot.profile.json` or the `scripts/ai-security-*.ps1` wrappers |
 
-Security outputs and the three relocated OSV reports are stored in `D:\InkOS\inkos-cleanup-evidence-20260904\`. The project-local Gitleaks and OSV binaries remain unchanged under `.codex\tools\bin` for later reuse.
+Security outputs and the three relocated OSV reports are stored in `C:\Users\Admin\Documents\Codex\InkOS\repository-cleanup\2026-09-04\`. The project-local Gitleaks and OSV binaries remain unchanged under `.codex\tools\bin` for later reuse. The duplicate-only staging directory described above is not a second evidence authority.
 
 ## Cleanup pass decision
 

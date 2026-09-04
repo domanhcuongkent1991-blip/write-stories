@@ -37,7 +37,7 @@ The map must distinguish production source, tests, active plans/specs, supersede
 
 **Files:**
 - Modify: `.gitignore`
-- Move: the three root-level `osv-*.json` outputs into `D:\InkOS\inkos-cleanup-evidence-20260904\`
+- Move: the three root-level `osv-*.json` outputs into the durable archive at `C:\Users\Admin\Documents\Codex\InkOS\repository-cleanup\2026-09-04\`
 - Preserve: `.codex/tools/bin/gitleaks.exe` and `.codex/tools/bin/osv-scanner.exe`
 
 - [x] **Step 1: Add narrow ignore rules**
@@ -46,7 +46,7 @@ Add `.codex/` and the exact generated root-level OSV report pattern `osv-*.json`
 
 - [x] **Step 2: Move, do not delete, generated reports**
 
-The `.codex` ACL does not allow creating a subdirectory from this sandbox. Move only `osv-build-postcommit-manager.json`, `osv-post-parser.json`, and `osv-runtime-precommit.json` to `D:\InkOS\inkos-cleanup-evidence-20260904\`. Verify SHA-256 before and after the move.
+The `.codex` ACL does not allow creating a subdirectory from this sandbox. Move only `osv-build-postcommit-manager.json`, `osv-post-parser.json`, and `osv-runtime-precommit.json` out of the worktree, preserve them in `C:\Users\Admin\Documents\Codex\InkOS\repository-cleanup\2026-09-04\`, and verify SHA-256 before and after the move. The intermediate staging directory at `D:\InkOS\inkos-cleanup-evidence-20260904\` retains six hash-matched duplicates because Windows denied their removal; it is not the canonical archive and requires a later elevated cleanup checkpoint.
 
 - [x] **Step 3: Verify no WIP or evidence path was touched**
 
