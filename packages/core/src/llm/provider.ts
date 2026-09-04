@@ -27,6 +27,13 @@ import {
   recordProviderPostAttempt,
   recordProviderRetryCounts,
 } from "./provider-call-telemetry.js";
+import {
+  buildProviderDiagnosticObservation,
+  buildProviderErrorDiagnosticObservation,
+  emitProviderDiagnostic,
+  type ProviderDiagnosticObserver,
+  type ProviderResponseMetadata,
+} from "./provider-diagnostics.js";
 
 
 // === Streaming Monitor Types ===
@@ -274,6 +281,7 @@ export interface LLMResponse {
   readonly reasoningTokens?: number;
   readonly providerRequestId?: string;
   readonly retryCounts?: LLMRetryCounts;
+  readonly providerMetadata?: ProviderResponseMetadata;
 }
 
 export type LLMErrorClass =
@@ -367,6 +375,7 @@ export interface LLMClient {
   readonly proxyUrl?: string;
   readonly _piModel?: PiModel<PiApi>;
   readonly _apiKey?: string;
+  readonly _diagnostics?: ProviderDiagnosticObserver;
   readonly defaults: {
     readonly temperature: number;
     /**
@@ -385,9 +394,16 @@ export interface LLMClient {
   };
 }
 
+export interface LLMClientRuntimeOptions {
+  readonly diagnostics?: ProviderDiagnosticObserver;
+}
+
 // === Factory ===
 
-export function createLLMClient(config: LLMConfig): LLMClient {
+export function createLLMClient(
+  config: LLMConfig,
+  runtime: LLMClientRuntimeOptions = {},
+): LLMClient {
   // C1 (v2.0.0)：config.maxTokens / maxTokensCap 已删除；defaults.maxTokens 完全从 modelCard 推导。
   const _earlyCard = lookupModel(config.service ?? "custom", config.model);
   const defaults = {
@@ -453,6 +469,7 @@ export function createLLMClient(config: LLMConfig): LLMClient {
     proxyUrl: config.proxyUrl,
     _piModel: piModel,
     _apiKey: config.apiKey,
+    ...(runtime.diagnostics ? { _diagnostics: runtime.diagnostics } : {}),
     defaults,
   };
 }
@@ -1349,6 +1366,7 @@ function createLLMResponse(
     readonly reasoningTokens?: unknown;
     readonly providerRequestId?: unknown;
     readonly retryCounts?: LLMRetryCounts;
+    readonly providerMetadata?: ProviderResponseMetadata;
   } = {},
 ): LLMResponse {
   const promptTokens = nonNegativeInteger(usage.promptTokens) ?? 0;
@@ -1367,7 +1385,25 @@ function createLLMResponse(
       ? { providerRequestId: nonEmptyString(metadata.providerRequestId) }
       : {}),
     ...(metadata.retryCounts ? { retryCounts: metadata.retryCounts } : {}),
+    ...(metadata.providerMetadata
+      ? { providerMetadata: Object.freeze({ ...metadata.providerMetadata }) }
+      : {}),
   };
+}
+
+function openAIChatResponseMetadata(json: any): ProviderResponseMetadata {
+  const payload = json?.choices?.[0]?.message ?? json?.choices?.[0]?.delta;
+  return Object.freeze({
+    ...(nonEmptyString(json?.model) ? { returnedModel: nonEmptyString(json.model) } : {}),
+    ...(nonEmptyString(json?.system_fingerprint)
+      ? { systemFingerprint: nonEmptyString(json.system_fingerprint) }
+      : {}),
+    contentFieldPresent: payload?.content !== undefined && payload?.content !== null,
+    reasoningFieldPresent: payload?.reasoning_content !== undefined
+      || payload?.reasoning !== undefined,
+    refusalFieldPresent: payload?.refusal !== undefined && payload?.refusal !== null,
+    toolFieldPresent: Array.isArray(payload?.tool_calls) && payload.tool_calls.length > 0,
+  });
 }
 
 function rawUsageMetadata(usage: any): {
@@ -1882,6 +1918,7 @@ async function chatCompletionViaCustomOpenAICompatible(
       ...rawUsageMetadata(json?.usage),
       providerRequestId: responseHeader(response, ["request-id", "x-request-id"])
         ?? nonEmptyString(json?.request_id ?? json?.requestId),
+      providerMetadata: openAIChatResponseMetadata(json),
     });
   }
 
@@ -1899,6 +1936,12 @@ async function chatCompletionViaCustomOpenAICompatible(
   let responseId: string | undefined;
   let cachedInputTokens: number | undefined;
   let reasoningTokens: number | undefined;
+  let returnedModel: string | undefined;
+  let systemFingerprint: string | undefined;
+  let contentFieldPresent = false;
+  let reasoningFieldPresent = false;
+  let refusalFieldPresent = false;
+  let toolFieldPresent = false;
   const monitor = createStreamMonitor(onStreamProgress);
   // 内联 <think>...</think> 的模型（如 MiniMax M2.x）：剥掉响应起始处的完整
   // think 块，思考内容既不并入正文也不通过 onTextDelta 发给 UI（issue #329）。
@@ -1919,6 +1962,13 @@ async function chatCompletionViaCustomOpenAICompatible(
           continue;
         }
         const json = JSON.parse(event.data);
+        const chunkMetadata = openAIChatResponseMetadata(json);
+        returnedModel ??= chunkMetadata.returnedModel;
+        systemFingerprint ??= chunkMetadata.systemFingerprint;
+        contentFieldPresent ||= chunkMetadata.contentFieldPresent;
+        reasoningFieldPresent ||= chunkMetadata.reasoningFieldPresent;
+        refusalFieldPresent ||= chunkMetadata.refusalFieldPresent;
+        toolFieldPresent ||= chunkMetadata.toolFieldPresent;
         responseId ??= nonEmptyString(json.id ?? json.response?.id);
         if (json?.choices?.[0]?.finish_reason) {
           sawTerminal = true;
@@ -1977,6 +2027,14 @@ async function chatCompletionViaCustomOpenAICompatible(
     cachedInputTokens,
     reasoningTokens,
     providerRequestId: responseHeader(response, ["request-id", "x-request-id"]),
+    providerMetadata: Object.freeze({
+      ...(returnedModel ? { returnedModel } : {}),
+      ...(systemFingerprint ? { systemFingerprint } : {}),
+      contentFieldPresent,
+      reasoningFieldPresent,
+      refusalFieldPresent,
+      toolFieldPresent,
+    }),
   });
 }
 
@@ -2001,8 +2059,19 @@ export async function chatCompletion(
     readonly retry?: boolean;
   },
 ): Promise<LLMResponse> {
+  const diagnosticStartedAt = Date.now();
   if (isLlmStubEnabled()) {
-    return Promise.resolve(addRetryCounts(stubChatCompletion(messages, model), EMPTY_RETRY_COUNTS));
+    const response = addRetryCounts(stubChatCompletion(messages, model), EMPTY_RETRY_COUNTS);
+    emitProviderDiagnostic(client._diagnostics, buildProviderDiagnosticObservation({
+      service: client.service ?? null,
+      requestedModel: model,
+      apiFormat: client.apiFormat,
+      stream: client.stream,
+      durationMs: Date.now() - diagnosticStartedAt,
+      markers: client._diagnostics?.markers,
+      response,
+    }));
+    return Promise.resolve(response);
   }
   // C1 (v2.0.0)：删除 maxTokensCap 机制。per-call 显式传的 maxTokens 永远不被裁剪。
   const resolved = {
@@ -2089,7 +2158,17 @@ export async function chatCompletion(
       { enabled: (options?.retry ?? true) && !onTextDelta, signal },
     );
     recordProviderRetryCounts(retried.retryCounts);
-    return addRetryCounts(retried.value, retried.retryCounts);
+    const response = addRetryCounts(retried.value, retried.retryCounts);
+    emitProviderDiagnostic(client._diagnostics, buildProviderDiagnosticObservation({
+      service: client.service ?? null,
+      requestedModel: model,
+      apiFormat: client.apiFormat,
+      stream: client.stream,
+      durationMs: Date.now() - diagnosticStartedAt,
+      markers: client._diagnostics?.markers,
+      response,
+    }));
+    return response;
   } catch (error) {
     // 注意：中断的流（PartialResponseError）不再"打捞"半截内容当成功返回——
     // 那会产出写到一半就结束的章节/设定文件。重试由 withTransientLLMRetry
@@ -2100,6 +2179,14 @@ export async function chatCompletion(
       normalized.retryCounts = retryCounts;
       recordProviderRetryCounts(retryCounts);
     }
+    emitProviderDiagnostic(client._diagnostics, buildProviderErrorDiagnosticObservation({
+      service: client.service ?? null,
+      requestedModel: model,
+      apiFormat: client.apiFormat,
+      stream: client.stream,
+      durationMs: Date.now() - diagnosticStartedAt,
+      error: normalized,
+    }));
     throw normalized;
   }
 }

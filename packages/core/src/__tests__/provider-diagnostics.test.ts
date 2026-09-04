@@ -17,7 +17,6 @@ describe("provider diagnostics", () => {
       markers: ["CHAPTER_CONTENT", "RUNTIME_STATE_DELTA"],
       response: {
         content: "secret prose\n=== CHAPTER_CONTENT ===\nbody",
-        usage: { promptTokens: 10, completionTokens: 20, totalTokens: 30 },
         finishReason: "stop",
         providerMetadata: {
           returnedModel: "wire-model",

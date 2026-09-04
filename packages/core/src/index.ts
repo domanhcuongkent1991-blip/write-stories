@@ -511,6 +511,7 @@ export {
   normalizeLLMError,
   classifyLLMError,
   type LLMClient,
+  type LLMClientRuntimeOptions,
   type LLMResponse,
   type LLMMessage,
   type LLMErrorClass,
@@ -518,6 +519,19 @@ export {
   type StreamProgress,
   type OnStreamProgress,
 } from "./llm/provider.js";
+export {
+  buildProviderDiagnosticObservation,
+  buildProviderErrorDiagnosticObservation,
+  emitProviderDiagnostic,
+  type ProviderDiagnosticOutcome,
+  type ContentLengthBucket,
+  type DurationBucket,
+  type ProviderResponseMetadata,
+  type ProviderDiagnosticObservation,
+  type ProviderDiagnosticObserver,
+  type ProviderDiagnosticSuccessInput,
+  type ProviderDiagnosticErrorInput,
+} from "./llm/provider-diagnostics.js";
 export {
   SERVICE_PRESETS,
   SERVICE_TO_PI_PROVIDER,

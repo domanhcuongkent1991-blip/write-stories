@@ -9,6 +9,7 @@ import {
   PartialResponseError,
   type LLMClient,
 } from "../llm/provider.js";
+import type { ProviderDiagnosticObservation } from "../llm/provider-diagnostics.js";
 import { runWithAgentTrajectory } from "../llm/agent-trajectory.js";
 import {
   createProviderCallCollector,
@@ -1862,5 +1863,177 @@ describe("stream interruption detection", () => {
     await expect(chatCompletion(makeClient(), "test-model", [{ role: "user", content: "写" }]))
       .rejects.toThrow(/output limit|length|Stream interrupted/i);
     expect(mockStreamSimple).toHaveBeenCalledTimes(3);
+  });
+});
+
+describe("redacted provider diagnostics integration", () => {
+  function sseResponse(sse: string) {
+    const encoder = new TextEncoder();
+    return {
+      ok: true,
+      status: 200,
+      headers: new Headers(),
+      body: new ReadableStream({
+        start(controller) {
+          controller.enqueue(encoder.encode(sse));
+          controller.close();
+        },
+      }),
+    };
+  }
+
+  it("attaches an observer as runtime-only client state", async () => {
+    const { createLLMClient } = await import("../llm/provider.js");
+    const { LLMConfigSchema } = await import("../models/project.js");
+    const diagnostics = { observe: vi.fn() };
+
+    const client = createLLMClient(LLMConfigSchema.parse({
+      provider: "openai",
+      service: "custom",
+      model: "test-model",
+      apiKey: "test-key",
+      baseUrl: "https://gateway.example/v1",
+    }), { diagnostics });
+
+    expect(client._diagnostics).toBe(diagnostics);
+    expect(JSON.stringify(LLMConfigSchema.parse({
+      provider: "openai",
+      service: "custom",
+      model: "test-model",
+      apiKey: "test-key",
+      baseUrl: "https://gateway.example/v1",
+    }))).not.toContain("diagnostics");
+  });
+
+  it("observes custom chat non-stream response shape without retaining content", async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      headers: new Headers(),
+      json: async () => ({
+        id: "response-fixture",
+        model: "returned-model",
+        system_fingerprint: "fp-fixture",
+        choices: [{
+          finish_reason: "stop",
+          message: {
+            content: "sensitive chapter prose\n=== CHAPTER_CONTENT ===\nbody",
+            reasoning_content: "",
+            refusal: null,
+            tool_calls: [],
+          },
+        }],
+        usage: { prompt_tokens: 5, completion_tokens: 6, total_tokens: 11 },
+      }),
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const observations: ProviderDiagnosticObservation[] = [];
+    const client = makeClient(0.7, {
+      service: "custom",
+      configSource: "studio",
+      stream: false,
+      _diagnostics: {
+        markers: ["CHAPTER_CONTENT"],
+        observe: (observation) => observations.push(observation),
+      },
+      _piModel: { ...MOCK_PI_MODEL, baseUrl: "https://gateway.example/v1" },
+    });
+
+    const response = await chatCompletion(client, "requested-model", [
+      { role: "user", content: "write" },
+    ], { retry: false });
+
+    expect(response.providerMetadata).toEqual({
+      returnedModel: "returned-model",
+      systemFingerprint: "fp-fixture",
+      contentFieldPresent: true,
+      reasoningFieldPresent: true,
+      refusalFieldPresent: false,
+      toolFieldPresent: false,
+    });
+    expect(observations).toHaveLength(1);
+    expect(observations[0]).toMatchObject({
+      requestedModel: "requested-model",
+      returnedModel: "returned-model",
+      systemFingerprint: "fp-fixture",
+      stream: false,
+      outcome: "final-answer",
+      markerPresence: { CHAPTER_CONTENT: true },
+    });
+    expect(JSON.stringify(observations[0])).not.toContain("sensitive chapter prose");
+    vi.unstubAllGlobals();
+  });
+
+  it("observes accumulated custom chat stream shape once", async () => {
+    const sse = [
+      "data: {\"model\":\"returned-stream-model\",\"system_fingerprint\":\"fp-stream\",\"choices\":[{\"delta\":{\"reasoning_content\":\"hidden reasoning\"}}]}\n\n",
+      "data: {\"choices\":[{\"delta\":{\"content\":\"=== CHAPTER_CONTENT ===\\nstream body\"}}]}\n\n",
+      "data: {\"choices\":[{\"delta\":{\"refusal\":null,\"tool_calls\":[]},\"finish_reason\":\"stop\"}]}\n\n",
+      "data: [DONE]\n\n",
+    ].join("");
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(sseResponse(sse)));
+    const observations: ProviderDiagnosticObservation[] = [];
+    const client = makeClient(0.7, {
+      service: "custom",
+      configSource: "studio",
+      stream: true,
+      _diagnostics: {
+        markers: ["CHAPTER_CONTENT", "RUNTIME_STATE_DELTA"],
+        observe: (observation) => observations.push(observation),
+      },
+      _piModel: { ...MOCK_PI_MODEL, baseUrl: "https://gateway.example/v1" },
+    });
+
+    const response = await chatCompletion(client, "requested-model", [
+      { role: "user", content: "write" },
+    ], { retry: false });
+
+    expect(response.providerMetadata).toMatchObject({
+      returnedModel: "returned-stream-model",
+      systemFingerprint: "fp-stream",
+      contentFieldPresent: true,
+      reasoningFieldPresent: true,
+      refusalFieldPresent: false,
+      toolFieldPresent: false,
+    });
+    expect(observations).toHaveLength(1);
+    expect(observations[0]?.markerPresence).toEqual({
+      CHAPTER_CONTENT: true,
+      RUNTIME_STATE_DELTA: false,
+    });
+    expect(JSON.stringify(observations[0])).not.toContain("hidden reasoning");
+    expect(JSON.stringify(observations[0])).not.toContain("stream body");
+    vi.unstubAllGlobals();
+  });
+
+  it("observes normalized provider errors without retaining the upstream body", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue({
+      ok: false,
+      status: 502,
+      statusText: "Bad Gateway",
+      headers: new Headers(),
+      text: async () => "sensitive upstream error body",
+    }));
+    const observations: ProviderDiagnosticObservation[] = [];
+    const client = makeClient(0.7, {
+      service: "custom",
+      configSource: "studio",
+      stream: false,
+      _diagnostics: { observe: (observation) => observations.push(observation) },
+      _piModel: { ...MOCK_PI_MODEL, baseUrl: "https://gateway.example/v1" },
+    });
+
+    await expect(chatCompletion(client, "requested-model", [
+      { role: "user", content: "write" },
+    ], { retry: false })).rejects.toBeInstanceOf(LLMError);
+
+    expect(observations).toHaveLength(1);
+    expect(observations[0]).toMatchObject({
+      outcome: "provider-error",
+      errorClass: "transport",
+      httpStatus: 502,
+    });
+    expect(JSON.stringify(observations[0])).not.toContain("sensitive upstream error body");
+    vi.unstubAllGlobals();
   });
 });
