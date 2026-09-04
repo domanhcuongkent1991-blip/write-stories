@@ -15,6 +15,25 @@ function passingChapterEvidence(overrides = {}) {
   };
 }
 
+test("qualification health probes reserve enough bounded output for reasoning-backed models", async () => {
+  const { createQualificationHealthProbeOptions } = await import("./promotion-runner-scope.mjs");
+
+  assert.deepEqual(createQualificationHealthProbeOptions(false), {
+    stream: false,
+    reasoningEffort: "none",
+    maxTokens: 256,
+    temperature: 0,
+    timeoutMs: 30_000,
+  });
+  assert.deepEqual(createQualificationHealthProbeOptions(true), {
+    stream: true,
+    reasoningEffort: "none",
+    maxTokens: 256,
+    temperature: 0,
+    timeoutMs: 30_000,
+  });
+});
+
 test("classifies Writer envelope failures separately from harness failures", async () => {
   const {
     classifyOperationFailure,

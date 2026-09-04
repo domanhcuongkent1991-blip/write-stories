@@ -9,6 +9,7 @@ import {
   assessQualificationResumeCheckpoint,
   classifyOperationFailure,
   collectChapterFailureDimensions,
+  createQualificationHealthProbeOptions,
   createQualificationProviderDiagnosticObserver,
   createQualificationRolloutConfig,
   isQualificationProviderBudgetExhausted,
@@ -569,21 +570,19 @@ try {
   currentStage = "health-models";
   const probedModels = await probeModelsFromUpstream(baseUrl, apiKey, 15_000);
   currentStage = "health-chat-non-stream";
-  const nonStreamProbe = await probeChatContract(baseUrl, apiKey, model, {
-    stream: false,
-    reasoningEffort: "none",
-    maxTokens: 16,
-    temperature: 0,
-    timeoutMs: 30_000,
-  });
+  const nonStreamProbe = await probeChatContract(
+    baseUrl,
+    apiKey,
+    model,
+    createQualificationHealthProbeOptions(false),
+  );
   currentStage = "health-chat-stream";
-  const streamProbe = await probeChatContract(baseUrl, apiKey, model, {
-    stream: true,
-    reasoningEffort: "none",
-    maxTokens: 16,
-    temperature: 0,
-    timeoutMs: 30_000,
-  });
+  const streamProbe = await probeChatContract(
+    baseUrl,
+    apiKey,
+    model,
+    createQualificationHealthProbeOptions(true),
+  );
   safe.healthGate = {
     modelPresent: probedModels.some((entry) => entry.id === model),
     modelCount: probedModels.length,

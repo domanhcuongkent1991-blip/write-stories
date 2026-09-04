@@ -16,6 +16,16 @@ const QUALIFICATION_DIAGNOSTIC_MARKERS = Object.freeze([
   "POST_SETTLEMENT",
 ]);
 
+export function createQualificationHealthProbeOptions(stream) {
+  return Object.freeze({
+    stream: Boolean(stream),
+    reasoningEffort: "none",
+    maxTokens: 256,
+    temperature: 0,
+    timeoutMs: 30_000,
+  });
+}
+
 const PROVIDER_STAGE_CONTEXT = Object.freeze({
   planner: Object.freeze({ agent: "planner", substage: "memo-generation" }),
   "resolve-preflight": Object.freeze({ agent: "planner", substage: "resolve-preflight" }),
