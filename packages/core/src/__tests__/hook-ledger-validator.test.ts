@@ -2,6 +2,7 @@ import { describe, it, expect } from "vitest";
 import {
   hookOpsFromLedger,
   parseHookLedger,
+  removeHookResolveCommitments,
   validateHookLedger,
 } from "../utils/hook-ledger-validator.js";
 import type { StoredHook } from "../state/memory-db.js";
@@ -78,6 +79,18 @@ describe("parseHookLedger", () => {
   it("returns empty lists when no ledger section is present", () => {
     const ledger = parseHookLedger("## 当前任务\n正文\n\n## 不要做\n- 无");
     expect(ledger).toEqual({ open: [], advance: [], resolve: [], defer: [], newOpenCount: 0 });
+  });
+
+  it("removes only unsafe resolve commitments while preserving the memo and other hook operations", () => {
+    const repaired = removeHookResolveCommitments(ZH_MEMO, ["H003"]);
+    const ledger = parseHookLedger(repaired);
+
+    expect(ledger.resolve).toEqual([]);
+    expect(ledger.advance.map((entry) => entry.id)).toEqual(["H007", "H012"]);
+    expect(ledger.defer.map((entry) => entry.id)).toEqual(["H009"]);
+    expect(repaired).toContain("## 当前任务");
+    expect(repaired).toContain("## 不要做");
+    expect(repaired).not.toContain('- H003 "杂役腰牌"');
   });
 
   it("counts [new] placeholder lines under open as new hooks opened", () => {

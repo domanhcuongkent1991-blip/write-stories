@@ -567,7 +567,7 @@ describe("PlannerAgent.planChapter memo generation", () => {
       .toContain("Identify the actor behind the remote administrator lock");
   });
 
-  it("stops before intent persistence when the corrected Vietnamese plan is still invalid", async () => {
+  it("drops an unsafe resolve commitment when one bounded semantic correction is still invalid", async () => {
     await writeFile(join(bookDir, "story/pending_hooks.md"), [
       "| hook_id | start_chapter | type | status | last_advanced_chapter | expected_payoff | notes |",
       "| --- | --- | --- | --- | --- | --- | --- |",
@@ -588,15 +588,20 @@ describe("PlannerAgent.planChapter memo generation", () => {
       .mockResolvedValueOnce({ content: invalidMemo, usage: ZERO_USAGE } as Awaited<ReturnType<typeof llmProvider.chatCompletion>>)
       .mockResolvedValueOnce({ content: repairResult, usage: ZERO_USAGE } as Awaited<ReturnType<typeof llmProvider.chatCompletion>>);
 
-    await expect(makePlanner().planChapter({
+    const result = await makePlanner().planChapter({
       book: { ...makeBook(), language: "vi" },
       bookDir,
       chapterNumber: 4,
-    })).rejects.toThrow(/planner contract.*still invalid/i);
+    });
 
     expect(chatSpy).toHaveBeenCalledTimes(4);
+    expect(result.intent.expectedHookOps.resolve).toEqual([]);
+    expect(result.intent.expectedHookContract?.operations).not.toEqual(expect.arrayContaining([
+      expect.objectContaining({ hookId: "sabotage-sau-can-thi-thu", action: "resolve" }),
+    ]));
+    expect(result.memo.body).not.toContain('- sabotage-sau-can-thi-thu "锁芯刮痕"');
     await expect(readFile(join(bookDir, "story/runtime/chapter-0004.intent.md"), "utf-8"))
-      .rejects.toThrow();
+      .resolves.toContain("# Chapter Intent");
   });
 
   it("uses one parse attempt and no fallback for the semantic correction", async () => {

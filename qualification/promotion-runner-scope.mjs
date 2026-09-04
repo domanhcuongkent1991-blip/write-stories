@@ -51,6 +51,7 @@ const QUALITY_FAILURE_DIMENSIONS = new Set([
   "surface-blocker",
   "spelling",
   "cjk",
+  "planner-hook-contract",
 ]);
 
 export function collectChapterFailureDimensions(operationRecord) {
@@ -60,10 +61,15 @@ export function collectChapterFailureDimensions(operationRecord) {
   }
 
   const errorName = operationRecord?.error?.name;
+  const errorCode = operationRecord?.error?.code;
   if (errorName === "WriterOutputContractError") {
     dimensions.push("writer-format-contract");
   } else if (errorName === "PlannerParseError") {
     dimensions.push("planner-format-contract");
+  } else if (errorName === "HookResolvePreflightError" && errorCode === "PLANNER_CONTRACT_INVALID") {
+    dimensions.push("planner-hook-contract");
+  } else if (errorName === "HookResolvePreflightError" && errorCode === "INCONCLUSIVE_PROVIDER") {
+    dimensions.push("planner-preflight-inconclusive");
   }
 
   if (operationRecord?.status === "completed") {
@@ -87,7 +93,7 @@ export function collectChapterFailureDimensions(operationRecord) {
 export function classifyOperationFailure(operationRecord, options = {}) {
   const dimensions = collectChapterFailureDimensions(operationRecord);
   if (dimensions.length === 0) return null;
-  if (options.providerFailure === true) return "PROVIDER";
+  if (options.providerFailure === true || dimensions.includes("planner-preflight-inconclusive")) return "PROVIDER";
   if (dimensions.includes("state-alignment")) return "STATE";
   if (dimensions.includes("writer-format-contract") || dimensions.includes("planner-format-contract")) {
     return "FORMAT_CONTRACT";

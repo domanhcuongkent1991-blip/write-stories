@@ -53,6 +53,34 @@ test("classifies Writer envelope failures separately from harness failures", asy
   assert.equal(classifyOperationFailure(operation), "FORMAT_CONTRACT");
 });
 
+test("classifies hook preflight contract failures as planning quality instead of harness", async () => {
+  const {
+    classifyOperationFailure,
+    collectChapterFailureDimensions,
+  } = await import("./promotion-runner-scope.mjs");
+  const invalidContract = {
+    status: "error",
+    chapter: null,
+    invariants: { aligned: true },
+    error: { name: "HookResolvePreflightError", code: "PLANNER_CONTRACT_INVALID" },
+  };
+  const inconclusive = {
+    ...invalidContract,
+    error: { name: "HookResolvePreflightError", code: "INCONCLUSIVE_PROVIDER" },
+  };
+
+  assert.deepEqual(collectChapterFailureDimensions(invalidContract), [
+    "operation-not-completed",
+    "planner-hook-contract",
+  ]);
+  assert.equal(classifyOperationFailure(invalidContract), "QUALITY");
+  assert.deepEqual(collectChapterFailureDimensions(inconclusive), [
+    "operation-not-completed",
+    "planner-preflight-inconclusive",
+  ]);
+  assert.equal(classifyOperationFailure(inconclusive), "PROVIDER");
+});
+
 test("reports every failed quality dimension instead of one umbrella boolean", async () => {
   const {
     classifyOperationFailure,

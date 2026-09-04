@@ -115,6 +115,50 @@ export function parseHookLedger(memoBody: string): HookLedger {
 }
 
 /**
+ * Remove only resolve operations that failed semantic payoff preflight.
+ * The hook remains active in canonical state because no defer/resolve operation
+ * is synthesized. All prose planning and unrelated hook operations are kept.
+ */
+export function removeHookResolveCommitments(
+  memoBody: string,
+  hookIds: ReadonlyArray<string>,
+): string {
+  const targets = new Set(hookIds.map((hookId) => hookId.trim()).filter(Boolean));
+  if (targets.size === 0) return memoBody;
+
+  const newline = memoBody.includes("\r\n") ? "\r\n" : "\n";
+  const retained: string[] = [];
+  let inLedger = false;
+  let subsection: keyof HookLedger | null = null;
+
+  for (const line of memoBody.split(/\r?\n/u)) {
+    const trimmed = line.trim();
+    if (LEDGER_HEADING_PATTERNS.some((pattern) => pattern.test(trimmed))) {
+      inLedger = true;
+      subsection = null;
+      retained.push(line);
+      continue;
+    }
+    if (inLedger && /^#{1,6}\s+/u.test(trimmed)) {
+      inLedger = false;
+      subsection = null;
+    }
+    if (inLedger) {
+      const subsectionMatch = trimmed.match(/^(open|advance|resolve|defer)\s*[:：]?\s*$/iu);
+      if (subsectionMatch) {
+        subsection = subsectionMatch[1]!.toLowerCase() as keyof HookLedger;
+      } else if (subsection === "resolve" && trimmed.startsWith("-")) {
+        const entry = extractLedgerEntry(line);
+        if (entry && targets.has(entry.id)) continue;
+      }
+    }
+    retained.push(line);
+  }
+
+  return retained.join(newline);
+}
+
+/**
  * Enforce: every hook declared under advance / resolve must have observable
  * evidence in the draft text. We do NOT validate `open` (new hooks don't have
  * a pre-existing id/descriptor to echo) or `defer` (deferred = deliberately

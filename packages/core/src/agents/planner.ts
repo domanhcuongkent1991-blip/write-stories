@@ -10,6 +10,7 @@ import {
   bindExpectedHookOperationsV2,
   hookOpsFromLedger,
   parseHookLedger,
+  removeHookResolveCommitments,
 } from "../utils/hook-ledger-validator.js";
 import { resolveWritingLanguageProfile } from "../utils/language.js";
 import { readBookRules as readAuthoritativeBookRules } from "./rules-reader.js";
@@ -284,12 +285,35 @@ export class PlannerAgent extends BaseAgent {
             secondPreflight.tokenUsage,
           ),
         };
-        const secondFailure = secondPreflight.results.find((result) => result.decision !== "pass");
-        if (secondFailure) {
+        const secondInconclusive = secondPreflight.results.find((result) => result.decision === "inconclusive");
+        if (secondInconclusive) {
           throw new HookResolvePreflightError(
-            secondFailure.decision === "inconclusive" ? "INCONCLUSIVE_PROVIDER" : "PLANNER_CONTRACT_INVALID",
-            `planner contract is still invalid for ${secondFailure.hookId}: ${secondFailure.description}`,
+            "INCONCLUSIVE_PROVIDER",
+            `planner contract preflight remained inconclusive for ${secondInconclusive.hookId}: ${secondInconclusive.description}`,
           );
+        }
+        const unsafeResolveIds = secondPreflight.results
+          .filter((result) => result.decision === "repair-required")
+          .map((result) => result.hookId);
+        if (unsafeResolveIds.length > 0) {
+          memo = {
+            ...memo,
+            body: removeHookResolveCommitments(memo.body, unsafeResolveIds),
+          };
+          expectedHookContract = bindExpectedHookOperationsV2(memo.body, {
+            activeHooks: authoritativeMemoHooks,
+            chapterNumber: input.chapterNumber,
+          });
+          const unsafeResolveStillPresent = expectedHookContract.operations.some((operation) =>
+            operation.action === "resolve" && unsafeResolveIds.includes(operation.hookId));
+          if (unsafeResolveStillPresent) {
+            throw new HookResolvePreflightError(
+              "PLANNER_CONTRACT_INVALID",
+              "planner could not remove an unsafe hook resolve commitment after semantic correction",
+            );
+          }
+          memoResult = { ...memoResult, memo };
+          this.log?.warn(`[planner] removed unsafe hook resolve commitments after bounded semantic correction: ${unsafeResolveIds.join(", ")}`);
         }
       }
     }
