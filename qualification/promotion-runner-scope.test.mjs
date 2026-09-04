@@ -81,6 +81,25 @@ test("classifies hook preflight contract failures as planning quality instead of
   assert.equal(classifyOperationFailure(inconclusive), "PROVIDER");
 });
 
+test("classifies illegal hook transitions as planning quality instead of harness", async () => {
+  const {
+    classifyOperationFailure,
+    collectChapterFailureDimensions,
+  } = await import("./promotion-runner-scope.mjs");
+  const operation = {
+    status: "error",
+    chapter: null,
+    invariants: { aligned: true },
+    error: { name: "HookOperationContractError", message: "illegal resolve transition" },
+  };
+
+  assert.deepEqual(collectChapterFailureDimensions(operation), [
+    "operation-not-completed",
+    "planner-hook-transition",
+  ]);
+  assert.equal(classifyOperationFailure(operation), "QUALITY");
+});
+
 test("reports every failed quality dimension instead of one umbrella boolean", async () => {
   const {
     classifyOperationFailure,

@@ -290,6 +290,42 @@ describe("PlannerAgent.planChapter memo generation", () => {
       .not.toContain("allowed_actions=");
   });
 
+  it("retries a Vietnamese memo that attempts to resolve a deferred hook", async () => {
+    const hooks = [
+      { hookId: "H03", startChapter: 1, type: "mystery", status: "open", lastAdvancedChapter: 1, expectedPayoff: "Door 7 anomaly", notes: "" },
+      { hookId: "H-deferred", startChapter: 1, type: "mystery", status: "deferred", lastAdvancedChapter: 1, expectedPayoff: "lock scratch", notes: "" },
+      { hookId: "H07", startChapter: 1, type: "mystery", status: "open", lastAdvancedChapter: 1, expectedPayoff: "mastermind", notes: "" },
+    ] as const;
+    const invalidMemo = validMemoRaw(1).replaceAll("S004", "H-deferred");
+    const correctedMemo = invalidMemo.replace(
+      '- H-deferred "锁芯刮痕" → 核验完毕，本章结清',
+      "- none",
+    );
+    const chatSpy = vi.spyOn(llmProvider, "chatCompletion")
+      .mockResolvedValueOnce({ content: invalidMemo, usage: ZERO_USAGE } as Awaited<ReturnType<typeof llmProvider.chatCompletion>>)
+      .mockResolvedValueOnce({ content: correctedMemo, usage: ZERO_USAGE } as Awaited<ReturnType<typeof llmProvider.chatCompletion>>);
+
+    const memo = await makePlanner().planChapterMemo({
+      storyDir: join(bookDir, "story"),
+      bookDir,
+      chapterNumber: 1,
+      isGoldenOpening: true,
+      fallbackGoal: "confirm the lock evidence",
+      chapterSummariesRaw: "",
+      relevantHooks: hooks,
+      authoritativeActiveHooks: hooks,
+      language: "en",
+      includeAllowedHookActions: true,
+      lengthSpec: { target: 3000, softMin: 2700, softMax: 3300, hardMin: 2400, hardMax: 3600, countingMode: "vi_wordlike_tokens_v1" },
+    });
+
+    expect(chatSpy).toHaveBeenCalledTimes(2);
+    expect(memo.body).not.toContain('- H-deferred "锁芯刮痕"');
+    const retryMessages = chatSpy.mock.calls[1]?.[2] as ReadonlyArray<{ role: string; content: string }>;
+    expect(retryMessages.find((message) => message.role === "user")?.content)
+      .toContain("does not allow resolve");
+  });
+
   it("does not hard-cap memo generation below the configured model output budget", async () => {
     const chatSpy = vi.spyOn(llmProvider, "chatCompletion").mockResolvedValue({
       content: validMemoRaw(1),

@@ -54,7 +54,11 @@ import {
   type HookResolvePreflightOutput,
   type HookResolvePreflightResult,
 } from "./hook-resolve-preflight.js";
-import type { HookOperationIntentV2 } from "../models/hook-operation-intent.js";
+import {
+  getLegalHookActions,
+  type ExpectedHookOperationAction,
+  type HookOperationIntentV2,
+} from "../models/hook-operation-intent.js";
 
 export interface PlanChapterInput {
   readonly book: BookConfig;
@@ -490,7 +494,11 @@ export class PlannerAgent extends BaseAgent {
 
       try {
         const memo = parseMemo(response.content, input.chapterNumber, input.isGoldenOpening);
-        assertFreshMemoGovernance(memo.body, input.authoritativeActiveHooks);
+        assertFreshMemoGovernance(
+          memo.body,
+          input.authoritativeActiveHooks,
+          input.includeAllowedHookActions === true,
+        );
         return { memo, ...(tokenUsage ? { tokenUsage } : {}) };
       } catch (error) {
         if (!(error instanceof PlannerParseError)) {
@@ -1156,6 +1164,7 @@ function pacingCodeFromMemo(memoBody: string): ChapterIntent["pacingCode"] {
 function assertFreshMemoGovernance(
   memoBody: string,
   authoritativeActiveHooks?: ReadonlyArray<StoredHook>,
+  enforceLegalHookActions = false,
 ): void {
   const match = memoBody.match(
     /^##\s*(?:节奏代码|Pacing Code)\s*\r?\n\s*([^\r\n]+?)\s*$/imu,
@@ -1168,11 +1177,27 @@ function assertFreshMemoGovernance(
   }
 
   if (authoritativeActiveHooks === undefined) return;
-  const knownIds = new Set(authoritativeActiveHooks.map((hook) => hook.hookId));
+  const hooksById = new Map(authoritativeActiveHooks.map((hook) => [hook.hookId, hook] as const));
   const ledger = parseHookLedger(memoBody);
-  for (const entry of [...ledger.open, ...ledger.advance, ...ledger.resolve, ...ledger.defer]) {
-    if (!knownIds.has(entry.id)) {
+  const governedEntries: ReadonlyArray<{
+    readonly action: ExpectedHookOperationAction;
+    readonly entry: (typeof ledger.advance)[number];
+  }> = [
+    ...ledger.open.map((entry) => ({ action: "advance" as const, entry })),
+    ...ledger.advance.map((entry) => ({ action: "advance" as const, entry })),
+    ...ledger.resolve.map((entry) => ({ action: "resolve" as const, entry })),
+    ...ledger.defer.map((entry) => ({ action: "defer" as const, entry })),
+  ];
+  for (const { action, entry } of governedEntries) {
+    const hook = hooksById.get(entry.id);
+    if (!hook) {
       throw new PlannerParseError(`unknown stable hook ID ${entry.id} in fresh memo`);
+    }
+    if (enforceLegalHookActions && !getLegalHookActions(hook).includes(action)) {
+      const allowed = getLegalHookActions(hook).filter((candidate) => candidate !== "mention");
+      throw new PlannerParseError(
+        `hook ${entry.id} with status ${hook.status} does not allow ${action}; allowed actions: ${allowed.join("|") || "none"}`,
+      );
     }
   }
 }

@@ -52,6 +52,7 @@ const QUALITY_FAILURE_DIMENSIONS = new Set([
   "spelling",
   "cjk",
   "planner-hook-contract",
+  "planner-hook-transition",
 ]);
 
 export function collectChapterFailureDimensions(operationRecord) {
@@ -70,6 +71,8 @@ export function collectChapterFailureDimensions(operationRecord) {
     dimensions.push("planner-hook-contract");
   } else if (errorName === "HookResolvePreflightError" && errorCode === "INCONCLUSIVE_PROVIDER") {
     dimensions.push("planner-preflight-inconclusive");
+  } else if (errorName === "HookOperationContractError") {
+    dimensions.push("planner-hook-transition");
   }
 
   if (operationRecord?.status === "completed") {
