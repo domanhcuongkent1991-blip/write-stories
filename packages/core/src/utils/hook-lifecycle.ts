@@ -25,6 +25,7 @@ const HOOK_STATUS_ALIASES: ReadonlyMap<string, HookStatus> = new Map([
   ].map((value) => [value, "deferred"] as const),
   ...[
     "progressing", "advanced", "progress", "active", "pressured", "confirmed",
+    "near_payoff", "near-payoff", "near payoff",
     "confirmed_hit", "confirmed-hit", "confirmed hit", "命中", "已确认命中", "已推进",
     "推进", "进行中", "持续推进", "重大推进",
   ].map((value) => [value, "progressing"] as const),

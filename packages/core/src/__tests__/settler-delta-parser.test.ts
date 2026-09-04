@@ -79,6 +79,36 @@ describe("parseSettlerDeltaOutput", () => {
     expect(result.runtimeStateDelta.hookOps.upsert[0]?.status).toBe("progressing");
   });
 
+  it("normalizes near-payoff narrative statuses to progressing", () => {
+    for (const status of ["near_payoff", "near-payoff", "near payoff"]) {
+      const result = parseSettlerDeltaOutput([
+        "=== RUNTIME_STATE_DELTA ===",
+        "```json",
+        JSON.stringify({
+          chapter: 12,
+          hookOps: {
+            upsert: [
+              {
+                hookId: "mentor-oath",
+                startChapter: 8,
+                type: "relationship",
+                status,
+                lastAdvancedChapter: 12,
+                expectedPayoff: "揭开师债真相",
+              },
+            ],
+            mention: [],
+            resolve: [],
+            defer: [],
+          },
+        }),
+        "```",
+      ].join("\n"));
+
+      expect(result.runtimeStateDelta.hookOps.upsert[0]?.status).toBe("progressing");
+    }
+  });
+
   it("keeps unknown hook-status values fail-closed", () => {
     expect(() => parseSettlerDeltaOutput([
       "=== RUNTIME_STATE_DELTA ===",

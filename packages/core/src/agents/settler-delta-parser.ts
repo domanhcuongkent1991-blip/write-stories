@@ -85,11 +85,11 @@ export function parseSettlerDeltaOutput(content: string): SettlerDeltaOutput {
 }
 
 /**
- * Models sometimes use a narrative hook-status alias (for example,
- * "pressured") even though the persisted runtime schema uses the canonical
- * status "progressing". Normalize only aliases already recognized by the
- * hook lifecycle module; unknown values remain untouched so schema validation
- * still fails closed.
+ * Models sometimes use narrative hook-status aliases (for example,
+ * "pressured" or "near_payoff") even though the persisted runtime schema
+ * uses the canonical status "progressing". Normalize only aliases already
+ * recognized by the hook lifecycle module; unknown values remain untouched so
+ * schema validation still fails closed.
  */
 function normalizeHookStatusAliases(value: unknown): unknown {
   if (!value || typeof value !== "object" || Array.isArray(value)) return value;
