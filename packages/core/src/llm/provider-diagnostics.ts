@@ -26,6 +26,7 @@ export interface ProviderDiagnosticObservation {
   readonly systemFingerprint?: string;
   readonly apiFormat: "chat" | "responses";
   readonly stream: boolean;
+  readonly providerStage: string | null;
   readonly outcome: ProviderDiagnosticOutcome;
   readonly finishReason: string | null;
   readonly contentLengthBucket: ContentLengthBucket;
@@ -56,6 +57,7 @@ interface ProviderDiagnosticBaseInput {
   readonly requestedModel: string;
   readonly apiFormat: "chat" | "responses";
   readonly stream: boolean;
+  readonly providerStage?: string;
   readonly durationMs: number;
 }
 
@@ -126,6 +128,7 @@ export function buildProviderDiagnosticObservation(
     ...(metadata?.systemFingerprint ? { systemFingerprint: metadata.systemFingerprint } : {}),
     apiFormat: input.apiFormat,
     stream: input.stream,
+    providerStage: input.providerStage ?? null,
     outcome: input.response.content.length > 0 ? "final-answer" : "empty-final",
     finishReason: input.response.finishReason ?? null,
     contentLengthBucket: bucketContentLength(input.response.content.length),
@@ -150,6 +153,7 @@ export function buildProviderErrorDiagnosticObservation(
     requestedModel: input.requestedModel,
     apiFormat: input.apiFormat,
     stream: input.stream,
+    providerStage: input.providerStage ?? null,
     outcome: "provider-error",
     finishReason: null,
     contentLengthBucket: "0",

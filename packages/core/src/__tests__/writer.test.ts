@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { WriterAgent } from "../agents/writer.js";
 import { buildLengthSpec } from "../utils/length-metrics.js";
 import { WritingLanguagePreflightError } from "../state/writing-language-preflight.js";
+import { readProviderCallStage } from "../llm/provider-call-telemetry.js";
 
 const ZERO_USAGE = {
   promptTokens: 0,
@@ -54,6 +55,77 @@ function createCaptureLogger() {
   };
 
   return { logger, infos, warnings };
+}
+
+async function createVietnameseWriterFixture(prefix: string) {
+  const root = await mkdtemp(join(tmpdir(), prefix));
+  const bookDir = join(root, "book");
+  const storyDir = join(bookDir, "story");
+  await mkdir(storyDir, { recursive: true });
+  await Promise.all([
+    writeFile(join(storyDir, "story_bible.md"), "# Story Bible\n", "utf-8"),
+    writeFile(join(storyDir, "pending_hooks.md"), "# Pending Hooks\n", "utf-8"),
+    writeFile(join(storyDir, "chapter_summaries.md"), "# Chapter Summaries\n", "utf-8"),
+    writeFile(join(storyDir, "subplot_board.md"), "# Subplot Board\n", "utf-8"),
+    writeFile(join(storyDir, "emotional_arcs.md"), "# Emotional Arcs\n", "utf-8"),
+    writeFile(join(storyDir, "style_profile.json"), "{}", "utf-8"),
+    writeFile(join(storyDir, "fanfic_canon.md"), "", "utf-8"),
+  ]);
+  const agent = new WriterAgent({
+    client: {
+      provider: "openai",
+      apiFormat: "chat",
+      stream: false,
+      defaults: { temperature: 0.7, maxTokens: 4096, thinkingBudget: 0, extra: {} },
+    },
+    model: "test-model",
+    projectRoot: root,
+  });
+  return { root, bookDir, agent };
+}
+
+function createVietnameseBook() {
+  return {
+    id: "writer-book",
+    title: "Writer Book",
+    platform: "tomato" as const,
+    genre: "xuanhuan" as const,
+    status: "active" as const,
+    targetChapters: 120,
+    chapterWordCount: 2200,
+    language: "vi" as const,
+    createdAt: "2026-03-23T00:00:00.000Z",
+    updatedAt: "2026-03-23T00:00:00.000Z",
+  };
+}
+
+function createVietnameseSettlementResponse(chapter: number) {
+  return {
+    content: [
+      "=== POST_SETTLEMENT ===",
+      "- ledger trail advanced",
+      "",
+      "=== RUNTIME_STATE_DELTA ===",
+      "```json",
+      JSON.stringify({
+        chapter,
+        hookOps: { upsert: [], mention: [], resolve: [], defer: [] },
+        chapterSummary: {
+          chapter,
+          title: "Dấu mực trong mưa",
+          characters: "Mara",
+          events: "Mara lần theo dấu mực trong mưa.",
+          stateChanges: "Dấu vết được mở rộng.",
+          hookActivity: "none",
+          mood: "tense",
+          chapterType: "setup",
+        },
+        notes: [],
+      }, null, 2),
+      "```",
+    ].join("\n"),
+    usage: ZERO_USAGE,
+  };
 }
 
 describe("WriterAgent", () => {
@@ -1355,6 +1427,158 @@ describe("WriterAgent", () => {
         .join("\n");
       expect(modelMessages).not.toContain("文件尚未创建");
       expect(modelMessages).toContain("(file not created yet)");
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("repairs one missing-marker Vietnamese draft before settlement", async () => {
+    const { root, bookDir, agent } = await createVietnameseWriterFixture("inkos-writer-format-repair-");
+    const rawDraft = "Mưa quất nghiêng qua mái chợ. ".repeat(80);
+    const observedStages: string[] = [];
+    const chatSpy = vi.spyOn(WriterAgent.prototype as never, "chat" as never)
+      .mockImplementationOnce(async () => {
+        observedStages.push(readProviderCallStage());
+        return { content: rawDraft, usage: ZERO_USAGE };
+      })
+      .mockImplementationOnce(async () => {
+        observedStages.push(readProviderCallStage());
+        return {
+        content: [
+          "=== PRE_WRITE_CHECK ===",
+          "- Đã kiểm tra.",
+          "",
+          "=== CHAPTER_TITLE ===",
+          "Dấu mực trong mưa",
+          "",
+          "=== CHAPTER_CONTENT ===",
+          rawDraft,
+        ].join("\n"),
+        usage: ZERO_USAGE,
+        };
+      })
+      .mockImplementationOnce(async () => {
+        observedStages.push(readProviderCallStage());
+        return { content: "=== OBSERVATIONS ===\n- observed", usage: ZERO_USAGE };
+      })
+      .mockImplementationOnce(async () => {
+        observedStages.push(readProviderCallStage());
+        return createVietnameseSettlementResponse(1);
+      });
+
+    try {
+      const output = await agent.writeChapter({
+        book: createVietnameseBook(),
+        bookDir,
+        chapterNumber: 1,
+        ...createGovernedWriterInput(1),
+        lengthSpec: buildLengthSpec(220, "vi"),
+      });
+
+      expect(output.title).toBe("Dấu mực trong mưa");
+      expect(output.content).toBe(rawDraft.trim());
+      expect(chatSpy).toHaveBeenCalledTimes(4);
+      expect(chatSpy.mock.calls[1]?.[1]).toMatchObject({ temperature: 0 });
+      expect(observedStages).toEqual([
+        "writer-draft",
+        "writer-format-repair",
+        "writer-observer",
+        "initial-settlement",
+      ]);
+      const repairMessages = chatSpy.mock.calls[1]?.[0] as ReadonlyArray<{ content: string }> | undefined;
+      expect(repairMessages?.[0]?.content).toContain("format recovery");
+      expect(repairMessages?.[1]?.content).toContain(rawDraft);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("stops before settlement when the bounded Vietnamese format repair remains malformed", async () => {
+    const { root, bookDir, agent } = await createVietnameseWriterFixture("inkos-writer-format-repair-fail-");
+    const chatSpy = vi.spyOn(WriterAgent.prototype as never, "chat" as never)
+      .mockResolvedValueOnce({ content: "Mưa phủ kín khu chợ cũ.", usage: ZERO_USAGE })
+      .mockResolvedValueOnce({ content: "Tôi đã định dạng lại nội dung.", usage: ZERO_USAGE });
+
+    try {
+      await expect(agent.writeChapter({
+        book: createVietnameseBook(),
+        bookDir,
+        chapterNumber: 1,
+        ...createGovernedWriterInput(1),
+        lengthSpec: buildLengthSpec(220, "vi"),
+      })).rejects.toMatchObject({
+        name: "WriterOutputContractError",
+        code: "WRITER_FORMAT_CONTRACT_UNRECOVERABLE",
+      });
+      expect(chatSpy).toHaveBeenCalledTimes(2);
+      expect(chatSpy.mock.calls[1]?.[1]).toMatchObject({ temperature: 0 });
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects a format repair that rewrites the original Vietnamese prose", async () => {
+    const { root, bookDir, agent } = await createVietnameseWriterFixture("inkos-writer-format-rewrite-");
+    const originalDraft = "Mưa phủ kín khu chợ cũ. ".repeat(40);
+    const rewrittenDraft = "Nắng tràn qua quảng trường mới. ".repeat(40);
+    const chatSpy = vi.spyOn(WriterAgent.prototype as never, "chat" as never)
+      .mockResolvedValueOnce({ content: originalDraft, usage: ZERO_USAGE })
+      .mockResolvedValueOnce({
+        content: [
+          "=== CHAPTER_TITLE ===",
+          "Quảng trường",
+          "",
+          "=== CHAPTER_CONTENT ===",
+          rewrittenDraft,
+        ].join("\n"),
+        usage: ZERO_USAGE,
+      });
+
+    try {
+      await expect(agent.writeChapter({
+        book: createVietnameseBook(),
+        bookDir,
+        chapterNumber: 1,
+        ...createGovernedWriterInput(1),
+        lengthSpec: buildLengthSpec(220, "vi"),
+      })).rejects.toMatchObject({
+        name: "WriterOutputContractError",
+        code: "WRITER_FORMAT_CONTRACT_UNRECOVERABLE",
+      });
+      expect(chatSpy).toHaveBeenCalledTimes(2);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects a format repair that wraps a Vietnamese refusal as chapter prose", async () => {
+    const { root, bookDir, agent } = await createVietnameseWriterFixture("inkos-writer-format-refusal-");
+    const refusal = "Tôi xin lỗi, tôi không thể viết chương này.";
+    const chatSpy = vi.spyOn(WriterAgent.prototype as never, "chat" as never)
+      .mockResolvedValueOnce({ content: refusal, usage: ZERO_USAGE })
+      .mockResolvedValueOnce({
+        content: [
+          "=== CHAPTER_TITLE ===",
+          "Không có chương",
+          "",
+          "=== CHAPTER_CONTENT ===",
+          refusal,
+        ].join("\n"),
+        usage: ZERO_USAGE,
+      });
+
+    try {
+      await expect(agent.writeChapter({
+        book: createVietnameseBook(),
+        bookDir,
+        chapterNumber: 1,
+        ...createGovernedWriterInput(1),
+        lengthSpec: buildLengthSpec(220, "vi"),
+      })).rejects.toMatchObject({
+        name: "WriterOutputContractError",
+        code: "WRITER_FORMAT_CONTRACT_UNRECOVERABLE",
+      });
+      expect(chatSpy).toHaveBeenCalledTimes(2);
     } finally {
       await rm(root, { recursive: true, force: true });
     }

@@ -18,9 +18,12 @@ export interface CreativeOutput {
 }
 
 export class WriterOutputContractError extends Error {
-  constructor(message: string) {
+  readonly code: string;
+
+  constructor(message: string, code = "WRITER_OUTPUT_CONTRACT") {
     super(message);
     this.name = "WriterOutputContractError";
+    this.code = code;
   }
 }
 
@@ -30,22 +33,23 @@ export function parseCreativeOutput(
   language: WritingLanguage = "zh",
   countingMode: LengthCountingMode = "zh_chars",
 ): CreativeOutput {
+  const normalizedContent = normalizeCreativeMarkerLines(content);
   const extract = (tag: string): string => {
     const regex = new RegExp(
       `=== ${tag} ===\\s*([\\s\\S]*?)(?==== [A-Z_]+ ===|$)`,
     );
-    const match = content.match(regex);
+    const match = normalizedContent.match(regex);
     return match?.[1]?.trim() ?? "";
   };
 
   let chapterContent = extract("CHAPTER_CONTENT");
 
-  assertVietnameseChapterContent(content, chapterContent, language);
+  assertVietnameseChapterContent(normalizedContent, chapterContent, language);
 
   // Fallback: if === TAG === parsing fails (common with local/small models),
   // try to extract usable content from the raw output
   if (!chapterContent) {
-    chapterContent = fallbackExtractContent(content, language);
+    chapterContent = fallbackExtractContent(normalizedContent, language);
   }
 
   let title = extract("CHAPTER_TITLE");
@@ -59,6 +63,17 @@ export function parseCreativeOutput(
     wordCount: countChapterLength(chapterContent, countingMode),
     preWriteCheck: extract("PRE_WRITE_CHECK"),
   };
+}
+
+const CREATIVE_MARKER_NAMES = "PRE_WRITE_CHECK|CHAPTER_TITLE|CHAPTER_CONTENT";
+
+function normalizeCreativeMarkerLines(raw: string): string {
+  const markerLine = new RegExp(
+    `^[ \\t]*(?:===\\s*(${CREATIVE_MARKER_NAMES})\\s*===|#{1,6}[ \\t]+(${CREATIVE_MARKER_NAMES}))[ \\t]*\\r?$`,
+    "gm",
+  );
+  return raw.replace(markerLine, (_line, canonicalMarker: string | undefined, markdownMarker: string | undefined) =>
+    `=== ${canonicalMarker ?? markdownMarker} ===`);
 }
 
 /**

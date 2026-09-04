@@ -383,6 +383,40 @@ ${prose}`;
     expect(result.content).toBe("正常的章节内容，这里是完整的正文。");
   });
 
+  it("accepts compact canonical marker spacing for Vietnamese output", () => {
+    const raw = `===PRE_WRITE_CHECK===
+Đã kiểm tra.
+
+===CHAPTER_TITLE===
+Mưa đêm
+
+===CHAPTER_CONTENT===
+Mưa rơi trên mái ngói cũ.`;
+
+    const result = parseCreativeOutput(1, raw, "vi", "vi_wordlike_tokens_v1");
+
+    expect(result.title).toBe("Mưa đêm");
+    expect(result.content).toBe("Mưa rơi trên mái ngói cũ.");
+    expect(result.preWriteCheck).toBe("Đã kiểm tra.");
+  });
+
+  it("accepts allowlisted Markdown marker headings for Vietnamese output", () => {
+    const raw = `## PRE_WRITE_CHECK
+Đã kiểm tra.
+
+## CHAPTER_TITLE
+Mưa đêm
+
+## CHAPTER_CONTENT
+Mưa rơi trên mái ngói cũ.`;
+
+    const result = parseCreativeOutput(1, raw, "vi", "vi_wordlike_tokens_v1");
+
+    expect(result.title).toBe("Mưa đêm");
+    expect(result.content).toBe("Mưa rơi trên mái ngói cũ.");
+    expect(result.preWriteCheck).toBe("Đã kiểm tra.");
+  });
+
   it("counts creative output with the shared helper when a counting mode is supplied", () => {
     const raw = `=== CHAPTER_TITLE ===
 English Chapter

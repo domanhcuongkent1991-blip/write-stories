@@ -7,6 +7,8 @@ import { promisify } from "node:util";
 import { resolveCandidateSha } from "./candidate-config.mjs";
 import {
   assessQualificationResumeCheckpoint,
+  classifyOperationFailure,
+  collectChapterFailureDimensions,
   createQualificationProviderDiagnosticObserver,
   createQualificationRolloutConfig,
   isQualificationProviderBudgetExhausted,
@@ -688,6 +690,8 @@ try {
       chapter: null,
       invariants: null,
       error: null,
+      failureFamily: null,
+      failureDimensions: [],
     };
     try {
       const operation = await bounded(`chapter-${chapterNumber}`, 15 * 60_000, (signal) =>
@@ -705,6 +709,10 @@ try {
         // Keep the error evidence even if the operation failed before bootstrap.
       }
     }
+    operationRecord.failureDimensions = [...collectChapterFailureDimensions(operationRecord)];
+    operationRecord.failureFamily = classifyOperationFailure(operationRecord, {
+      providerFailure: isProviderFailure(operationRecord),
+    });
     safe.operations.push(operationRecord);
     process.stdout.write(`${JSON.stringify({
       chapterNumber,
@@ -717,72 +725,34 @@ try {
       spellingIssueCount: operationRecord.chapter?.spellingIssueCount ?? null,
       cjkCharacterCount: operationRecord.chapter?.cjkCharacterCount ?? null,
       stateAligned: operationRecord.invariants?.aligned ?? null,
+      failureFamily: operationRecord.failureFamily,
+      failureDimensions: operationRecord.failureDimensions,
       error: operationRecord.error,
     })}\n`);
-    const chapterPassed = operationRecord.status === "completed"
-      && operationRecord.chapter?.auditDecision === "pass"
-      && operationRecord.chapter?.auditPassed === true
-      && operationRecord.chapter?.hardInRange === true
-      && operationRecord.chapter?.countingMode === "vi_wordlike_tokens_v1"
-      && operationRecord.chapter?.verifiedBlockerCount === 0
-      && operationRecord.chapter?.surfaceBlockerCount === 0
-      && operationRecord.chapter?.spellingIssueCount === 0
-      && operationRecord.chapter?.cjkCharacterCount === 0
-      && operationRecord.invariants?.aligned === true;
+    const chapterPassed = operationRecord.failureDimensions.length === 0;
     if (!chapterPassed) {
-      if (operationRecord.status !== "completed") {
-        safe.exitReason = isProviderFailure(operationRecord)
-          ? `BLOCKED_PROVIDER_CHAPTER_${chapterNumber}`
-          : `FAIL_HARNESS_CHAPTER_${chapterNumber}`;
-      } else if (
-        operationRecord.chapter?.auditDecision !== "pass"
-        || operationRecord.chapter?.auditPassed !== true
-        || operationRecord.chapter?.hardInRange !== true
-        || operationRecord.chapter?.countingMode !== "vi_wordlike_tokens_v1"
-        || operationRecord.chapter?.verifiedBlockerCount !== 0
-        || operationRecord.chapter?.surfaceBlockerCount !== 0
-        || operationRecord.chapter?.spellingIssueCount !== 0
-        || operationRecord.chapter?.cjkCharacterCount !== 0
-      ) {
-        safe.exitReason = `FAIL_QUALITY_CHAPTER_${chapterNumber}`;
-      } else if (operationRecord.invariants?.aligned !== true) {
-        safe.exitReason = `FAIL_STATE_CHAPTER_${chapterNumber}`;
-      } else {
-        safe.exitReason = `FAIL_HARNESS_CHAPTER_${chapterNumber}`;
-      }
+      safe.exitReason = operationRecord.failureFamily === "PROVIDER"
+        ? `BLOCKED_PROVIDER_CHAPTER_${chapterNumber}`
+        : operationRecord.failureFamily === "FORMAT_CONTRACT"
+          ? `FAIL_FORMAT_CONTRACT_CHAPTER_${chapterNumber}`
+          : operationRecord.failureFamily === "QUALITY"
+            ? `FAIL_QUALITY_CHAPTER_${chapterNumber}`
+            : operationRecord.failureFamily === "STATE"
+              ? `FAIL_STATE_CHAPTER_${chapterNumber}`
+              : `FAIL_HARNESS_CHAPTER_${chapterNumber}`;
       break;
     }
     if (chapterNumber === 3 || chapterNumber === 8) {
       safe.checkpoints.push({
         chapterNumber,
         providerRequestCount: safe.priorProviderRequestCount + safe.providerRequests.length,
-        hardPassCount: safe.operations.filter((operation) =>
-          operation.status === "completed"
-          && operation.chapter?.auditDecision === "pass"
-          && operation.chapter?.auditPassed === true
-          && operation.chapter?.hardInRange === true
-          && operation.chapter?.verifiedBlockerCount === 0
-          && operation.chapter?.surfaceBlockerCount === 0
-          && operation.chapter?.spellingIssueCount === 0
-          && operation.chapter?.cjkCharacterCount === 0
-          && operation.invariants?.aligned === true,
-        ).length,
+        hardPassCount: safe.operations.filter((operation) => operation.failureDimensions.length === 0).length,
         invariants: operationRecord.invariants,
       });
     }
   }
   safe.finalInvariants = safe.operations.at(-1)?.invariants ?? null;
-  hardPassCount = safe.operations.filter((operation) =>
-    operation.status === "completed"
-    && operation.chapter?.auditDecision === "pass"
-    && operation.chapter?.auditPassed === true
-    && operation.chapter?.hardInRange === true
-    && operation.chapter?.verifiedBlockerCount === 0
-    && operation.chapter?.surfaceBlockerCount === 0
-    && operation.chapter?.spellingIssueCount === 0
-    && operation.chapter?.cjkCharacterCount === 0
-    && operation.invariants?.aligned === true,
-  ).length;
+  hardPassCount = safe.operations.filter((operation) => operation.failureDimensions.length === 0).length;
   preferredPassCount = safe.operations.filter((operation) => operation.chapter?.preferredInRange === true).length;
   const expectedOperationCount = runThroughChapter - startChapter + 1;
   const expansionPass = safe.operations.length === expectedOperationCount && hardPassCount === expectedOperationCount;
@@ -826,6 +796,8 @@ try {
       spellingIssueCount: operation.chapter?.spellingIssueCount ?? null,
       cjkCharacterCount: operation.chapter?.cjkCharacterCount ?? null,
       stateAligned: operation.invariants?.aligned ?? null,
+      failureFamily: operation.failureFamily ?? null,
+      failureDimensions: operation.failureDimensions ?? [],
       selectedContextTokens: operation.chapter?.contextTrace?.tokenBudget?.totalSelectedTokens ?? null,
       error: operation.error,
     })),

@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   createProviderCallCollector,
+  readProviderCallStage,
   ProviderCallTelemetrySchema,
   recordProviderPostAttempt,
   recordProviderRetryCounts,
@@ -10,6 +11,14 @@ import {
 } from "../llm/provider-call-telemetry.js";
 
 describe("provider call telemetry", () => {
+  it("exposes an explicit diagnostic stage even without a telemetry collector", async () => {
+    expect(readProviderCallStage()).toBe("unscoped");
+    await runWithProviderCallStage("writer-format-repair", async () => {
+      expect(readProviderCallStage()).toBe("writer-format-repair");
+    });
+    expect(readProviderCallStage()).toBe("unscoped");
+  });
+
   it("counts actual transport attempts by explicit stage and retry class", async () => {
     const collector = createProviderCallCollector();
     await runWithProviderCallTelemetry(collector, async () => {

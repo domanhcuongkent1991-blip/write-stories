@@ -73,7 +73,8 @@ export interface PlanChapterOutput {
   readonly tokenUsage?: TokenUsage;
 }
 
-const MEMO_RETRY_LIMIT = 3;
+const MEMO_RETRY_LIMIT = 2;
+const MEMO_TEMPERATURE = 0.2;
 
 interface MemoGenerationPolicy {
   readonly parseAttemptLimit: number;
@@ -119,7 +120,7 @@ function buildSemanticCorrectionFeedback(
  *   - a full ChapterMemo (plain markdown sections) via LLM call + strict
  *     parser.
  *
- * Retry policy: up to 3 attempts. Each failed parse appends an error
+ * Retry policy: up to 2 attempts. Each failed parse appends an error
  * feedback block to the user message and re-invokes the LLM. If all attempts
  * fail, the planner emits a degraded but valid memo with an explicit warning
  * instead of crashing the whole chapter pipeline.
@@ -453,7 +454,7 @@ export class PlannerAgent extends BaseAgent {
           { role: "system", content: systemPrompt },
           { role: "user", content: currentUserMessage },
         ],
-        { temperature: 0.7 },
+        { temperature: MEMO_TEMPERATURE },
       );
       if (response.usage) {
         tokenUsage = {

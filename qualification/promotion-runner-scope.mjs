@@ -16,6 +16,78 @@ const QUALIFICATION_DIAGNOSTIC_MARKERS = Object.freeze([
   "POST_SETTLEMENT",
 ]);
 
+const PROVIDER_STAGE_CONTEXT = Object.freeze({
+  planner: Object.freeze({ agent: "planner", substage: "memo-generation" }),
+  "resolve-preflight": Object.freeze({ agent: "planner", substage: "resolve-preflight" }),
+  "writer-draft": Object.freeze({ agent: "writer", substage: "creative-generation" }),
+  "writer-format-repair": Object.freeze({ agent: "writer", substage: "format-repair" }),
+  "writer-observer": Object.freeze({ agent: "writer", substage: "observation" }),
+  "initial-settlement": Object.freeze({ agent: "writer", substage: "settlement" }),
+  "settlement-recovery": Object.freeze({ agent: "writer", substage: "settlement-repair" }),
+  "initial-state-validation": Object.freeze({ agent: "state-validator", substage: "initial" }),
+  "local-repair": Object.freeze({ agent: "repairer", substage: "local" }),
+  "structural-revision": Object.freeze({ agent: "reviser", substage: "structural" }),
+  "candidate-settlement": Object.freeze({ agent: "writer", substage: "candidate-settlement" }),
+  "initial-auditor": Object.freeze({ agent: "auditor", substage: "initial" }),
+  "post-candidate-auditor": Object.freeze({ agent: "auditor", substage: "post-candidate" }),
+});
+
+const QUALITY_FAILURE_DIMENSIONS = new Set([
+  "audit-decision",
+  "audit-passed",
+  "hard-range",
+  "counting-mode",
+  "verified-blocker",
+  "surface-blocker",
+  "spelling",
+  "cjk",
+]);
+
+export function collectChapterFailureDimensions(operationRecord) {
+  const dimensions = [];
+  if (operationRecord?.status !== "completed") {
+    dimensions.push("operation-not-completed");
+  }
+
+  const errorName = operationRecord?.error?.name;
+  if (errorName === "WriterOutputContractError") {
+    dimensions.push("writer-format-contract");
+  } else if (errorName === "PlannerParseError") {
+    dimensions.push("planner-format-contract");
+  }
+
+  if (operationRecord?.status === "completed") {
+    const chapter = operationRecord.chapter ?? {};
+    if (chapter.auditDecision !== "pass") dimensions.push("audit-decision");
+    if (chapter.auditPassed !== true) dimensions.push("audit-passed");
+    if (chapter.hardInRange !== true) dimensions.push("hard-range");
+    if (chapter.countingMode !== "vi_wordlike_tokens_v1") dimensions.push("counting-mode");
+    if (chapter.verifiedBlockerCount !== 0) dimensions.push("verified-blocker");
+    if (chapter.surfaceBlockerCount !== 0) dimensions.push("surface-blocker");
+    if (chapter.spellingIssueCount !== 0) dimensions.push("spelling");
+    if (chapter.cjkCharacterCount !== 0) dimensions.push("cjk");
+  }
+
+  if (operationRecord?.invariants && operationRecord.invariants.aligned !== true) {
+    dimensions.push("state-alignment");
+  }
+  return Object.freeze(dimensions);
+}
+
+export function classifyOperationFailure(operationRecord, options = {}) {
+  const dimensions = collectChapterFailureDimensions(operationRecord);
+  if (dimensions.length === 0) return null;
+  if (options.providerFailure === true) return "PROVIDER";
+  if (dimensions.includes("state-alignment")) return "STATE";
+  if (dimensions.includes("writer-format-contract") || dimensions.includes("planner-format-contract")) {
+    return "FORMAT_CONTRACT";
+  }
+  if (dimensions.some((dimension) => QUALITY_FAILURE_DIMENSIONS.has(dimension))) {
+    return "QUALITY";
+  }
+  return "HARNESS";
+}
+
 export function createQualificationProviderDiagnosticObserver(target, readStage) {
   if (!Array.isArray(target)) {
     throw new TypeError("provider diagnostic target must be an array");
@@ -26,9 +98,12 @@ export function createQualificationProviderDiagnosticObserver(target, readStage)
   return Object.freeze({
     markers: QUALIFICATION_DIAGNOSTIC_MARKERS,
     observe(observation) {
+      const context = PROVIDER_STAGE_CONTEXT[observation?.providerStage] ?? null;
       target.push(Object.freeze({
         ...observation,
         stage: readStage(),
+        agent: context?.agent ?? null,
+        substage: context?.substage ?? null,
       }));
     },
   });

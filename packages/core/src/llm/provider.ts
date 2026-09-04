@@ -24,6 +24,7 @@ import {
   beginAgentModelCall,
 } from "./agent-trajectory.js";
 import {
+  readProviderCallStage,
   recordProviderPostAttempt,
   recordProviderRetryCounts,
 } from "./provider-call-telemetry.js";
@@ -2067,6 +2068,7 @@ export async function chatCompletion(
       requestedModel: model,
       apiFormat: client.apiFormat,
       stream: client.stream,
+      providerStage: readProviderCallStage(),
       durationMs: Date.now() - diagnosticStartedAt,
       markers: client._diagnostics?.markers,
       response,
@@ -2164,6 +2166,7 @@ export async function chatCompletion(
       requestedModel: model,
       apiFormat: client.apiFormat,
       stream: client.stream,
+      providerStage: readProviderCallStage(),
       durationMs: Date.now() - diagnosticStartedAt,
       markers: client._diagnostics?.markers,
       response,
@@ -2184,6 +2187,7 @@ export async function chatCompletion(
       requestedModel: model,
       apiFormat: client.apiFormat,
       stream: client.stream,
+      providerStage: readProviderCallStage(),
       durationMs: Date.now() - diagnosticStartedAt,
       error: normalized,
     }));

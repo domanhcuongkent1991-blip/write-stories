@@ -1,6 +1,94 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
+function passingChapterEvidence(overrides = {}) {
+  return {
+    auditDecision: "pass",
+    auditPassed: true,
+    hardInRange: true,
+    countingMode: "vi_wordlike_tokens_v1",
+    verifiedBlockerCount: 0,
+    surfaceBlockerCount: 0,
+    spellingIssueCount: 0,
+    cjkCharacterCount: 0,
+    ...overrides,
+  };
+}
+
+test("classifies Writer envelope failures separately from harness failures", async () => {
+  const {
+    classifyOperationFailure,
+    collectChapterFailureDimensions,
+  } = await import("./promotion-runner-scope.mjs");
+  const operation = {
+    status: "error",
+    chapter: null,
+    invariants: { aligned: true },
+    error: { name: "WriterOutputContractError" },
+  };
+
+  assert.deepEqual(collectChapterFailureDimensions(operation), [
+    "operation-not-completed",
+    "writer-format-contract",
+  ]);
+  assert.equal(classifyOperationFailure(operation), "FORMAT_CONTRACT");
+});
+
+test("reports every failed quality dimension instead of one umbrella boolean", async () => {
+  const {
+    classifyOperationFailure,
+    collectChapterFailureDimensions,
+  } = await import("./promotion-runner-scope.mjs");
+  const operation = {
+    status: "completed",
+    chapter: passingChapterEvidence({
+      auditDecision: "repair-required",
+      auditPassed: false,
+      hardInRange: false,
+      spellingIssueCount: 2,
+      cjkCharacterCount: 1,
+    }),
+    invariants: { aligned: true },
+    error: null,
+  };
+
+  assert.deepEqual(collectChapterFailureDimensions(operation), [
+    "audit-decision",
+    "audit-passed",
+    "hard-range",
+    "spelling",
+    "cjk",
+  ]);
+  assert.equal(classifyOperationFailure(operation), "QUALITY");
+});
+
+test("prioritizes state and provider families while retaining detailed dimensions", async () => {
+  const {
+    classifyOperationFailure,
+    collectChapterFailureDimensions,
+  } = await import("./promotion-runner-scope.mjs");
+  const stateFailure = {
+    status: "completed",
+    chapter: passingChapterEvidence(),
+    invariants: { aligned: false },
+    error: null,
+  };
+  assert.deepEqual(collectChapterFailureDimensions(stateFailure), ["state-alignment"]);
+  assert.equal(classifyOperationFailure(stateFailure), "STATE");
+
+  const providerFailure = {
+    status: "error",
+    chapter: null,
+    invariants: { aligned: true },
+    error: { name: "ProviderConnectionError" },
+  };
+  assert.equal(classifyOperationFailure(providerFailure, { providerFailure: true }), "PROVIDER");
+  assert.equal(classifyOperationFailure({
+    ...providerFailure,
+    error: { name: "UnexpectedInternalError" },
+  }), "HARNESS");
+});
+
 test("records provider diagnostics with the current qualification stage", async () => {
   const { createQualificationProviderDiagnosticObserver } = await import("./promotion-runner-scope.mjs");
   const target = [];
@@ -10,26 +98,34 @@ test("records provider diagnostics with the current qualification stage", async 
   observer.observe(Object.freeze({
     schemaVersion: 1,
     requestedModel: "fixture",
+    providerStage: "unscoped",
     markerPresence: Object.freeze({}),
   }));
   stage = "chapter-1";
   observer.observe(Object.freeze({
     schemaVersion: 1,
     requestedModel: "fixture",
+    providerStage: "writer-format-repair",
     markerPresence: Object.freeze({ CHAPTER_CONTENT: true }),
   }));
 
   assert.deepEqual(target, [
     {
       stage: "health-chat-stream",
+      agent: null,
+      substage: null,
       schemaVersion: 1,
       requestedModel: "fixture",
+      providerStage: "unscoped",
       markerPresence: {},
     },
     {
       stage: "chapter-1",
+      agent: "writer",
+      substage: "format-repair",
       schemaVersion: 1,
       requestedModel: "fixture",
+      providerStage: "writer-format-repair",
       markerPresence: { CHAPTER_CONTENT: true },
     },
   ]);

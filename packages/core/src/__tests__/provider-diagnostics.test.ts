@@ -13,6 +13,7 @@ describe("provider diagnostics", () => {
       requestedModel: "fixture-model",
       apiFormat: "chat",
       stream: true,
+      providerStage: "writer-format-repair",
       durationMs: 1_234,
       markers: ["CHAPTER_CONTENT", "RUNTIME_STATE_DELTA"],
       response: {
@@ -37,6 +38,7 @@ describe("provider diagnostics", () => {
       systemFingerprint: "fp-fixture",
       apiFormat: "chat",
       stream: true,
+      providerStage: "writer-format-repair",
       outcome: "final-answer",
       finishReason: "stop",
       contentLengthBucket: "1-1k",

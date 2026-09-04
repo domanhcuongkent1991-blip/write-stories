@@ -304,7 +304,7 @@ describe("PlannerAgent.planChapter memo generation", () => {
 
     const callArgs = chatSpy.mock.calls[0]!;
     const options = callArgs[3] as { temperature?: number; maxTokens?: number } | undefined;
-    expect(options).toEqual(expect.objectContaining({ temperature: 0.7 }));
+    expect(options).toEqual(expect.objectContaining({ temperature: 0.2 }));
     expect(options).not.toHaveProperty("maxTokens");
   });
 
@@ -336,10 +336,6 @@ describe("PlannerAgent.planChapter memo generation", () => {
         usage: ZERO_USAGE,
       } as unknown as Awaited<ReturnType<typeof llmProvider.chatCompletion>>)
       .mockResolvedValueOnce({
-        content: "still no memo sections",
-        usage: ZERO_USAGE,
-      } as unknown as Awaited<ReturnType<typeof llmProvider.chatCompletion>>)
-      .mockResolvedValueOnce({
         content: validMemoRaw(4),
         usage: ZERO_USAGE,
       } as unknown as Awaited<ReturnType<typeof llmProvider.chatCompletion>>);
@@ -350,7 +346,7 @@ describe("PlannerAgent.planChapter memo generation", () => {
       chapterNumber: 4,
     });
 
-    expect(chatSpy).toHaveBeenCalledTimes(3);
+    expect(chatSpy).toHaveBeenCalledTimes(2);
     expect(result.memo.chapter).toBe(4);
     expect(result.memo.isGoldenOpening).toBe(false);
 
@@ -368,10 +364,6 @@ describe("PlannerAgent.planChapter memo generation", () => {
   ])("retries a fresh memo when it has %s and accepts a canonical code", async (_label, mutate) => {
     const chatSpy = vi.spyOn(llmProvider, "chatCompletion")
       .mockResolvedValueOnce({
-        content: validMemoRaw(4).replace(/reveal/iu, _label === "legacy pacing label" ? "推进章" : "side-quest"),
-        usage: ZERO_USAGE,
-      } as unknown as Awaited<ReturnType<typeof llmProvider.chatCompletion>>)
-      .mockResolvedValueOnce({
         content: mutate(validMemoRaw(4)),
         usage: ZERO_USAGE,
       } as unknown as Awaited<ReturnType<typeof llmProvider.chatCompletion>>)
@@ -386,7 +378,7 @@ describe("PlannerAgent.planChapter memo generation", () => {
       chapterNumber: 4,
     });
 
-    expect(chatSpy).toHaveBeenCalledTimes(3);
+    expect(chatSpy).toHaveBeenCalledTimes(2);
     expect(result.intent.pacingCode).toBe("reveal");
   });
 
@@ -737,8 +729,8 @@ ${VALID_EN_BODY}
     expect(userMsg?.content).not.toContain("黄金三章规划指引");
   });
 
-  it("returns a degraded memo instead of throwing when all 3 attempts fail", async () => {
-    vi.spyOn(llmProvider, "chatCompletion").mockResolvedValue({
+  it("returns a degraded memo after exactly two malformed attempts", async () => {
+    const chatSpy = vi.spyOn(llmProvider, "chatCompletion").mockResolvedValue({
       content: "permanently broken",
       usage: ZERO_USAGE,
     } as unknown as Awaited<ReturnType<typeof llmProvider.chatCompletion>>);
@@ -757,6 +749,7 @@ ${VALID_EN_BODY}
     expect(result.intentMarkdown).toContain("Planner warning");
     expect(result.memo.body).toContain("场景一");
     expect(result.memo.body).toContain("场景二");
+    expect(chatSpy).toHaveBeenCalledTimes(2);
   });
 
   // Phase hotfix 5: planner.intent.mustAvoid must come from the Phase 5

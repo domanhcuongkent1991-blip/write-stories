@@ -7,6 +7,8 @@ export const ProviderCallStageSchema = z.enum([
   "planner",
   "resolve-preflight",
   "writer-draft",
+  "writer-format-repair",
+  "writer-observer",
   "initial-settlement",
   "initial-state-validation",
   "local-repair",
@@ -34,7 +36,7 @@ export interface ProviderCallCollector {
 }
 
 interface ProviderCallContext {
-  readonly collector: ProviderCallCollector;
+  readonly collector?: ProviderCallCollector;
   readonly stage: ProviderCallStage;
 }
 
@@ -53,27 +55,33 @@ export function runWithProviderCallTelemetry<T>(
 
 export function runWithProviderCallStage<T>(stage: ProviderCallStage, task: () => T): T {
   const current = providerCallContext.getStore();
-  if (!current) return task();
   ProviderCallStageSchema.parse(stage);
-  return providerCallContext.run({ ...current, stage }, task);
+  return providerCallContext.run({
+    ...(current?.collector ? { collector: current.collector } : {}),
+    stage,
+  }, task);
 }
 
 export function runWithProviderDefaultStage<T>(stage: ProviderCallStage, task: () => T): T {
   const current = providerCallContext.getStore();
-  if (!current || current.stage !== "unscoped") return task();
+  if (current && current.stage !== "unscoped") return task();
   return runWithProviderCallStage(stage, task);
+}
+
+export function readProviderCallStage(): ProviderCallStage {
+  return providerCallContext.getStore()?.stage ?? "unscoped";
 }
 
 export function recordProviderPostAttempt(): void {
   const current = providerCallContext.getStore();
-  if (!current) return;
+  if (!current?.collector) return;
   current.collector.total += 1;
   current.collector.byStage[current.stage] = (current.collector.byStage[current.stage] ?? 0) + 1;
 }
 
 export function recordProviderRetryCounts(counts: LLMRetryCounts): void {
   const current = providerCallContext.getStore();
-  if (!current) return;
+  if (!current?.collector) return;
   current.collector.transportRetries += counts.transport;
   current.collector.outputRetries += counts.output;
 }
