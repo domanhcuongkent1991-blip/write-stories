@@ -18,14 +18,16 @@ export function resolveQualificationProviderConfig(environment = {}) {
   } catch {
     throw new Error("qualification base URL must be an absolute HTTPS URL");
   }
+  const isLoopbackHttp = parsedBaseUrl.protocol === "http:"
+    && new Set(["localhost", "127.0.0.1", "::1"]).has(parsedBaseUrl.hostname);
   if (
-    parsedBaseUrl.protocol !== "https:"
+    (parsedBaseUrl.protocol !== "https:" && !isLoopbackHttp)
     || parsedBaseUrl.username.length > 0
     || parsedBaseUrl.password.length > 0
     || parsedBaseUrl.search.length > 0
     || parsedBaseUrl.hash.length > 0
   ) {
-    throw new Error("qualification base URL must use HTTPS without credentials, query, or fragment");
+    throw new Error("qualification base URL must use HTTPS, or HTTP on localhost/loopback, without credentials, query, or fragment");
   }
 
   const serviceKey = environment.INKOS_QUALIFICATION_SERVICE_KEY?.trim()

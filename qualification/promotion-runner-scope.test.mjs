@@ -102,6 +102,21 @@ test("resolves an explicit HTTPS qualification provider without leaking credenti
   });
 });
 
+test("allows HTTP only for the local internal qualification endpoint", async () => {
+  const { resolveQualificationProviderConfig } = await import("./promotion-runner-scope.mjs");
+  assert.deepEqual(resolveQualificationProviderConfig({
+    INKOS_QUALIFICATION_BASE_URL: "http://localhost:56154/v1",
+    INKOS_QUALIFICATION_SERVICE_KEY: "custom:Internal",
+    INKOS_QUALIFICATION_MODEL: "gpt-5.5",
+  }), {
+    baseUrl: "http://localhost:56154/v1",
+    baseHost: "localhost",
+    basePath: "/v1",
+    serviceKey: "custom:Internal",
+    model: "gpt-5.5",
+  });
+});
+
 test("rejects unsafe or ambiguous qualification provider URLs", async () => {
   const { resolveQualificationProviderConfig } = await import("./promotion-runner-scope.mjs");
 
