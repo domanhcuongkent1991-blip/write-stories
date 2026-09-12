@@ -47,7 +47,7 @@ export const HOOK_RESOLVE_PREFLIGHT_STRUCTURED_OUTPUT: LLMStructuredOutputSpec =
               required: ["hookId", "decision"],
               properties: {
                 hookId: { type: "string", minLength: 1 },
-                decision: { const: "pass" },
+                decision: { type: "string", enum: ["pass"] },
               },
             },
             {
@@ -56,8 +56,8 @@ export const HOOK_RESOLVE_PREFLIGHT_STRUCTURED_OUTPUT: LLMStructuredOutputSpec =
               required: ["hookId", "decision", "code", "description"],
               properties: {
                 hookId: { type: "string", minLength: 1 },
-                decision: { const: "repair-required" },
-                code: { enum: ["payoff-mismatch", "insufficient-evidence"] },
+                decision: { type: "string", enum: ["repair-required"] },
+                code: { type: "string", enum: ["payoff-mismatch", "insufficient-evidence"] },
                 description: { type: "string", minLength: 1, maxLength: 500 },
               },
             },
@@ -67,7 +67,7 @@ export const HOOK_RESOLVE_PREFLIGHT_STRUCTURED_OUTPUT: LLMStructuredOutputSpec =
               required: ["hookId", "decision", "description"],
               properties: {
                 hookId: { type: "string", minLength: 1 },
-                decision: { const: "inconclusive" },
+                decision: { type: "string", enum: ["inconclusive"] },
                 description: { type: "string", minLength: 1, maxLength: 500 },
               },
             },
