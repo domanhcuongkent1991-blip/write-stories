@@ -40,6 +40,7 @@ const PROVIDER_STAGE_CONTEXT = Object.freeze({
   "candidate-settlement": Object.freeze({ agent: "writer", substage: "candidate-settlement" }),
   "initial-auditor": Object.freeze({ agent: "auditor", substage: "initial" }),
   "post-candidate-auditor": Object.freeze({ agent: "auditor", substage: "post-candidate" }),
+  "auditor-verdict-repair": Object.freeze({ agent: "auditor", substage: "verdict-repair" }),
 });
 
 const QUALITY_FAILURE_DIMENSIONS = new Set([

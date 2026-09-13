@@ -755,3 +755,152 @@ async function createVietnameseTransitionFixture(): Promise<{ root: string; book
   ]);
   return { root, bookDir };
 }
+
+describe("Vietnamese audit verdict repair", () => {
+  function badEvidenceVerdict(): string {
+    return JSON.stringify({
+      passed: false,
+      overall_score: 72,
+      transition_check: {
+        status: "contradiction",
+        dimensions_checked: ["time", "location", "physical-state", "device-state", "possession"],
+      },
+      issues: [{
+        severity: "critical",
+        category: "Transition Continuity",
+        description: "Mốc nước đảo ngược.",
+        transition_evidence: {
+          dimension: "physical-state",
+          previous_text: "Câu không tồn tại ở chương trước.",
+          current_text: "câu không tồn tại ở chương này",
+        },
+      }],
+      summary: "transition contradiction",
+    });
+  }
+
+  function bindingVerdict(): string {
+    return JSON.stringify({
+      passed: false,
+      overall_score: 88,
+      transition_check: {
+        status: "contradiction",
+        dimensions_checked: ["time", "location", "physical-state", "device-state", "possession"],
+      },
+      issues: [{
+        severity: "critical",
+        category: "Transition Continuity",
+        description: "Mực nước đảo ngược mà không có nguyên nhân.",
+        transition_evidence: {
+          dimension: "physical-state",
+          previous_text: "Vạch mực nước chạm đúng mốc 1,22m lúc 08:40.",
+          current_text: "mặt nước thực tế cuồn cuộn ở mốc 1,34m",
+        },
+      }],
+      summary: "transition contradiction",
+    });
+  }
+
+  it("unwraps a transport envelope before audit parsing", () => {
+    const auditor = createTestAuditor("/tmp/inkos-envelope-test");
+    const result = (auditor as any).parseAuditResult(
+      JSON.stringify({ status: "ok", processed: 1, passed: true, overall_score: 82, issues: [], summary: "ok" }),
+      "en",
+    );
+    expect(result.passed).toBe(true);
+    expect(result.overallScore).toBe(82);
+    expect(result.parseFailed).not.toBe(true);
+  });
+
+  it("runs exactly one bounded verdict repair when the first audit cannot bind", async () => {
+    const { root, bookDir } = await createVietnameseTransitionFixture();
+    const auditor = createTestAuditor(root);
+    const chatSpy = vi.spyOn(ContinuityAuditor.prototype as never, "chat" as never)
+      .mockImplementationOnce((async () => ({
+        content: badEvidenceVerdict(),
+        usage: ZERO_USAGE,
+      })) as never)
+      .mockImplementationOnce((async () => ({
+        content: bindingVerdict(),
+        usage: ZERO_USAGE,
+      })) as never);
+
+    try {
+      const result = await auditor.auditChapter(
+        bookDir,
+        "Trong đêm, mặt nước thực tế cuồn cuộn ở mốc 1,34m mà không có trận mưa mới.",
+        2,
+        "other",
+      );
+
+      expect(chatSpy).toHaveBeenCalledTimes(2);
+      const repairOptions = chatSpy.mock.calls[1]?.[1] as { temperature?: number } | undefined;
+      expect(repairOptions?.temperature).toBe(0);
+      const repairMessages = chatSpy.mock.calls[1]?.[0] as ReadonlyArray<{ role: string; content: string }>;
+      const repairUser = repairMessages?.[1]?.content ?? "";
+      expect(repairUser).toContain("<BEGIN_UNTRUSTED_AUDITOR_OUTPUT>");
+      expect(repairUser).toContain("Câu không tồn tại ở chương trước.");
+      expect(result.parseFailed).not.toBe(true);
+      expect(result.overallScore).toBe(88);
+      expect((result as any).hostFindings?.length).toBeGreaterThan(0);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps the fail-closed result when the repair declines with the sentinel", async () => {
+    const { root, bookDir } = await createVietnameseTransitionFixture();
+    const auditor = createTestAuditor(root);
+    const chatSpy = vi.spyOn(ContinuityAuditor.prototype as never, "chat" as never)
+      .mockImplementationOnce((async () => ({
+        content: badEvidenceVerdict(),
+        usage: ZERO_USAGE,
+      })) as never)
+      .mockImplementationOnce((async () => ({
+        content: "AUDIT_REPAIR_REJECTED",
+        usage: ZERO_USAGE,
+      })) as never);
+
+    try {
+      const result = await auditor.auditChapter(bookDir, "Trong đêm, mặt nước trở lại 1,34m.", 2, "other");
+
+      expect(chatSpy).toHaveBeenCalledTimes(2);
+      expect(result.parseFailed).toBe(true);
+      expect(result.overallScore).toBe(72);
+      expect((result as any).hostFindings).toEqual([]);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps the fail-closed result when the repair call itself fails", async () => {
+    const { root, bookDir } = await createVietnameseTransitionFixture();
+    const auditor = createTestAuditor(root);
+    vi.spyOn(ContinuityAuditor.prototype as never, "chat" as never)
+      .mockImplementationOnce((async () => ({
+        content: badEvidenceVerdict(),
+        usage: ZERO_USAGE,
+      })) as never)
+      .mockImplementationOnce((async () => {
+        throw new Error("provider unavailable");
+      }) as never);
+
+    try {
+      const result = await auditor.auditChapter(bookDir, "Trong đêm, mặt nước trở lại 1,34m.", 2, "other");
+
+      expect(result.parseFailed).toBe(true);
+      expect(result.overallScore).toBe(72);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("does not repair parse failures for non-Vietnamese chapters", () => {
+    const auditor = createTestAuditor("/tmp/inkos-zh-repair-test");
+    const chatSpy = vi.spyOn(ContinuityAuditor.prototype as never, "chat" as never);
+
+    const result = (auditor as any).parseAuditResult("模型只返回了一段散文，没有 JSON。", "zh");
+    expect(result.parseFailed).toBe(true);
+    expect(chatSpy).not.toHaveBeenCalled();
+  });
+});

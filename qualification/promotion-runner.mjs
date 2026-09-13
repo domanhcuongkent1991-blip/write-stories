@@ -693,7 +693,9 @@ try {
       failureDimensions: [],
     };
     try {
-      const operation = await bounded(`chapter-${chapterNumber}`, 15 * 60_000, (signal) =>
+      // 25 minutes: late chapters run multi-cycle settlement recovery with
+      // 120s+ calls; a 15-minute bound was killing healthy chapter attempts.
+      const operation = await bounded(`chapter-${chapterNumber}`, 25 * 60_000, (signal) =>
         runner.runWithAbortSignal(signal, () => runner.writeNextChapter(bookId, 1150, undefined, externalContext))
       );
       operationRecord.durationMs = operation.durationMs;

@@ -30,6 +30,7 @@ import {
   loadPlanningSeedMaterials,
 } from "../utils/planning-materials.js";
 import { parseMemo, PlannerParseError } from "../utils/chapter-memo-parser.js";
+import { extractVerbatimEvidenceQuotes } from "../utils/narrative-control.js";
 import {
   buildPlannerUserMessage,
   getPlannerMemoSystemPrompt,
@@ -332,6 +333,17 @@ export class PlannerAgent extends BaseAgent {
       scaffoldLanguage,
     );
     intent.pacingCode = pacingCodeFromMemo(memo.body);
+
+    if (writingLanguage === "vi") {
+      // Quoted strings in plannedEvidence are canon/log values the auditor
+      // compares verbatim against the prose; surface them as hard must-keep
+      // items so the writer is bound to them beyond the sanitized memo.
+      intent.mustKeep = this.unique([
+        ...extractVerbatimEvidenceQuotes(expectedHookContract.operations)
+          .map((quote) => `Bắt buộc xuất hiện nguyên văn: "${quote}"`),
+        ...intent.mustKeep,
+      ]).slice(0, 8);
+    }
 
     // memo.goal is LLM-produced and specific (<=50 chars, validated).
     // Overwrite intent.goal so downstream composer/retrieval gets the

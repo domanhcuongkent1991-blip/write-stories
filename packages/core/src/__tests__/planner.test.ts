@@ -181,6 +181,46 @@ describe("PlannerAgent.planChapter memo generation", () => {
     expect(result.intent.pacingCode).toBe("reveal");
   });
 
+  it("promotes quoted hook evidence into Must Keep for Vietnamese books", async () => {
+    vi.spyOn(llmProvider, "chatCompletion")
+      .mockResolvedValueOnce({
+        content: validMemoRaw(1),
+        usage: ZERO_USAGE,
+      } as unknown as Awaited<ReturnType<typeof llmProvider.chatCompletion>>)
+      .mockResolvedValueOnce({
+        content: JSON.stringify({ results: [{ hookId: "S004", decision: "pass" }] }),
+        usage: ZERO_USAGE,
+      } as unknown as Awaited<ReturnType<typeof llmProvider.chatCompletion>>);
+
+    const result = await makePlanner().planChapter({
+      book: { ...makeBook(), language: "vi" },
+      bookDir,
+      chapterNumber: 1,
+    });
+
+    expect(result.intent.mustKeep).toEqual(expect.arrayContaining([
+      expect.stringContaining(`Bắt buộc xuất hiện nguyên văn: "七号门异常"`),
+      expect.stringContaining(`Bắt buộc xuất hiện nguyên văn: "锁芯刮痕"`),
+    ]));
+  });
+
+  it("does not add verbatim must-keep items for non-Vietnamese books", async () => {
+    vi.spyOn(llmProvider, "chatCompletion").mockResolvedValue({
+      content: validMemoRaw(1),
+      usage: ZERO_USAGE,
+    } as unknown as Awaited<ReturnType<typeof llmProvider.chatCompletion>>);
+
+    const result = await makePlanner().planChapter({
+      book: makeBook(),
+      bookDir,
+      chapterNumber: 1,
+    });
+
+    expect(result.intent.mustKeep).not.toEqual(expect.arrayContaining([
+      expect.stringContaining("Bắt buộc xuất hiện nguyên văn"),
+    ]));
+  });
+
   it("can plan a preview entirely in memory without projection or intent writes", async () => {
     vi.spyOn(llmProvider, "chatCompletion").mockResolvedValue({
       content: validMemoRaw(1),

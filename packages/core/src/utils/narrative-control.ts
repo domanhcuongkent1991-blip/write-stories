@@ -20,9 +20,25 @@ const EN_REPLACEMENTS: ReadonlyArray<[RegExp, string]> = [
   [/\bthis chapter needs to\b/gi, "the current move is to"],
 ];
 
+const QUOTED_SPAN_PATTERN = /("[^"\n]*"|“[^”\n]*”)/g;
+const EVIDENCE_QUOTE_PATTERN = /"([^"\n]{2,160})"|“([^“”\n]{2,160})”/g;
+
 export function sanitizeNarrativeControlText(
   text: string,
   language: "zh" | "en" = "zh",
+): string {
+  // Quoted spans carry verbatim evidence (log fields, measurements, payoff
+  // quotes). Rewriting them would corrupt the writer's view of the memo while
+  // the auditor still sees the original — manufacturing memo drift.
+  return text
+    .split(QUOTED_SPAN_PATTERN)
+    .map((part, index) => (index % 2 === 1 ? part : sanitizeUnquotedNarrativeText(part, language)))
+    .join("");
+}
+
+function sanitizeUnquotedNarrativeText(
+  text: string,
+  language: "zh" | "en",
 ): string {
   let result = text;
 
@@ -37,6 +53,21 @@ export function sanitizeNarrativeControlText(
   }
 
   return result;
+}
+
+export function extractVerbatimEvidenceQuotes(
+  operations: ReadonlyArray<{ readonly plannedEvidence: string }>,
+  limit = 6,
+): string[] {
+  const quotes: string[] = [];
+  for (const operation of operations) {
+    for (const match of operation.plannedEvidence.matchAll(EVIDENCE_QUOTE_PATTERN)) {
+      const quote = (match[1] ?? match[2] ?? "").trim();
+      if (quote.length > 0 && !quotes.includes(quote)) quotes.push(quote);
+      if (quotes.length >= limit) return quotes;
+    }
+  }
+  return quotes;
 }
 
 /**
@@ -77,6 +108,18 @@ export function renderMemoAsNarrativeBlock(
   // Emit the 7-section memo body at top level so each heading is a task.
   if (memo.body.trim().length > 0) {
     sections.push(s(memo.body));
+  }
+
+  // Verbatim evidence bypasses sanitization by design: the auditor compares
+  // the prose against the original memo, so these strings must survive intact.
+  const evidenceQuotes = intent?.expectedHookContract
+    ? extractVerbatimEvidenceQuotes(intent.expectedHookContract.operations)
+    : [];
+  if (evidenceQuotes.length > 0) {
+    sections.push(
+      `## ${isEn ? "Verbatim Evidence (must appear exactly)" : "逐字证据（必须原样出现）"}\n` +
+      evidenceQuotes.map((quote) => `- "${quote}"`).join("\n"),
+    );
   }
 
   return sections.join("\n\n");
