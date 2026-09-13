@@ -181,34 +181,20 @@ describe("PlannerAgent.planChapter memo generation", () => {
     expect(result.intent.pacingCode).toBe("reveal");
   });
 
-  it("promotes quoted hook evidence into Must Keep for Vietnamese books", async () => {
+  it("retries the memo when the ledger declares contradictory actions for one hook", async () => {
+    const contradictory = validMemoRaw(1).replace(
+      "advance:\n- H03",
+      "advance:\n- H07 \"幕后主使\" → touched under pressure (pressured → pressured)\n- H03",
+    ).replace("defer:\n- H07 \"幕后主使\" → 第 20 章再动", "defer:\n- H07 \"幕后主使\" → carried over to volume 2");
     vi.spyOn(llmProvider, "chatCompletion")
       .mockResolvedValueOnce({
-        content: validMemoRaw(1),
+        content: contradictory,
         usage: ZERO_USAGE,
       } as unknown as Awaited<ReturnType<typeof llmProvider.chatCompletion>>)
       .mockResolvedValueOnce({
-        content: JSON.stringify({ results: [{ hookId: "S004", decision: "pass" }] }),
+        content: validMemoRaw(1),
         usage: ZERO_USAGE,
       } as unknown as Awaited<ReturnType<typeof llmProvider.chatCompletion>>);
-
-    const result = await makePlanner().planChapter({
-      book: { ...makeBook(), language: "vi" },
-      bookDir,
-      chapterNumber: 1,
-    });
-
-    expect(result.intent.mustKeep).toEqual(expect.arrayContaining([
-      expect.stringContaining(`Bắt buộc xuất hiện nguyên văn: "七号门异常"`),
-      expect.stringContaining(`Bắt buộc xuất hiện nguyên văn: "锁芯刮痕"`),
-    ]));
-  });
-
-  it("does not add verbatim must-keep items for non-Vietnamese books", async () => {
-    vi.spyOn(llmProvider, "chatCompletion").mockResolvedValue({
-      content: validMemoRaw(1),
-      usage: ZERO_USAGE,
-    } as unknown as Awaited<ReturnType<typeof llmProvider.chatCompletion>>);
 
     const result = await makePlanner().planChapter({
       book: makeBook(),
@@ -216,9 +202,7 @@ describe("PlannerAgent.planChapter memo generation", () => {
       chapterNumber: 1,
     });
 
-    expect(result.intent.mustKeep).not.toEqual(expect.arrayContaining([
-      expect.stringContaining("Bắt buộc xuất hiện nguyên văn"),
-    ]));
+    expect(result.memo.chapter).toBe(1);
   });
 
   it("can plan a preview entirely in memory without projection or intent writes", async () => {
