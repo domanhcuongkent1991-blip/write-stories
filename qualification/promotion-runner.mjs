@@ -128,6 +128,7 @@ const safe = {
   viPipelineMode: rollout.evidence.resolvedMode,
   viPipelineModeSource: rollout.evidence.flagSource,
   viPipelineFeatureConfigurationHash: rollout.evidence.featureConfigurationHash,
+  minorAuditAcceptance: true,
   bookId,
   resumeBookId,
   startChapter,
@@ -338,6 +339,8 @@ async function collectChapterEvidence(chapterNumber, result) {
     lengthWarnings: result?.lengthWarnings ?? [],
     auditDecision: auditResult.decision ?? null,
     auditPassed: auditResult.passed === true,
+    minorAccepted: auditResult.minorAccepted === true,
+    minorNotes: auditResult.minorNotes ?? [],
     overallScore: typeof auditResult.overallScore === "number" ? auditResult.overallScore : null,
     auditIssues: issueList,
     verifiedBlockerCount: issueList.filter((issue) => issue.verification === "verified" && (issue.severity === "critical" || issue.severity === "error")).length,
@@ -629,6 +632,7 @@ try {
     writingReviewRetries: 1,
     chapterReviewMode: "auto",
     revisionGate: "strict",
+    minorAuditAcceptance: true,
     ...rollout.pipeline,
   });
   const resolvedRollout = runner.getViPipelineMode();

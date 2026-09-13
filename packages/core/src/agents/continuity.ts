@@ -59,6 +59,10 @@ export interface AuditResult {
   readonly transitionCheck?: TransitionCheck;
   /** Findings whose quoted evidence was bound to the supplied chapter texts by the host. */
   readonly hostFindings?: ReadonlyArray<AuditIssue>;
+  /** True when the chapter was accepted under the minor-audit acceptance policy despite a fail verdict. */
+  readonly minorAccepted?: boolean;
+  /** Human-readable notes for each minor issue accepted by that policy. */
+  readonly minorNotes?: ReadonlyArray<string>;
 }
 
 export interface AuditProvenance {

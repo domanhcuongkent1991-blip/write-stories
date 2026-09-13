@@ -531,3 +531,42 @@ test("rejects non-canonical index and chapter file sets at a resume checkpoint",
     chapterFileNumbers: [1, 2, 3],
   }).aligned, false);
 });
+
+test("minor-accepted chapters do not count audit or verified-blocker dimensions", async () => {
+  const { classifyOperationFailure, collectChapterFailureDimensions } = await import("./promotion-runner-scope.mjs");
+  const operation = {
+    status: "completed",
+    chapter: passingChapterEvidence({
+      auditDecision: "pass",
+      auditPassed: true,
+      minorAccepted: true,
+      minorNotes: ["[POV Consistency Check] note"],
+      verifiedBlockerCount: 1,
+    }),
+    invariants: { aligned: true },
+    error: null,
+  };
+
+  assert.deepEqual(collectChapterFailureDimensions(operation), []);
+  assert.equal(classifyOperationFailure(operation), null);
+});
+
+test("without minor acceptance a fail verdict still blocks on audit dimensions", async () => {
+  const { collectChapterFailureDimensions } = await import("./promotion-runner-scope.mjs");
+  const operation = {
+    status: "completed",
+    chapter: passingChapterEvidence({
+      auditDecision: "fail",
+      auditPassed: false,
+      verifiedBlockerCount: 1,
+    }),
+    invariants: { aligned: true },
+    error: null,
+  };
+
+  assert.deepEqual(collectChapterFailureDimensions(operation), [
+    "audit-decision",
+    "audit-passed",
+    "verified-blocker",
+  ]);
+});

@@ -78,11 +78,12 @@ export function collectChapterFailureDimensions(operationRecord) {
 
   if (operationRecord?.status === "completed") {
     const chapter = operationRecord.chapter ?? {};
-    if (chapter.auditDecision !== "pass") dimensions.push("audit-decision");
-    if (chapter.auditPassed !== true) dimensions.push("audit-passed");
+    const minorAccepted = chapter.minorAccepted === true;
+    if (chapter.auditDecision !== "pass" && !minorAccepted) dimensions.push("audit-decision");
+    if (chapter.auditPassed !== true && !minorAccepted) dimensions.push("audit-passed");
     if (chapter.hardInRange !== true) dimensions.push("hard-range");
     if (chapter.countingMode !== "vi_wordlike_tokens_v1") dimensions.push("counting-mode");
-    if (chapter.verifiedBlockerCount !== 0) dimensions.push("verified-blocker");
+    if (chapter.verifiedBlockerCount !== 0 && !minorAccepted) dimensions.push("verified-blocker");
     if (chapter.surfaceBlockerCount !== 0) dimensions.push("surface-blocker");
     if (chapter.spellingIssueCount !== 0) dimensions.push("spelling");
     if (chapter.cjkCharacterCount !== 0) dimensions.push("cjk");

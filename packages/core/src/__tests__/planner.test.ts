@@ -664,7 +664,7 @@ describe("PlannerAgent.planChapter memo generation", () => {
       .resolves.toContain("# Chapter Intent");
   });
 
-  it("uses one parse attempt and no fallback for the semantic correction", async () => {
+  it("uses two parse attempts and no fallback for the semantic correction", async () => {
     await writeFile(join(bookDir, "story/pending_hooks.md"), [
       "| hook_id | start_chapter | type | status | last_advanced_chapter | expected_payoff | notes |",
       "| --- | --- | --- | --- | --- | --- | --- |",
@@ -684,14 +684,15 @@ describe("PlannerAgent.planChapter memo generation", () => {
         }] }),
         usage: ZERO_USAGE,
       } as Awaited<ReturnType<typeof llmProvider.chatCompletion>>)
-      .mockResolvedValueOnce({ content: "not a governed memo", usage: ZERO_USAGE } as Awaited<ReturnType<typeof llmProvider.chatCompletion>>);
+      .mockResolvedValueOnce({ content: "not a governed memo", usage: ZERO_USAGE } as Awaited<ReturnType<typeof llmProvider.chatCompletion>>)
+      .mockResolvedValueOnce({ content: "still not a governed memo", usage: ZERO_USAGE } as Awaited<ReturnType<typeof llmProvider.chatCompletion>>);
 
     await expect(makePlanner().planChapter({
       book: { ...makeBook(), language: "vi" },
       bookDir,
       chapterNumber: 4,
     })).rejects.toThrow(/semantic correction.*parse/i);
-    expect(chatSpy).toHaveBeenCalledTimes(3);
+    expect(chatSpy).toHaveBeenCalledTimes(4);
   });
 
   // Phase hotfix 4: English books must receive English system + user prompts

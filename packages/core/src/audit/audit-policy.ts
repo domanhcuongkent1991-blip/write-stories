@@ -80,4 +80,65 @@ export function evaluateRevisionCandidate(input: {
   return { accepted: true };
 }
 
+export const MINOR_AUDIT_ACCEPTANCE_MIN_SCORE = 90;
+export const MINOR_AUDIT_ACCEPTANCE_MAX_ISSUES = 1;
+export const MINOR_AUDIT_ACCEPTANCE_CATEGORIES: ReadonlyArray<string> = Object.freeze([
+  "chapter memo drift check",
+  "pov consistency check",
+  "transition continuity",
+]);
+
+interface MinorAcceptanceAuditLike {
+  readonly passed: boolean;
+  readonly parseFailed?: boolean;
+  readonly decision?: string;
+  readonly overallScore?: number;
+  readonly issues: ReadonlyArray<{
+    readonly severity: string;
+    readonly category?: string;
+    readonly description?: string;
+    readonly suggestion?: string;
+  }>;
+}
+
+/**
+ * Minor-audit acceptance: a fail verdict whose blocking issues are all small,
+ * human-fixable prose notes (memo drift / POV / transition), with a high
+ * score and at most one such issue, may be accepted as `pass` with the notes
+ * carried on the result. Everything else stays fail-closed: parse failures,
+ * inconclusive verdicts, Hook Check/state/surface/length issues, scores below
+ * the floor, or more than one blocking issue never qualify.
+ */
+export function applyMinorAuditAcceptance<T extends MinorAcceptanceAuditLike>(
+  auditResult: T,
+  options: { readonly enabled: boolean },
+): T & { minorAccepted?: boolean; minorNotes?: ReadonlyArray<string> } {
+  if (!options.enabled || auditResult.passed || auditResult.parseFailed === true) return auditResult;
+  if (auditResult.decision !== "fail" && auditResult.decision !== "repair-required") return auditResult;
+  const score = auditResult.overallScore;
+  if (typeof score !== "number" || score < MINOR_AUDIT_ACCEPTANCE_MIN_SCORE) return auditResult;
+  const blocking = auditResult.issues.filter((issue) => issue.severity === "critical" || issue.severity === "error");
+  if (blocking.length === 0 || blocking.length > MINOR_AUDIT_ACCEPTANCE_MAX_ISSUES) return auditResult;
+  const offPolicy = blocking.filter((issue) => {
+    const category = (issue.category ?? "").trim().toLowerCase();
+    return !MINOR_AUDIT_ACCEPTANCE_CATEGORIES.includes(category);
+  });
+  if (offPolicy.length > 0) return auditResult;
+  const notes = blocking.map((issue) => `[${issue.category}] ${issue.description ?? ""}`.trim());
+  const acceptanceNote = {
+    severity: "warning" as const,
+    category: "minor-acceptance",
+    description: `Chapter accepted under the minor-audit acceptance policy (score ${score}): ${notes.join(" | ")}`,
+    suggestion: "Human review recommended; the noted issues are non-blocking prose-level notes.",
+  };
+  return {
+    ...auditResult,
+    passed: true,
+    decision: "pass",
+    minorAccepted: true,
+    minorNotes: notes,
+    issues: [...auditResult.issues, acceptanceNote],
+  } as T & { minorAccepted?: boolean; minorNotes?: ReadonlyArray<string> };
+}
+
 export { type ChapterAuditEvaluation } from "./chapter-audit-evaluator.js";

@@ -261,7 +261,10 @@ export class PlannerAgent extends BaseAgent {
         let correctedMemoResult: { memo: ChapterMemo; tokenUsage?: TokenUsage };
         try {
           correctedMemoResult = await this.planChapterMemoWithUsage(memoInput, {
-            parseAttemptLimit: 1,
+            // Two bounded attempts: truncated/mangled hook IDs in the first
+            // corrected memo were killing whole chapters; a second attempt
+            // with the same feedback lets the planner self-heal.
+            parseAttemptLimit: 2,
             allowFallback: false,
             semanticCorrectionFeedback: feedback,
           });

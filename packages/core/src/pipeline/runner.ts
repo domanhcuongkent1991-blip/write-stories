@@ -43,6 +43,7 @@ import {
   type ChapterAuditEvaluation,
 } from "../audit/chapter-audit-evaluator.js";
 import {
+  applyMinorAuditAcceptance,
   decideAudit,
   evaluateRevisionCandidate,
   normalizeLegacyRevisionGate,
@@ -332,6 +333,12 @@ export interface PipelineConfig {
    * uses the same shared candidate acceptance gate.
    */
   readonly revisionGate?: RevisionGate;
+  /**
+   * Minor-audit acceptance (opt-in, default off): a fail verdict whose only
+   * blocking issue is a small human-fixable prose note (memo drift / POV /
+   * transition) with score >= 90 may be accepted as pass with recorded notes.
+   */
+  readonly minorAuditAcceptance?: boolean;
   readonly notifyChannels?: ReadonlyArray<NotifyChannel>;
   readonly radarSources?: ReadonlyArray<RadarSource>;
   readonly externalContext?: string;
@@ -4176,6 +4183,10 @@ export class PipelineRunner {
         };
       }
     }
+
+    auditResult = applyMinorAuditAcceptance(auditResult, {
+      enabled: this.config.minorAuditAcceptance === true,
+    });
 
     const resolvedStatus = chapterStatus ?? (auditResult.passed ? "ready-for-review" : "audit-failed");
     const finalContentHash = auditResult.contentHash ?? computeChapterContentHash(finalContent);

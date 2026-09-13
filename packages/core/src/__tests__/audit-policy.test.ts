@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { decideAudit, evaluateRevisionCandidate, normalizeLegacyRevisionGate } from "../audit/audit-policy.js";
+import { applyMinorAuditAcceptance, decideAudit, evaluateRevisionCandidate, normalizeLegacyRevisionGate } from "../audit/audit-policy.js";
 import { computeChapterContentHash } from "../audit/chapter-audit-evaluator.js";
 
 const content = "Nội dung chương.\n";
@@ -202,5 +202,78 @@ describe("revision acceptance", () => {
       afterContentHash: after.contentHash,
       stateSettlementValid: true,
     })).toEqual({ accepted: true });
+  });
+});
+
+describe("applyMinorAuditAcceptance", () => {
+  const base = {
+    passed: false,
+    decision: "fail",
+    overallScore: 92,
+    issues: [{
+      severity: "critical",
+      category: "Chapter Memo Drift Check",
+      description: "The chapter does not visibly deliver the required scene.",
+      suggestion: "Add the scene.",
+    }],
+    summary: "fail",
+  };
+
+  it("accepts a single minor-issue fail at or above the score floor when enabled", () => {
+    const accepted = applyMinorAuditAcceptance(base, { enabled: true });
+    expect(accepted.passed).toBe(true);
+    expect(accepted.decision).toBe("pass");
+    expect(accepted.minorAccepted).toBe(true);
+    expect(accepted.minorNotes).toEqual(["[Chapter Memo Drift Check] The chapter does not visibly deliver the required scene."]);
+    expect(accepted.issues.some((issue) => issue.category === "minor-acceptance")).toBe(true);
+  });
+
+  it("leaves the verdict untouched when disabled", () => {
+    expect(applyMinorAuditAcceptance(base, { enabled: false })).toEqual(base);
+  });
+
+  it("refuses scores below the floor", () => {
+    expect(applyMinorAuditAcceptance({ ...base, overallScore: 89 }, { enabled: true })).toEqual({
+      ...base,
+      overallScore: 89,
+    });
+  });
+
+  it("refuses more than one blocking issue", () => {
+    expect(applyMinorAuditAcceptance({
+      ...base,
+      issues: [
+        base.issues[0],
+        { severity: "critical", category: "POV Consistency Check", description: "second", suggestion: "x" },
+      ],
+    }, { enabled: true })).toMatchObject({ passed: false, decision: "fail" });
+  });
+
+  it("refuses categories outside the minor policy", () => {
+    expect(applyMinorAuditAcceptance({
+      ...base,
+      issues: [{ severity: "critical", category: "Hook Check", description: "carry-over missing", suggestion: "x" }],
+    }, { enabled: true })).toMatchObject({ passed: false, decision: "fail" });
+  });
+
+  it("refuses parse failures and inconclusive verdicts", () => {
+    expect(applyMinorAuditAcceptance({ ...base, parseFailed: true }, { enabled: true })).toMatchObject({
+      passed: false,
+      parseFailed: true,
+    });
+    expect(applyMinorAuditAcceptance({ ...base, decision: "inconclusive" }, { enabled: true })).toMatchObject({
+      passed: false,
+      decision: "inconclusive",
+    });
+  });
+
+  it("accepts POV and transition categories by name, case-insensitively", () => {
+    for (const category of ["POV Consistency Check", "Transition Continuity"]) {
+      const accepted = applyMinorAuditAcceptance({
+        ...base,
+        issues: [{ severity: "critical", category, description: "note", suggestion: "x" }],
+      }, { enabled: true });
+      expect(accepted.minorAccepted).toBe(true);
+    }
   });
 });
