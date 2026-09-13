@@ -216,6 +216,7 @@ defer:
 - hook_ids in advance/resolve must exist in the input pending_hooks (do not fabricate IDs).
 - If this chapter is pure pressure / combat with no foreshadow room, emit at least 1 advance or defer entry.
 - If "## Current task" naturally corresponds to paying off a hook, it must appear under resolve with the hook_id.
+- When deferring a hook marked promoted/core — especially at a volume or arc boundary — the defer evidence MUST name the explicit carry-over promise: quote the hook's "pays_off_in" arc verbatim (e.g. "carried over to Volume 2 — payoff at Volume 2 Chapter 5") plus what evidence is preserved. A defer of a promoted/core hook without that note fails review.
 
 ## Do not
 <2-4 hard prohibitions>

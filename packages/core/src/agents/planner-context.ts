@@ -253,7 +253,13 @@ export function formatRelevantThreads(
     const allowedActions = getLegalHookActions(hook)
       .filter((action) => action !== "mention")
       .join("|") || "none";
-    return `- ${hook.hookId}: ${base} | allowed_actions=${allowedActions}`;
+    // Surface the promised payoff arc so a defer of a promoted/core hook can
+    // name its carry-over destination explicitly — auditors require it at
+    // volume/arc boundaries.
+    const promisedArc = typeof hook.paysOffInArc === "string" && hook.paysOffInArc.trim().length > 0
+      ? ` | pays_off_in=${hook.paysOffInArc.trim()}`
+      : "";
+    return `- ${hook.hookId}: ${base} | allowed_actions=${allowedActions}${promisedArc}`;
   });
   const subplotRows = extractActiveSubplotLines(subplotBoardRaw).map((line) => `- ${line}`);
   const lines = [...hookRows, ...subplotRows];

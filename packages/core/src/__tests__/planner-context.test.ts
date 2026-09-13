@@ -171,4 +171,37 @@ describe("formatRelevantThreads", () => {
 
     expect(threads).not.toContain("allowed_actions=");
   });
+
+  it("renders the promised payoff arc for hooks that carry one when opted in", () => {
+    const threads = formatRelevantThreads([
+      {
+        hookId: "H-core",
+        startChapter: 0,
+        type: "world_state",
+        status: "deferred",
+        lastAdvancedChapter: 0,
+        expectedPayoff: "the dampening function",
+        notes: "core hook",
+        paysOffInArc: "Volume 2 Chapter 5",
+      },
+    ], "", "en", { includeAllowedActions: true });
+
+    expect(threads).toContain("pays_off_in=Volume 2 Chapter 5");
+  });
+
+  it("omits pays_off_in when the hook has no promised arc", () => {
+    const threads = formatRelevantThreads([
+      {
+        hookId: "H-nopayoff",
+        startChapter: 1,
+        type: "mystery",
+        status: "open",
+        lastAdvancedChapter: 1,
+        expectedPayoff: "the sealed room",
+        notes: "",
+      },
+    ], "", "en", { includeAllowedActions: true });
+
+    expect(threads).not.toContain("pays_off_in=");
+  });
 });
