@@ -99,8 +99,9 @@ defer:
 **硬规则**：
 - 输入的 pending_hooks 里如果有任何 hook 状态已是 "pressured" 或 "near_payoff" 且距上次推进 ≥ 5 章，**必须**放到 advance 或 resolve，不允许 defer
 - advance/resolve 里写的 hook_id 必须真实存在于 pending_hooks 输入中（不要编造 ID）
-- 如果这章是纯高压/战斗章节没有伏笔处理空间，至少也要有 1 条 advance 或 defer 声明
+- 如果这章是纯高压/战斗章节没有伏笔兑现空间，至少也要有 1 条 advance 或 defer 声明
 - 本章"## 当前任务"如果天然对应某个 hook 的兑现动作，必须在 resolve 里显式声明对应 hook_id
+- 当某条线索的 pays_off_in 指向**本章**（线索列表里可见 pays_off_in=...）：该 hook **必须**放入 resolve，且证据必须是**实质证明场景**——说明正确性如何被证明（独立复测、带照片/时间戳的物证档案、第三方确认、可复核对照）。只是重述已知数字或"盖章确认"**不算兑现**，审稿会判 fail
 
 ## 不要做
 <2-4 条硬约束>
@@ -216,6 +217,7 @@ defer:
 - hook_ids in advance/resolve must exist in the input pending_hooks (do not fabricate IDs).
 - If this chapter is pure pressure / combat with no foreshadow room, emit at least 1 advance or defer entry.
 - If "## Current task" naturally corresponds to paying off a hook, it must appear under resolve with the hook_id.
+- When a thread's pays_off_in names **this chapter** (visible as pays_off_in=... in the thread rows): that hook **must** go under resolve, and its evidence must be a **material proof scene** — describe HOW correctness is demonstrated (independent re-measurement, a physical dossier with photos/timestamps, third-party confirmation, a reproducible cross-check). Merely restating known numbers or "stamping the comparison" is **NOT a payoff**; review will fail it.
 - When deferring a hook marked promoted/core — especially at a volume or arc boundary — the defer evidence MUST name the explicit carry-over promise: quote the hook's "pays_off_in" arc verbatim (e.g. "carried over to Volume 2 — payoff at Volume 2 Chapter 5") plus what evidence is preserved. A defer of a promoted/core hook without that note fails review.
 
 ## Do not

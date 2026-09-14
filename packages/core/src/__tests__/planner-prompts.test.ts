@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest";
 import {
   PLANNER_MEMO_SYSTEM_PROMPT,
+  PLANNER_MEMO_SYSTEM_PROMPT_EN,
   PLANNER_MEMO_USER_TEMPLATE,
   buildPlannerUserMessage,
   buildGoldenOpeningGuidance,
@@ -30,6 +31,15 @@ describe("PLANNER_MEMO_SYSTEM_PROMPT", () => {
 
   it("is not accidentally empty", () => {
     expect(PLANNER_MEMO_SYSTEM_PROMPT.length).toBeGreaterThan(500);
+  });
+
+  it("requires a material proof scene when a hook's payoff lands on this chapter", () => {
+    expect(PLANNER_MEMO_SYSTEM_PROMPT).toContain("pays_off_in");
+    expect(PLANNER_MEMO_SYSTEM_PROMPT).toContain("实质证明场景");
+    expect(PLANNER_MEMO_SYSTEM_PROMPT).toContain("不算兑现");
+    expect(PLANNER_MEMO_SYSTEM_PROMPT_EN).toContain("pays_off_in");
+    expect(PLANNER_MEMO_SYSTEM_PROMPT_EN).toContain("material proof scene");
+    expect(PLANNER_MEMO_SYSTEM_PROMPT_EN).toContain("NOT a payoff");
   });
 });
 
