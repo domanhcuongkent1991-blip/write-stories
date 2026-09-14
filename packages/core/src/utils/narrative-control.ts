@@ -22,6 +22,12 @@ const EN_REPLACEMENTS: ReadonlyArray<[RegExp, string]> = [
 
 const QUOTED_SPAN_PATTERN = /("[^"\n]*"|“[^”\n]*”)/g;
 const EVIDENCE_QUOTE_PATTERN = /"([^"\n]{2,160})"|“([^“”\n]{2,160})”/g;
+// Verbatim evidence is for short technical/log field values (a sluice status,
+// a gauge reading, a patch header). Whole payoff sentences are story-plan
+// content: surfacing them as "must appear exactly" pushed them verbatim into
+// the prose and tripped the information-boundary audit.
+const EVIDENCE_QUOTE_MAX_CHARS = 60;
+const EVIDENCE_QUOTE_MAX_WORDS = 8;
 
 export function sanitizeNarrativeControlText(
   text: string,
@@ -63,7 +69,10 @@ export function extractVerbatimEvidenceQuotes(
   for (const operation of operations) {
     for (const match of operation.plannedEvidence.matchAll(EVIDENCE_QUOTE_PATTERN)) {
       const quote = (match[1] ?? match[2] ?? "").trim();
-      if (quote.length > 0 && !quotes.includes(quote)) quotes.push(quote);
+      if (quote.length === 0) continue;
+      if (quote.length > EVIDENCE_QUOTE_MAX_CHARS) continue;
+      if (quote.split(/\s+/u).length > EVIDENCE_QUOTE_MAX_WORDS) continue;
+      if (!quotes.includes(quote)) quotes.push(quote);
       if (quotes.length >= limit) return quotes;
     }
   }

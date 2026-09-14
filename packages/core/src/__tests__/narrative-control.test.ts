@@ -53,6 +53,16 @@ describe("extractVerbatimEvidenceQuotes", () => {
     expect(quotes).toEqual(["một", "hai"]);
   });
 
+  it("drops long narrative sentences, keeping short technical values", () => {
+    const quotes = extractVerbatimEvidenceQuotes([
+      {
+        plannedEvidence:
+          `"Manager Son orders Minh Le over the phone to ignore the manual gauge and approve the digital log" → call scene; field value "Remote command rejected — local interlock active" also appears`,
+      },
+    ]);
+    expect(quotes).toEqual(["Remote command rejected — local interlock active"]);
+  });
+
   it("returns nothing when evidence carries no quotes", () => {
     expect(extractVerbatimEvidenceQuotes([{ plannedEvidence: "Minh kiểm tra bản sao" }])).toEqual([]);
   });
