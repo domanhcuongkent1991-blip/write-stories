@@ -63,6 +63,10 @@ function bindVietnameseAuditorSpellingFindings(
   for (const issue of issues) {
     const signal = `${issue.ruleId ?? ""} ${issue.category} ${issue.description}`;
     if (!VIETNAMESE_SPELLING_SIGNAL_RE.test(signal)) continue;
+    // The auditor claims a spelling error only at warning/critical severity
+    // with an exact-replacement hint. An informational "nothing found" line
+    // is commentary, not a claim, and must not invalidate the binding.
+    if (issue.severity === "info" && !issue.repairHint) continue;
 
     const hint = issue.repairHint;
     if (!hint || hint.kind !== "exact-replacement" || hint.targetText === hint.replacementText) {

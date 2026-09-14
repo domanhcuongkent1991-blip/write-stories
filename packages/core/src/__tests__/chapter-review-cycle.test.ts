@@ -650,6 +650,33 @@ describe("runChapterReviewCycle v9", () => {
     expect(result.finalContent).toBe(original);
   });
 
+  it("treats an informational clean spelling report as commentary, not a failed binding", async () => {
+    const original = Array.from({ length: 1150 }, (_, index) => `tu${index}`).join(" ");
+    const auditChapter = vi.fn().mockResolvedValue(createAuditResult({
+      passed: true,
+      overallScore: 94,
+      issues: [{
+        severity: "info",
+        category: "Vietnamese Spelling",
+        description: "Không phát hiện lỗi chính tả tiếng Việt đủ chắc chắn để báo cáo theo yêu cầu exact-replacement.",
+        suggestion: "",
+      }],
+    }));
+    const reviseChapter = vi.fn();
+
+    const result = await runChapterReviewCycle({
+      ...baseParams,
+      lengthSpec: VI_LENGTH_SPEC,
+      initialOutput: { content: original, wordCount: 1150, postWriteErrors: [] },
+      createReviser: () => ({ reviseChapter }),
+      auditor: { auditChapter },
+    });
+
+    expect(reviseChapter).not.toHaveBeenCalled();
+    expect(result.auditResult.decision).toBe("pass");
+    expect(result.auditResult.parseFailed).toBeUndefined();
+  });
+
   it("returns initial and post-revision audit runs with one shared attempt identity", async () => {
     const auditChapter = vi.fn()
       .mockResolvedValueOnce(createAuditResult({ passed: false, overallScore: 40 }))
