@@ -677,6 +677,74 @@ describe("runChapterReviewCycle v9", () => {
     expect(result.auditResult.parseFailed).toBeUndefined();
   });
 
+  it("routes a score-fail within the repair floor through one bounded revision", async () => {
+    const original = Array.from({ length: 1150 }, (_, index) => `goc${index}`).join(" ");
+    const candidate = Array.from({ length: 1150 }, (_, index) => `sua${index}`).join(" ");
+    const memoDriftIssue: AuditIssue = {
+      severity: "critical",
+      category: "Chapter Memo Drift Check",
+      description: "Cảnh 3 thiếu các trị số đo mà memo đã cam kết.",
+      suggestion: "Bổ sung trị số đo vào cảnh niêm phong.",
+    };
+    const auditChapter = vi.fn()
+      .mockResolvedValueOnce(createAuditResult({
+        passed: false,
+        overallScore: 82,
+        issues: [memoDriftIssue],
+      }))
+      .mockResolvedValueOnce(createAuditResult({ passed: true, overallScore: 91, issues: [] }));
+    const reviseChapter = vi.fn().mockResolvedValue({
+      revisedContent: candidate,
+      wordCount: 1150,
+      fixedIssues: ["Chapter Memo Drift Check"],
+      tokenUsage: ZERO_USAGE,
+    });
+
+    const result = await runChapterReviewCycle({
+      ...baseParams,
+      bookId: "book-score-repair",
+      lengthSpec: VI_LENGTH_SPEC,
+      initialOutput: { content: original, wordCount: 1150, postWriteErrors: [] },
+      createReviser: () => ({ reviseChapter }),
+      auditor: { auditChapter },
+      settleRevisionCandidate: async () => ({ valid: true }),
+      scoreRepairFloorScore: 75,
+    });
+
+    expect(reviseChapter).toHaveBeenCalledTimes(1);
+    expect(auditChapter).toHaveBeenCalledTimes(2);
+    expect(result.finalContent).toBe(candidate);
+    expect(result.auditResult.decision).toBe("pass");
+  });
+
+  it("keeps a score-fail outright when the repair floor flag is not set", async () => {
+    const original = Array.from({ length: 1150 }, (_, index) => `goc${index}`).join(" ");
+    const memoDriftIssue: AuditIssue = {
+      severity: "critical",
+      category: "Chapter Memo Drift Check",
+      description: "Cảnh 3 thiếu các trị số đo mà memo đã cam kết.",
+      suggestion: "Bổ sung trị số đo vào cảnh niêm phong.",
+    };
+    const auditChapter = vi.fn().mockResolvedValue(createAuditResult({
+      passed: false,
+      overallScore: 82,
+      issues: [memoDriftIssue],
+    }));
+    const reviseChapter = vi.fn();
+
+    const result = await runChapterReviewCycle({
+      ...baseParams,
+      lengthSpec: VI_LENGTH_SPEC,
+      initialOutput: { content: original, wordCount: 1150, postWriteErrors: [] },
+      createReviser: () => ({ reviseChapter }),
+      auditor: { auditChapter },
+    });
+
+    expect(reviseChapter).not.toHaveBeenCalled();
+    expect(result.auditResult.decision).toBe("fail");
+    expect(result.finalContent).toBe(original);
+  });
+
   it("returns initial and post-revision audit runs with one shared attempt identity", async () => {
     const auditChapter = vi.fn()
       .mockResolvedValueOnce(createAuditResult({ passed: false, overallScore: 40 }))

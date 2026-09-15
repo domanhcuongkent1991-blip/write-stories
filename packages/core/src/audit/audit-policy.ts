@@ -11,6 +11,13 @@ export interface AuditPolicyContext {
   readonly revisionAttempts: number;
   readonly maxRevisionAttempts: number;
   readonly legacyRevisionGate?: "strict" | "lenient" | "always";
+  /**
+   * Opt-in score-fail repair floor: a fail verdict with no verified blockers
+   * whose overall score falls in [floor, 85) is routed to the bounded repair
+   * path instead of failing outright, as long as repairable findings exist
+   * and a revision budget remains. Undefined (or >= 85) disables the routing.
+   */
+  readonly scoreRepairFloorScore?: number;
 }
 
 export function normalizeLegacyRevisionGate(gate: AuditPolicyContext["legacyRevisionGate"]): "strict" | "lenient" | undefined {
@@ -32,7 +39,24 @@ export function decideAudit(
 
   const blockers = evaluation.findings.filter((finding) => finding.verification === "verified" && finding.severity === "critical");
   if (blockers.length === 0) {
-    return evaluation.overallScore >= 85 ? withDecision(evaluation, "pass") : withDecision(evaluation, "fail");
+    if (evaluation.overallScore >= 85) return withDecision(evaluation, "pass");
+    const floor = context.scoreRepairFloorScore;
+    // Mirror the review cycle's repair-issue filter: pure length telemetry is
+    // never handed to the reviser, and info commentary is not an actionable
+    // repair instruction. Without an actionable finding a rewrite would be
+    // blind, so the score-fail stays a fail.
+    const scoreRepairEligible = floor !== undefined
+      && floor < 85
+      && evaluation.overallScore >= floor
+      && evaluation.findings.some((finding) =>
+        (finding.severity === "critical" || finding.severity === "warning")
+        && finding.ruleId !== "length.soft-range");
+    if (scoreRepairEligible) {
+      const scoreRevisionBudget = context.autoRevisionAllowed
+        && context.revisionAttempts < Math.min(1, context.maxRevisionAttempts);
+      return scoreRevisionBudget ? withDecision(evaluation, "repair-required") : withDecision(evaluation, "fail");
+    }
+    return withDecision(evaluation, "fail");
   }
   if (blockers.some((finding) => finding.repairTarget === undefined || finding.evidence?.contentHash !== evaluation.contentHash)) {
     return withDecision(evaluation, "fail");

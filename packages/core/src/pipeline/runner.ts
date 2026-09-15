@@ -339,6 +339,12 @@ export interface PipelineConfig {
    * transition) with score >= 90 may be accepted as pass with recorded notes.
    */
   readonly minorAuditAcceptance?: boolean;
+  /**
+   * Score-fail repair routing (opt-in, default off): a fail verdict with no
+   * verified blockers whose score falls in [floor, 85) becomes repair-required
+   * so the bounded chapter repair runs before the book fails the chapter.
+   */
+  readonly scoreRepairFloorScore?: number;
   readonly notifyChannels?: ReadonlyArray<NotifyChannel>;
   readonly radarSources?: ReadonlyArray<RadarSource>;
   readonly externalContext?: string;
@@ -3734,6 +3740,9 @@ export class PipelineRunner {
         // Manual mode still performs the initial audit, but never auto-revises.
         maxReviewIterations: manualReview ? 0 : this.config.writingReviewRetries,
         autoRevisionAllowed: !manualReview,
+        ...(this.config.scoreRepairFloorScore !== undefined
+          ? { scoreRepairFloorScore: this.config.scoreRepairFloorScore }
+          : {}),
         operationId: auditIdentity?.operationId,
         attemptId: auditIdentity?.attemptId,
         settleRevisionCandidate: async (normalizedContent, reviseOutput) => {

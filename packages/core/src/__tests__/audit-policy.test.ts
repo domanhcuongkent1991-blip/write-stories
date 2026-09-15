@@ -102,6 +102,102 @@ describe("decideAudit", () => {
     expect(result.decision).toBe("fail");
   });
 
+  describe("score-fail repair routing", () => {
+    const repairableFinding = {
+      severity: "critical" as const,
+      category: "Chapter Memo Drift Check",
+      description: "Scene 3 lacks the required measured values.",
+      suggestion: "Add the promised measurements.",
+      ruleId: "memo-drift",
+      repairTarget: "prose" as const,
+      verification: "unverified" as const,
+    };
+
+    it("routes a score-fail inside the opt-in floor to one repair", () => {
+      const result = decideAudit(input({
+        llmAudit: { passed: false, overallScore: 82, summary: "needs work", issues: [repairableFinding] },
+      }), {
+        operation: "audit",
+        autoRevisionAllowed: true,
+        revisionAttempts: 0,
+        maxRevisionAttempts: 1,
+        scoreRepairFloorScore: 75,
+      });
+
+      expect(result).toMatchObject({ decision: "repair-required", passed: false });
+    });
+
+    it("still fails a score-fail when the routing flag is absent", () => {
+      const result = decideAudit(input({
+        llmAudit: { passed: false, overallScore: 82, summary: "needs work", issues: [repairableFinding] },
+      }), {
+        operation: "audit",
+        autoRevisionAllowed: true,
+        revisionAttempts: 0,
+        maxRevisionAttempts: 1,
+      });
+
+      expect(result).toMatchObject({ decision: "fail", passed: false });
+    });
+
+    it("still fails a score-fail below the floor", () => {
+      const result = decideAudit(input({
+        llmAudit: { passed: false, overallScore: 74, summary: "needs work", issues: [repairableFinding] },
+      }), {
+        operation: "audit",
+        autoRevisionAllowed: true,
+        revisionAttempts: 0,
+        maxRevisionAttempts: 1,
+        scoreRepairFloorScore: 75,
+      });
+
+      expect(result).toMatchObject({ decision: "fail", passed: false });
+    });
+
+    it("does not route to repair when no revision budget remains", () => {
+      const result = decideAudit(input({
+        llmAudit: { passed: false, overallScore: 82, summary: "needs work", issues: [repairableFinding] },
+      }), {
+        operation: "re-audit",
+        autoRevisionAllowed: false,
+        revisionAttempts: 1,
+        maxRevisionAttempts: 1,
+        scoreRepairFloorScore: 75,
+      });
+
+      expect(result).toMatchObject({ decision: "fail", passed: false });
+    });
+
+    it("does not route to repair when nothing is repairable", () => {
+      const result = decideAudit(input({
+        llmAudit: {
+          passed: false,
+          overallScore: 82,
+          summary: "needs work",
+          issues: [{ severity: "info" as const, category: "Pacing Check", description: "flat beat", suggestion: "" }],
+        },
+      }), {
+        operation: "audit",
+        autoRevisionAllowed: true,
+        revisionAttempts: 0,
+        maxRevisionAttempts: 1,
+        scoreRepairFloorScore: 75,
+      });
+
+      expect(result).toMatchObject({ decision: "fail", passed: false });
+    });
+
+    it("keeps a passing score passing regardless of the floor flag", () => {
+      expect(decideAudit(input(), {
+        operation: "audit",
+        autoRevisionAllowed: true,
+        revisionAttempts: 0,
+        maxRevisionAttempts: 1,
+        scoreRepairFloorScore: 75,
+      })).toMatchObject({ decision: "pass", passed: true });
+    });
+  });
+
   it.each([
     { llmAudit: { passed: false, parseFailed: true, summary: "bad", issues: [] } },
     { llmAudit: { passed: true, summary: "missing score", issues: [] } },

@@ -1,5 +1,6 @@
 import { describe, it, expect } from "vitest";
 import {
+  assessMemoHookDebtGovernance,
   hookOpsFromLedger,
   parseHookLedger,
   removeHookResolveCommitments,
@@ -331,5 +332,90 @@ advance:
       resolve: [],
       defer: [],
     });
+  });
+});
+
+describe("assessMemoHookDebtGovernance", () => {
+  const debtHook = (hookId: string, overrides: Partial<StoredHook> = {}): StoredHook => ({
+    hookId,
+    startChapter: 1,
+    type: "mystery",
+    status: "open",
+    lastAdvancedChapter: 1,
+    expectedPayoff: "payoff",
+    notes: "",
+    ...overrides,
+  });
+
+  const sixDebtHooks = (): StoredHook[] => [
+    debtHook("H001", { payoffTiming: "near-term" }),
+    debtHook("H002", { payoffTiming: "immediate" }),
+    debtHook("H003", { payoffTiming: "mid-arc" }),
+    debtHook("H004", { payoffTiming: "slow-burn" }),
+    debtHook("H005"),
+    debtHook("H006", { status: "progressing", payoffTiming: "endgame" }),
+  ];
+
+  it("stays hands-off below the debt floor", () => {
+    const memo = `## Hook ledger for this chapter\nopen:\n- [new] a || reason\n- [new] b || reason\n- [new] c || reason\n- [new] d || reason\ndefer:\n- H001 "x" → not yet`;
+    const assessment = assessMemoHookDebtGovernance(memo, {
+      activeHooks: [debtHook("H001", { payoffTiming: "near-term" })],
+      chapterNumber: 5,
+    });
+    expect(assessment).toEqual({ compliant: true, violations: [] });
+  });
+
+  it("rejects a high-debt memo that defers every ready hook", () => {
+    const memo = `## Hook ledger for this chapter\nopen:\n- [new] fresh mystery || reason\ndefer:\n- H001 "x" → not yet\n- H002 "y" → not yet`;
+    const assessment = assessMemoHookDebtGovernance(memo, {
+      activeHooks: sixDebtHooks(),
+      chapterNumber: 7,
+    });
+    expect(assessment.compliant).toBe(false);
+    expect(assessment.violations.join(" ")).toContain("H001");
+  });
+
+  it("accepts a high-debt memo that advances or resolves a ready hook", () => {
+    const memo = `## Hook ledger for this chapter\nadvance:\n- H001 "x" → pressured\nresolve:\n- H002 "y" → dossier confirmed`;
+    const assessment = assessMemoHookDebtGovernance(memo, {
+      activeHooks: sixDebtHooks(),
+      chapterNumber: 7,
+    });
+    expect(assessment).toEqual({ compliant: true, violations: [] });
+  });
+
+  it("accepts a promoted hook as ready debt even without near-term timing", () => {
+    const memo = `## Hook ledger for this chapter\nadvance:\n- H004 "x" → pressured`;
+    const activeHooks = sixDebtHooks().map((hook) =>
+      hook.hookId === "H004" ? { ...hook, payoffTiming: "slow-burn", promoted: true } : hook);
+    const assessment = assessMemoHookDebtGovernance(memo, {
+      activeHooks,
+      chapterNumber: 7,
+    });
+    expect(assessment.compliant).toBe(true);
+  });
+
+  it("caps brand-new opens on a high-debt chapter even when ready debt is serviced", () => {
+    const memo = `## Hook ledger for this chapter\nopen:\n- [new] a || reason\n- [new] b || reason\n- [new] c || reason\nadvance:\n- H001 "x" → pressured`;
+    const assessment = assessMemoHookDebtGovernance(memo, {
+      activeHooks: sixDebtHooks(),
+      chapterNumber: 7,
+    });
+    expect(assessment.compliant).toBe(false);
+    expect(assessment.violations).toHaveLength(1);
+    expect(assessment.violations[0]).toContain("brand-new");
+  });
+
+  it("ignores resolved and deferred hooks when counting debt", () => {
+    const memo = `## Hook ledger for this chapter\nresolve:\n- H001 "x" → done`;
+    const activeHooks = [
+      ...sixDebtHooks().slice(0, 5),
+      debtHook("H006", { status: "resolved" }),
+    ];
+    const assessment = assessMemoHookDebtGovernance(memo, {
+      activeHooks,
+      chapterNumber: 7,
+    });
+    expect(assessment).toEqual({ compliant: true, violations: [] });
   });
 });

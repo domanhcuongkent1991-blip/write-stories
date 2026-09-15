@@ -98,6 +98,7 @@ defer:
 
 **硬规则**：
 - 输入的 pending_hooks 里如果有任何 hook 状态已是 "pressured" 或 "near_payoff" 且距上次推进 ≥ 5 章，**必须**放到 advance 或 resolve，不允许 defer
+- 欠账规则：当未结 hook 总数 ≥ 6 时，本章**必须** advance 或 resolve 至少一个 immediate/near-term（或 promoted）的 hook，且最多新开 2 个全新钩子；把 ready 欠账全部 defer 还疯狂开新钩子的 memo 会被系统驳回重排
 - advance/resolve 里写的 hook_id 必须真实存在于 pending_hooks 输入中（不要编造 ID）
 - 如果这章是纯高压/战斗章节没有伏笔兑现空间，至少也要有 1 条 advance 或 defer 声明
 - 本章"## 当前任务"如果天然对应某个 hook 的兑现动作，必须在 resolve 里显式声明对应 hook_id
@@ -214,6 +215,7 @@ defer:
 
 **Hard rules**:
 - If any hook in input pending_hooks is already "pressured" or "near_payoff" AND has not advanced in ≥ 5 chapters, it **must** go into advance or resolve — deferring is not allowed.
+- Debt rule: when total open hooks is ≥ 6, this chapter **must** advance or resolve at least one hook whose payoff timing is immediate/near-term (or a promoted hook), and may open at most 2 brand-new hooks. A memo that defers every ready hook while piling on new threads is rejected and re-planned by the system.
 - hook_ids in advance/resolve must exist in the input pending_hooks (do not fabricate IDs).
 - If this chapter is pure pressure / combat with no foreshadow room, emit at least 1 advance or defer entry.
 - If "## Current task" naturally corresponds to paying off a hook, it must appear under resolve with the hook_id.

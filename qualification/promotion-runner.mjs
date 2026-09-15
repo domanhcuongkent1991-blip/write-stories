@@ -129,6 +129,7 @@ const safe = {
   viPipelineModeSource: rollout.evidence.flagSource,
   viPipelineFeatureConfigurationHash: rollout.evidence.featureConfigurationHash,
   minorAuditAcceptance: true,
+  scoreRepairFloorScore: 75,
   bookId,
   resumeBookId,
   startChapter,
@@ -633,6 +634,7 @@ try {
     chapterReviewMode: "auto",
     revisionGate: "strict",
     minorAuditAcceptance: true,
+    scoreRepairFloorScore: 75,
     ...rollout.pipeline,
   });
   const resolvedRollout = runner.getViPipelineMode();

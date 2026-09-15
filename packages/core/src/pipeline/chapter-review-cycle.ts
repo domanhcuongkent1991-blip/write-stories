@@ -210,6 +210,8 @@ export async function runChapterReviewCycle(params: {
   readonly runPostWriteChecks?: (content: string) => ReadonlyArray<AuditIssue>;
   readonly maxReviewIterations?: number;
   readonly autoRevisionAllowed?: boolean;
+  /** Opt-in score-fail repair floor forwarded to the audit policy. */
+  readonly scoreRepairFloorScore?: number;
   readonly operationId?: string;
   readonly attemptId?: string;
   readonly settleRevisionCandidate?: (
@@ -346,6 +348,9 @@ export async function runChapterReviewCycle(params: {
       autoRevisionAllowed: params.autoRevisionAllowed ?? true,
       revisionAttempts,
       maxRevisionAttempts: 1,
+      ...(params.scoreRepairFloorScore !== undefined
+        ? { scoreRepairFloorScore: params.scoreRepairFloorScore }
+        : {}),
     });
     assessmentCount += 1;
     const auditResult: AuditResult = {

@@ -7,6 +7,7 @@ import type { ScaffoldLanguage, WritingLanguage } from "../models/writing-langua
 import { buildLengthSpec } from "../utils/length-metrics.js";
 import {
   acceptanceCriteriaFromHookContractV2,
+  assessMemoHookDebtGovernance,
   bindExpectedHookOperationsV2,
   hookOpsFromLedger,
   parseHookLedger,
@@ -237,6 +238,60 @@ export class PlannerAgent extends BaseAgent {
       activeHooks: authoritativeMemoHooks,
       chapterNumber: input.chapterNumber,
     });
+
+    // Deterministic hook-debt governance: with >= 6 open hooks the memo must
+    // service ready debt and may open at most 2 brand-new hooks. A violation
+    // gets one bounded semantic correction, then fails closed.
+    if (writingLanguage === "vi") {
+      const debtGovernance = assessMemoHookDebtGovernance(memo.body, {
+        activeHooks: authoritativeMemoHooks,
+        chapterNumber: input.chapterNumber,
+      });
+      if (!debtGovernance.compliant) {
+        const feedback = [
+          "Hook-debt governance rejected this chapter memo:",
+          ...debtGovernance.violations,
+          "Re-plan the ledger so existing ready debt is serviced (advance or resolve) before any new threads are opened.",
+        ].join("\n");
+        let correctedMemoResult: { memo: ChapterMemo; tokenUsage?: TokenUsage };
+        try {
+          correctedMemoResult = await this.planChapterMemoWithUsage(memoInput, {
+            parseAttemptLimit: 2,
+            allowFallback: false,
+            semanticCorrectionFeedback: feedback,
+          });
+        } catch (error) {
+          throw new HookResolvePreflightError(
+            "PLANNER_CONTRACT_INVALID",
+            `hook-debt governance correction failed: ${error instanceof Error ? error.message : String(error)}`,
+            { cause: error },
+          );
+        }
+        const correctedGovernance = assessMemoHookDebtGovernance(correctedMemoResult.memo.body, {
+          activeHooks: authoritativeMemoHooks,
+          chapterNumber: input.chapterNumber,
+        });
+        if (!correctedGovernance.compliant) {
+          throw new HookResolvePreflightError(
+            "PLANNER_CONTRACT_INVALID",
+            `planner memo still violates hook-debt governance after correction: ${correctedGovernance.violations.join(" | ")}`,
+          );
+        }
+        memo = correctedMemoResult.memo;
+        expectedHookContract = bindExpectedHookOperationsV2(memo.body, {
+          activeHooks: authoritativeMemoHooks,
+          chapterNumber: input.chapterNumber,
+        });
+        memoResult = {
+          ...memoResult,
+          memo,
+          tokenUsage: addTokenUsage(memoResult.tokenUsage, correctedMemoResult.tokenUsage),
+        };
+        this.log?.warn(
+          `[planner] applied hook-debt governance correction: ${debtGovernance.violations.join(" | ")}`,
+        );
+      }
+    }
 
     if (writingLanguage === "vi" && expectedHookContract.operations.some((operation) => operation.action === "resolve")) {
       const preflight = new HookResolvePreflightAgent(this.ctx);

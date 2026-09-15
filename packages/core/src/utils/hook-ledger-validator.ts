@@ -258,6 +258,69 @@ export function hookOpsFromLedger(
   };
 }
 
+/** Open-hook debt level at which memo-level debt governance kicks in. */
+export const HOOK_DEBT_OPEN_FLOOR = 6;
+/** Brand-new hooks a high-debt chapter memo may open. */
+export const HOOK_DEBT_MAX_NEW_OPENS = 2;
+
+export interface HookDebtGovernanceOptions {
+  /** The authoritative live hook snapshot (stable IDs, not memo claims). */
+  readonly activeHooks: ReadonlyArray<StoredHook>;
+  readonly chapterNumber: number;
+}
+
+export interface HookDebtGovernanceAssessment {
+  readonly compliant: boolean;
+  /** Human-readable violations, phrased as planner correction feedback. */
+  readonly violations: ReadonlyArray<string>;
+}
+
+/**
+ * Deterministic memo-level hook-debt governance. Once open debt reaches
+ * HOOK_DEBT_OPEN_FLOOR, the memo must service at least one ready hook
+ * (advance/resolve on an immediate/near-term or promoted hook) and may open
+ * at most HOOK_DEBT_MAX_NEW_OPENS brand-new hooks. Below that floor the memo
+ * stays free-form; the ledger's own 1-bury-1 warning keeps soft pressure.
+ */
+export function assessMemoHookDebtGovernance(
+  memoBody: string,
+  options: HookDebtGovernanceOptions,
+): HookDebtGovernanceAssessment {
+  const debtHooks = options.activeHooks.filter(
+    (hook) => hook.status === "open" || hook.status === "progressing",
+  );
+  if (debtHooks.length < HOOK_DEBT_OPEN_FLOOR) {
+    return { compliant: true, violations: [] };
+  }
+
+  const ledger = parseHookLedger(memoBody);
+  const violations: string[] = [];
+
+  const readyIds = new Set(debtHooks
+    .filter((hook) => {
+      const timing = normalizeHookPayoffTiming(hook.payoffTiming);
+      return timing === "immediate" || timing === "near-term" || hook.promoted === true;
+    })
+    .map((hook) => hook.hookId));
+  if (readyIds.size > 0) {
+    const servicedReadyHook = [...ledger.open, ...ledger.advance, ...ledger.resolve]
+      .some((entry) => readyIds.has(entry.id));
+    if (!servicedReadyHook) {
+      violations.push(
+        `Open hook debt is ${debtHooks.length} (>= ${HOOK_DEBT_OPEN_FLOOR}); the memo must advance or resolve at least one ready hook (immediate/near-term or promoted, e.g. ${[...readyIds].slice(0, 4).join(", ")}). Deferring every ready hook while the debt keeps growing is not allowed.`,
+      );
+    }
+  }
+
+  if (ledger.newOpenCount > HOOK_DEBT_MAX_NEW_OPENS) {
+    violations.push(
+      `Open hook debt is ${debtHooks.length} (>= ${HOOK_DEBT_OPEN_FLOOR}); the memo opens ${ledger.newOpenCount} brand-new hooks but at most ${HOOK_DEBT_MAX_NEW_OPENS} new opens are allowed this chapter.`,
+    );
+  }
+
+  return { compliant: violations.length === 0, violations };
+}
+
 export function bindExpectedHookOperationsV2(
   memoBody: string,
   options: HookOpsFromLedgerOptions,
