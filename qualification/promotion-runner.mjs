@@ -1,4 +1,4 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { execFile as execFileCallback } from "node:child_process";
 import { cp, mkdir, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
@@ -646,6 +646,19 @@ try {
     && runThroughChapter >= 4;
   if (abortDrillEnabled) {
     currentStage = "recovery-abort-drill";
+    // A retry-failed-chapter book legitimately keeps the failed chapter's file
+    // and audit-failed index entry, so a clean abort means "the checkpoint is
+    // identical to before the attempt", not "no chapter-4 artifacts exist".
+    const snapshotChapter4Checkpoint = async () => {
+      const state = await collectStateInvariants(3);
+      const chapterFiles = (await readdir(join(bookDir, "chapters")))
+        .filter((name) => /^0004_.+\.md$/u.test(name))
+        .sort();
+      const fileDigests = await Promise.all(chapterFiles.map(async (name) =>
+        `${name}:${createHash("sha256").update(await readFile(join(bookDir, "chapters", name), "utf8")).digest("hex")}`));
+      return { state, fileDigests };
+    };
+    const preAbortCheckpoint = await snapshotChapter4Checkpoint();
     let drillError = null;
     let drillResult = null;
     const drillController = new AbortController();
@@ -662,20 +675,20 @@ try {
     } finally {
       clearTimeout(drillTimer);
     }
-    const postAbortState = await collectStateInvariants(3);
-    const postAbortChapterFiles = (await readdir(join(bookDir, "chapters")))
-      .filter((name) => /^0004_.+\.md$/u.test(name));
+    const postAbortCheckpoint = await snapshotChapter4Checkpoint();
+    const postAbortState = postAbortCheckpoint.state;
+    const postAbortChapterFileCount = postAbortCheckpoint.fileDigests.length;
     const aborted = drillError !== null;
-    const cleanCheckpoint = postAbortState.aligned
-      && postAbortChapterFiles.length === 0;
+    const cleanCheckpoint = JSON.stringify(preAbortCheckpoint) === JSON.stringify(postAbortCheckpoint);
     safe.recoveryDrill = {
       chapterNumber: 4,
       abortRequestedAfterMs: 750,
       aborted,
       error: drillError,
       returnedStatus: drillResult?.status ?? null,
+      preAbortState: preAbortCheckpoint.state,
       postAbortState,
-      postAbortChapterFileCount: postAbortChapterFiles.length,
+      postAbortChapterFileCount,
       cleanCheckpoint,
     };
     if (!aborted || !cleanCheckpoint) {
