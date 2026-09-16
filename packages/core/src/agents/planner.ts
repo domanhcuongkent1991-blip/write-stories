@@ -261,24 +261,53 @@ export class PlannerAgent extends BaseAgent {
         chapterNumber: input.chapterNumber,
       });
       if (!debtGovernance.compliant) {
+        const bindMemoContract = (body: string) => bindExpectedHookOperationsV2(body, {
+          activeHooks: authoritativeMemoHooks,
+          chapterNumber: input.chapterNumber,
+        });
+        const planCorrectedMemo = async (semanticCorrectionFeedback: string) => {
+          try {
+            return await this.planChapterMemoWithUsage(memoInput, {
+              parseAttemptLimit: 2,
+              allowFallback: false,
+              semanticCorrectionFeedback,
+            });
+          } catch (error) {
+            throw new HookResolvePreflightError(
+              "PLANNER_CONTRACT_INVALID",
+              `hook-debt governance correction failed: ${error instanceof Error ? error.message : String(error)}`,
+              { cause: error },
+            );
+          }
+        };
         const feedback = [
           "Hook-debt governance rejected this chapter memo:",
           ...debtGovernance.violations,
           "Re-plan the ledger so existing ready debt is serviced (advance or resolve) before any new threads are opened.",
+          "Each hook_id may appear at most once across open/advance/resolve/defer — never under two actions.",
         ].join("\n");
-        let correctedMemoResult: { memo: ChapterMemo; tokenUsage?: TokenUsage };
+        let correctedMemoResult = await planCorrectedMemo(feedback);
+        let correctedContract: ReturnType<typeof bindMemoContract>;
         try {
-          correctedMemoResult = await this.planChapterMemoWithUsage(memoInput, {
-            parseAttemptLimit: 2,
-            allowFallback: false,
-            semanticCorrectionFeedback: feedback,
-          });
-        } catch (error) {
-          throw new HookResolvePreflightError(
-            "PLANNER_CONTRACT_INVALID",
-            `hook-debt governance correction failed: ${error instanceof Error ? error.message : String(error)}`,
-            { cause: error },
-          );
+          correctedContract = bindMemoContract(correctedMemoResult.memo.body);
+        } catch (bindError) {
+          // A corrected memo can parse cleanly yet still violate the ledger
+          // contract (e.g. one hook under two actions). One bounded re-correction
+          // with the exact contract error as feedback, then fail closed.
+          const retryFeedback = [
+            feedback,
+            `The previous corrected memo was rejected: ${bindError instanceof Error ? bindError.message : String(bindError)}`,
+          ].join("\n");
+          correctedMemoResult = await planCorrectedMemo(retryFeedback);
+          try {
+            correctedContract = bindMemoContract(correctedMemoResult.memo.body);
+          } catch (secondBindError) {
+            throw new HookResolvePreflightError(
+              "PLANNER_CONTRACT_INVALID",
+              `hook-debt governance correction produced an invalid ledger twice: ${secondBindError instanceof Error ? secondBindError.message : String(secondBindError)}`,
+              { cause: secondBindError },
+            );
+          }
         }
         const correctedGovernance = assessMemoHookDebtGovernance(correctedMemoResult.memo.body, {
           activeHooks: authoritativeMemoHooks,
@@ -291,10 +320,7 @@ export class PlannerAgent extends BaseAgent {
           );
         }
         memo = correctedMemoResult.memo;
-        expectedHookContract = bindExpectedHookOperationsV2(memo.body, {
-          activeHooks: authoritativeMemoHooks,
-          chapterNumber: input.chapterNumber,
-        });
+        expectedHookContract = correctedContract;
         memoResult = {
           ...memoResult,
           memo,

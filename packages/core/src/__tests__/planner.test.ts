@@ -738,6 +738,69 @@ describe("PlannerAgent.planChapter memo generation", () => {
     expect(result.memo.body).not.toContain('- sabotage-sau-can-thi-thu "锁芯刮痕"');
   });
 
+  it("retries the debt-governance correction once when the corrected memo breaks the ledger contract", async () => {
+    await writeFile(join(bookDir, "story/pending_hooks.md"), [
+      "| hook_id | start_chapter | type | status | last_advanced_chapter | expected_payoff | notes |",
+      "| --- | --- | --- | --- | --- | --- | --- |",
+      "| H03 | 1 | mystery | open | 1 | Door 7 anomaly | |",
+      "| S004 | 1 | mystery | open | 1 | lock scratch | |",
+      "| H07 | 1 | mystery | open | 1 | mastermind | |",
+      "| H08 | 1 | device | open | 1 | spare transponder | |",
+      "| H09 | 1 | mystery | open | 1 | missing patrol log | |",
+      "| H10 | 1 | device | open | 1 | duplicate seal | |",
+    ].join("\n"), "utf-8");
+    const ledgerSection = (body: string) => body.slice(body.indexOf("## 本章 hook 账"), body.indexOf("## 不要做"));
+    const replaceLedger = (memo: string, ledger: string) => memo.replace(ledgerSection(memo), ledger);
+    const violatingMemo = replaceLedger(validMemoRaw(1), `## 本章 hook 账
+open:
+- [new] 新疑点一 || 理由
+- [new] 新疑点二 || 理由
+- [new] 新疑点三 || 理由
+defer:
+- H03 "七号门异常" → 时机不到
+
+`);
+    const contradictoryMemo = replaceLedger(validMemoRaw(1), `## 本章 hook 账
+open:
+- [new] 新疑点一 || 理由
+- [new] 新疑点二 || 理由
+advance:
+- H03 "七号门异常" → 从 pressured → near_payoff
+defer:
+- H03 "七号门异常" → 又延后
+
+`);
+    const fixedMemo = replaceLedger(validMemoRaw(1), `## 本章 hook 账
+open:
+- [new] 新疑点一 || 理由
+- [new] 新疑点二 || 理由
+advance:
+- H03 "七号门异常" → 从 pressured → near_payoff
+defer:
+- H07 "幕后主使" → 第 20 章再动
+
+`);
+    const chatSpy = vi.spyOn(llmProvider, "chatCompletion")
+      .mockResolvedValueOnce({ content: violatingMemo, usage: ZERO_USAGE } as Awaited<ReturnType<typeof llmProvider.chatCompletion>>)
+      .mockResolvedValueOnce({ content: contradictoryMemo, usage: ZERO_USAGE } as Awaited<ReturnType<typeof llmProvider.chatCompletion>>)
+      .mockResolvedValueOnce({ content: fixedMemo, usage: ZERO_USAGE } as Awaited<ReturnType<typeof llmProvider.chatCompletion>>);
+
+    const result = await makePlanner().planChapter({
+      book: { ...makeBook(), language: "vi" },
+      bookDir,
+      chapterNumber: 1,
+    });
+
+    expect(chatSpy).toHaveBeenCalledTimes(3);
+    const retryMessages = chatSpy.mock.calls[2]?.[2] as ReadonlyArray<{ role: string; content: string }>;
+    expect(retryMessages.find((message) => message.role === "user")?.content)
+      .toContain("contradictory actions");
+    expect(result.intent.expectedHookOps.resolve).toEqual([]);
+    expect(result.intent.expectedHookOps.upsert).toEqual([
+      expect.objectContaining({ hookId: "H03" }),
+    ]);
+  });
+
   it("uses two parse attempts and no fallback for the semantic correction", async () => {
     await writeFile(join(bookDir, "story/pending_hooks.md"), [
       "| hook_id | start_chapter | type | status | last_advanced_chapter | expected_payoff | notes |",
