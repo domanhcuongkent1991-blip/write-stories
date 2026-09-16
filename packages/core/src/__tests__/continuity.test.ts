@@ -304,6 +304,51 @@ describe("ContinuityAuditor", () => {
     }
   });
 
+  it("binds Vietnamese transition evidence after whitespace and dash-glyph normalization", async () => {
+    const { root, bookDir } = await createVietnameseTransitionFixture();
+    const currentBody = "Trong đêm, mặt nước thực tế cuồn cuộn ở mốc 1,34m \u2014 mà không có trận mưa mới.";
+    const auditor = createTestAuditor(root);
+    vi.spyOn(ContinuityAuditor.prototype as never, "chat" as never).mockResolvedValue({
+      content: JSON.stringify({
+        passed: false,
+        overall_score: 92,
+        transition_check: {
+          status: "contradiction",
+          dimensions_checked: ["time", "location", "physical-state", "device-state", "possession"],
+        },
+        issues: [{
+          severity: "critical",
+          repair_scope: "structural",
+          category: "Transition Continuity",
+          description: "Mực nước đảo ngược mà không có nguyên nhân.",
+          suggestion: "Giữ mốc 1,22m hoặc mô tả nguyên nhân nước dâng.",
+          transition_evidence: {
+            dimension: "physical-state",
+            previous_text: "Vạch mực  nước chạm đúng mốc  1,22m lúc 08:40.",
+            current_text: "mặt nước thực tế cuồn cuộn ở mốc 1,34m - mà",
+          },
+        }],
+        summary: "transition contradiction",
+      }),
+      usage: ZERO_USAGE,
+    });
+
+    try {
+      const result = await auditor.auditChapter(bookDir, currentBody, 2, "other");
+
+      expect(result.parseFailed).not.toBe(true);
+      expect((result as any).hostFindings).toEqual([
+        expect.objectContaining({
+          severity: "critical",
+          ruleId: "continuity.transition",
+          verification: "verified",
+        }),
+      ]);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
   it("marks a Vietnamese chapter-2 audit inconclusive when transition_check is missing", async () => {
     const { root, bookDir } = await createVietnameseTransitionFixture();
     const auditor = createTestAuditor(root);

@@ -225,6 +225,17 @@ function normalizeParsedIssue(issue: Record<string, unknown>, language: PromptLa
   };
 }
 
+/** Normalize a quoted prose fragment for layout-tolerant evidence matching. */
+function normalizeTransitionQuoteText(value: string): string {
+  return value
+    .replace(/\r\n?/gu, "\n")
+    .replace(/[\u2010-\u2015\u2212]/gu, "-")
+    .replace(/[\u2018\u2019]/gu, "'")
+    .replace(/[\u201C\u201D]/gu, '"')
+    .replace(/\s+/gu, " ")
+    .trim();
+}
+
 function bindVietnameseTransitionReview(
   previousChapter: string,
   currentChapter: string,
@@ -272,7 +283,12 @@ function bindVietnameseTransitionReview(
 
   const invalidEvidence = evidenceIssues.some((issue) => {
     const evidence = issue.transitionEvidence!;
-    return !previousChapter.includes(evidence.previousText) || !currentChapter.includes(evidence.currentText);
+    const normalizedPrevious = normalizeTransitionQuoteText(previousChapter);
+    const normalizedCurrent = normalizeTransitionQuoteText(currentChapter);
+    return (
+      !normalizedPrevious.includes(normalizeTransitionQuoteText(evidence.previousText))
+      || !normalizedCurrent.includes(normalizeTransitionQuoteText(evidence.currentText))
+    );
   });
   if (invalidEvidence) {
     return {
