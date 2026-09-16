@@ -258,6 +258,39 @@ export function hookOpsFromLedger(
   };
 }
 
+/**
+ * Repair one demonstrated model failure mode in memo ledgers: a hook ID
+ * truncated mid-token (the model "fixes" awkward repeated suffixes). An
+ * unknown ledger ID that is a unique prefix of exactly one authoritative
+ * hook ID is rewritten to the canonical ID; ambiguous or genuinely unknown
+ * IDs are left untouched so strict validation still fails closed.
+ */
+export function canonicalizeMemoHookIds(
+  memoBody: string,
+  authoritativeHooks: ReadonlyArray<StoredHook>,
+): string {
+  if (authoritativeHooks.length === 0) return memoBody;
+  const ledger = parseHookLedger(memoBody);
+  const knownIds = new Set(authoritativeHooks.map((hook) => hook.hookId));
+  const entries = [...ledger.open, ...ledger.advance, ...ledger.resolve, ...ledger.defer];
+  let updated = memoBody;
+  for (const entry of entries) {
+    if (knownIds.has(entry.id)) continue;
+    const prefixMatches = [...knownIds].filter((id) => id.startsWith(entry.id));
+    if (prefixMatches.length !== 1) continue;
+    const canonical = prefixMatches[0]!;
+    const boundary = new RegExp(`${escapeRegExp(entry.id)}(?![A-Za-z0-9_-])`, "gu");
+    if (!boundary.test(updated)) continue;
+    boundary.lastIndex = 0;
+    updated = updated.replace(boundary, canonical);
+  }
+  return updated;
+}
+
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&");
+}
+
 /** Open-hook debt level at which memo-level debt governance kicks in. */
 export const HOOK_DEBT_OPEN_FLOOR = 6;
 /** Brand-new hooks a high-debt chapter memo may open. */

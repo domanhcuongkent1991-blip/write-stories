@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest";
 import {
   assessMemoHookDebtGovernance,
+  canonicalizeMemoHookIds,
   hookOpsFromLedger,
   parseHookLedger,
   removeHookResolveCommitments,
@@ -417,5 +418,38 @@ describe("assessMemoHookDebtGovernance", () => {
       chapterNumber: 7,
     });
     expect(assessment).toEqual({ compliant: true, violations: [] });
+  });
+});
+
+describe("canonicalizeMemoHookIds", () => {
+  const hook = (hookId: string): StoredHook => ({
+    hookId,
+    startChapter: 1,
+    type: "mystery",
+    status: "open",
+    lastAdvancedChapter: 1,
+    expectedPayoff: "payoff",
+    notes: "",
+  });
+
+  it("rewrites a uniquely truncated ledger ID to its canonical form", () => {
+    const memo = `## Hook ledger for this chapter\nadvance:\n- operational-mystery-quy-khi "demon monkey" → pressured`;
+    const canonical = canonicalizeMemoHookIds(memo, [hook("H001"), hook("operational-mystery-quy-khi-khi")]);
+    expect(canonical).toContain('- operational-mystery-quy-khi-khi "demon monkey" → pressured');
+  });
+
+  it("leaves an ambiguous prefix untouched so strict validation fails closed", () => {
+    const memo = `## Hook ledger for this chapter\nadvance:\n- operational-mystery "x" → pressured`;
+    const canonical = canonicalizeMemoHookIds(memo, [
+      hook("operational-mystery-quy-khi-khi"),
+      hook("operational-mystery-gate"),
+    ]);
+    expect(canonical).toBe(memo);
+  });
+
+  it("leaves exact IDs and prose outside the ledger untouched", () => {
+    const memo = `## Current task\nThe operational-mystery-quy-khi appears.\n\n## Hook ledger for this chapter\nadvance:\n- H001 "x" → pressured`;
+    const canonical = canonicalizeMemoHookIds(memo, [hook("H001"), hook("operational-mystery-quy-khi-khi")]);
+    expect(canonical).toBe(memo);
   });
 });

@@ -9,6 +9,7 @@ import {
   acceptanceCriteriaFromHookContractV2,
   assessMemoHookDebtGovernance,
   bindExpectedHookOperationsV2,
+  canonicalizeMemoHookIds,
   hookOpsFromLedger,
   parseHookLedger,
   removeHookResolveCommitments,
@@ -285,6 +286,7 @@ export class PlannerAgent extends BaseAgent {
           ...debtGovernance.violations,
           "Re-plan the ledger so existing ready debt is serviced (advance or resolve) before any new threads are opened.",
           "Each hook_id may appear at most once across open/advance/resolve/defer — never under two actions.",
+          `The only hook IDs that exist (copy each one exactly, character-for-character): ${authoritativeMemoHooks.map((hook) => hook.hookId).join(", ")}.`,
         ].join("\n");
         let correctedMemoResult = await planCorrectedMemo(feedback);
         let correctedContract: ReturnType<typeof bindMemoContract>;
@@ -582,12 +584,17 @@ export class PlannerAgent extends BaseAgent {
 
       try {
         const memo = parseMemo(response.content, input.chapterNumber, input.isGoldenOpening);
+        // Models occasionally truncate awkward hook IDs mid-token; repair
+        // unique near-misses before governance so the strict check only sees
+        // genuinely unknown IDs.
+        const canonicalBody = canonicalizeMemoHookIds(memo.body, input.authoritativeActiveHooks ?? []);
+        const governedMemo = canonicalBody === memo.body ? memo : { ...memo, body: canonicalBody };
         assertFreshMemoGovernance(
-          memo.body,
+          governedMemo.body,
           input.authoritativeActiveHooks,
           input.includeAllowedHookActions === true,
         );
-        return { memo, ...(tokenUsage ? { tokenUsage } : {}) };
+        return { memo: governedMemo, ...(tokenUsage ? { tokenUsage } : {}) };
       } catch (error) {
         if (!(error instanceof PlannerParseError)) {
           throw error;
