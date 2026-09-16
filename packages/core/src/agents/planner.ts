@@ -105,7 +105,7 @@ function buildSemanticCorrectionFeedback(
   const operations = new Map(contract.operations.map((operation) => [operation.hookId, operation] as const));
   const failures = preflight.results.filter((result): result is Extract<HookResolvePreflightResult, { decision: "repair-required" }> =>
     result.decision === "repair-required");
-  return failures.map((failure) => {
+  const verifiedFailures = failures.map((failure) => {
     const operation = operations.get(failure.hookId);
     return [
       `Hook ID: ${failure.hookId}`,
@@ -114,7 +114,20 @@ function buildSemanticCorrectionFeedback(
       `Failure: ${failure.description}`,
       "Correct the ledger once: remove this resolve or replace it only with a hook whose canonical payoff the planned evidence explicitly satisfies. Do not invent the payoff.",
     ].join("\n");
-  }).join("\n\n");
+  });
+  const inconclusiveFailures = preflight.results
+    .filter((result): result is Extract<HookResolvePreflightResult, { decision: "inconclusive" }> =>
+      result.decision === "inconclusive")
+    .map((failure) => {
+      const operation = operations.get(failure.hookId);
+      return [
+        `Hook ID: ${failure.hookId}`,
+        `Canonical expected payoff: ${operation?.canonicalExpectedPayoff ?? "(missing canonical payoff)"}`,
+        `Failure: the resolve preflight could not verify the planned evidence (${failure.description}).`,
+        "Correct the ledger once: either state planned evidence that explicitly entails every condition of the canonical payoff, or move this hook under advance/defer instead of resolve. Do not invent the payoff.",
+      ].join("\n");
+    });
+  return [...verifiedFailures, ...inconclusiveFailures].join("\n\n");
 }
 
 /**
@@ -305,13 +318,7 @@ export class PlannerAgent extends BaseAgent {
         tokenUsage: addTokenUsage(memoResult.tokenUsage, firstPreflight.tokenUsage),
       };
       const firstFailure = firstPreflight.results.find((result) => result.decision !== "pass");
-      if (firstFailure?.decision === "inconclusive") {
-        throw new HookResolvePreflightError(
-          "INCONCLUSIVE_PROVIDER",
-          `planner contract preflight inconclusive for ${firstFailure.hookId}: ${firstFailure.description}`,
-        );
-      }
-      if (firstFailure?.decision === "repair-required") {
+      if (firstFailure) {
         const feedback = buildSemanticCorrectionFeedback(expectedHookContract, firstPreflight);
         let correctedMemoResult: { memo: ChapterMemo; tokenUsage?: TokenUsage };
         try {
@@ -347,15 +354,12 @@ export class PlannerAgent extends BaseAgent {
             secondPreflight.tokenUsage,
           ),
         };
-        const secondInconclusive = secondPreflight.results.find((result) => result.decision === "inconclusive");
-        if (secondInconclusive) {
-          throw new HookResolvePreflightError(
-            "INCONCLUSIVE_PROVIDER",
-            `planner contract preflight remained inconclusive for ${secondInconclusive.hookId}: ${secondInconclusive.description}`,
-          );
-        }
+        // Any second-round non-pass verdict — repair-required or inconclusive —
+        // means the planned resolve cannot be validated. Strip the commitment
+        // so no unverifiable payoff reaches canonical state; the hook stays
+        // open and the chapter keeps its remaining plan.
         const unsafeResolveIds = secondPreflight.results
-          .filter((result) => result.decision === "repair-required")
+          .filter((result) => result.decision !== "pass")
           .map((result) => result.hookId);
         if (unsafeResolveIds.length > 0) {
           memo = {

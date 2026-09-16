@@ -664,6 +664,80 @@ describe("PlannerAgent.planChapter memo generation", () => {
       .resolves.toContain("# Chapter Intent");
   });
 
+  it("corrects an inconclusive planned-evidence verdict once and revalidates", async () => {
+    await writeFile(join(bookDir, "story/pending_hooks.md"), [
+      "| hook_id | start_chapter | type | status | last_advanced_chapter | expected_payoff | notes |",
+      "| --- | --- | --- | --- | --- | --- | --- |",
+      "| H03 | 1 | mystery | open | 1 | Door 7 anomaly | |",
+      "| sabotage-sau-can-thi-thu | 1 | mystery | progressing | 1 | Identify the actor behind the remote administrator lock | |",
+      "| H006 | 1 | device | progressing | 1 | Confirm the physical signal-manipulation device | |",
+      "| H07 | 1 | mystery | open | 1 | mastermind | |",
+    ].join("\n"), "utf-8");
+    const invalidMemo = validMemoRaw(4).replaceAll("S004", "sabotage-sau-can-thi-thu");
+    const correctedMemo = validMemoRaw(4).replaceAll("S004", "H006");
+    const chatSpy = vi.spyOn(llmProvider, "chatCompletion")
+      .mockResolvedValueOnce({ content: invalidMemo, usage: ZERO_USAGE } as Awaited<ReturnType<typeof llmProvider.chatCompletion>>)
+      .mockResolvedValueOnce({
+        content: JSON.stringify({ results: [{
+          hookId: "sabotage-sau-can-thi-thu",
+          decision: "inconclusive",
+          description: "Supplied fields are not enough to decide evidence coverage.",
+        }] }),
+        usage: ZERO_USAGE,
+      } as Awaited<ReturnType<typeof llmProvider.chatCompletion>>)
+      .mockResolvedValueOnce({ content: correctedMemo, usage: ZERO_USAGE } as Awaited<ReturnType<typeof llmProvider.chatCompletion>>)
+      .mockResolvedValueOnce({
+        content: JSON.stringify({ results: [{ hookId: "H006", decision: "pass" }] }),
+        usage: ZERO_USAGE,
+      } as Awaited<ReturnType<typeof llmProvider.chatCompletion>>);
+
+    const result = await makePlanner().planChapter({
+      book: { ...makeBook(), language: "vi" },
+      bookDir,
+      chapterNumber: 4,
+    });
+
+    expect(chatSpy).toHaveBeenCalledTimes(4);
+    expect(result.intent.expectedHookOps.resolve).toEqual(["H006"]);
+    const correctionMessages = chatSpy.mock.calls[2]?.[2] as ReadonlyArray<{ role: string; content: string }>;
+    expect(correctionMessages.find((message) => message.role === "user")?.content)
+      .toContain("could not verify the planned evidence");
+  });
+
+  it("drops the resolve commitment when a corrected memo stays inconclusive", async () => {
+    await writeFile(join(bookDir, "story/pending_hooks.md"), [
+      "| hook_id | start_chapter | type | status | last_advanced_chapter | expected_payoff | notes |",
+      "| --- | --- | --- | --- | --- | --- | --- |",
+      "| H03 | 1 | mystery | open | 1 | Door 7 anomaly | |",
+      "| sabotage-sau-can-thi-thu | 1 | mystery | progressing | 1 | Identify the actor behind the remote administrator lock | |",
+      "| H07 | 1 | mystery | open | 1 | mastermind | |",
+    ].join("\n"), "utf-8");
+    const invalidMemo = validMemoRaw(4).replaceAll("S004", "sabotage-sau-can-thi-thu");
+    const inconclusiveResult = JSON.stringify({ results: [{
+      hookId: "sabotage-sau-can-thi-thu",
+      decision: "inconclusive",
+      description: "Supplied fields are not enough to decide evidence coverage.",
+    }] });
+    const chatSpy = vi.spyOn(llmProvider, "chatCompletion")
+      .mockResolvedValueOnce({ content: invalidMemo, usage: ZERO_USAGE } as Awaited<ReturnType<typeof llmProvider.chatCompletion>>)
+      .mockResolvedValueOnce({ content: inconclusiveResult, usage: ZERO_USAGE } as Awaited<ReturnType<typeof llmProvider.chatCompletion>>)
+      .mockResolvedValueOnce({ content: invalidMemo, usage: ZERO_USAGE } as Awaited<ReturnType<typeof llmProvider.chatCompletion>>)
+      .mockResolvedValueOnce({ content: inconclusiveResult, usage: ZERO_USAGE } as Awaited<ReturnType<typeof llmProvider.chatCompletion>>);
+
+    const result = await makePlanner().planChapter({
+      book: { ...makeBook(), language: "vi" },
+      bookDir,
+      chapterNumber: 4,
+    });
+
+    expect(chatSpy).toHaveBeenCalledTimes(4);
+    expect(result.intent.expectedHookOps.resolve).toEqual([]);
+    expect(result.intent.expectedHookContract?.operations).not.toEqual(expect.arrayContaining([
+      expect.objectContaining({ hookId: "sabotage-sau-can-thi-thu", action: "resolve" }),
+    ]));
+    expect(result.memo.body).not.toContain('- sabotage-sau-can-thi-thu "锁芯刮痕"');
+  });
+
   it("uses two parse attempts and no fallback for the semantic correction", async () => {
     await writeFile(join(bookDir, "story/pending_hooks.md"), [
       "| hook_id | start_chapter | type | status | last_advanced_chapter | expected_payoff | notes |",
