@@ -117,6 +117,11 @@ const REQUIRED_TRANSITION_DIMENSIONS: ReadonlyArray<TransitionDimension> = [
   "possession",
 ];
 
+/** Minimum accepted length of each verbatim transition-evidence quote. */
+const MIN_TRANSITION_EVIDENCE_LENGTH = 20;
+/** previous_text must bind inside this trailing fraction of the previous chapter. */
+const PREVIOUS_TEXT_WINDOW_FRACTION = 0.5;
+
 function isTransitionDimension(value: unknown): value is TransitionDimension {
   return REQUIRED_TRANSITION_DIMENSIONS.includes(value as TransitionDimension);
 }
@@ -150,9 +155,9 @@ function normalizeTransitionEvidence(value: unknown): TransitionEvidence | undef
     !isTransitionDimension(raw.dimension)
     || typeof previousText !== "string"
     || typeof currentText !== "string"
-    || previousText.length < 3
+    || previousText.length < MIN_TRANSITION_EVIDENCE_LENGTH
     || previousText.length > 500
-    || currentText.length < 3
+    || currentText.length < MIN_TRANSITION_EVIDENCE_LENGTH
     || currentText.length > 500
     || previousText.trim() !== previousText
     || currentText.trim() !== currentText
@@ -297,8 +302,12 @@ function bindVietnameseTransitionReview(
     const evidence = issue.transitionEvidence!;
     const normalizedPrevious = normalizeTransitionQuoteText(previousChapter);
     const normalizedCurrent = normalizeTransitionQuoteText(currentChapter);
+    // previous_text must come from the previous chapter's final-state region
+    // (the trailing window) because that is the state being transitioned from;
+    // current_text may appear anywhere in the chapter under review.
+    const windowStart = Math.floor(normalizedPrevious.length * (1 - PREVIOUS_TEXT_WINDOW_FRACTION));
     return (
-      !normalizedPrevious.includes(normalizeTransitionQuoteText(evidence.previousText))
+      normalizedPrevious.indexOf(normalizeTransitionQuoteText(evidence.previousText), windowStart) === -1
       || !normalizedCurrent.includes(normalizeTransitionQuoteText(evidence.currentText))
     );
   });
@@ -789,11 +798,11 @@ If any transition contradicts, add a critical structural issue and copy exact, u
 
 "transition_evidence": {
   "dimension": "time|location|physical-state|device-state|possession",
-  "previous_text": "exact excerpt from Previous Chapter Full Text",
+  "previous_text": "exact excerpt from the final-state region (the closing part) of Previous Chapter Full Text",
   "current_text": "exact excerpt from Chapter Content Under Review"
 }
 
-Never paraphrase these excerpts. If the evidence cannot be copied exactly, return a contradiction checklist but do not invent evidence.`
+Each excerpt must be at least 20 characters long. Never paraphrase these excerpts. If the evidence cannot be copied exactly, return a contradiction checklist but do not invent evidence.`
       : "";
     const vietnameseTransitionSchemaField = isVietnamese && previousChapter
       ? `  "transition_check": {
@@ -1194,7 +1203,7 @@ ${chapterContent}`;
               ? 'Re-emit ONLY the canonical audit JSON object: { "passed": true|false, "overall_score": 0-100, "transition_check": { "status": "consistent"|"contradiction", "dimensions_checked": ["time", "location", "physical-state", "device-state", "possession"] }, "issues": [ { "severity": "critical"|"warning"|"info", "category": "...", "description": "...", "suggestion": "...", "transition_evidence": { "dimension": "time"|"location"|"physical-state"|"device-state"|"possession", "previous_text": "...", "current_text": "..." } } ], "summary": "..." }.'
               : 'Re-emit ONLY the canonical audit JSON object: { "passed": true|false, "overall_score": 0-100, "issues": [...], "summary": "..." }.',
             previousChapter
-              ? 'When transition_evidence is required, copy previous_text and current_text as EXACT verbatim substrings of the supplied chapters — never paraphrase or shorten them.'
+              ? 'When transition_evidence is required, copy previous_text and current_text as EXACT verbatim substrings of the supplied chapters — previous_text from the closing part of the previous chapter; never paraphrase or shorten them, and each excerpt must be at least 20 characters long.'
               : undefined,
             previousChapter
               ? "Never invent or reconstruct evidence. If you cannot copy the exact substrings, output AUDIT_REPAIR_REJECTED."

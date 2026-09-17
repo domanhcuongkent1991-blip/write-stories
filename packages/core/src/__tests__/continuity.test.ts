@@ -437,6 +437,84 @@ describe("ContinuityAuditor", () => {
     }
   });
 
+  it("rejects transition evidence shorter than the minimum verbatim span", async () => {
+    const { root, bookDir } = await createVietnameseTransitionFixture();
+    const auditor = createTestAuditor(root);
+    vi.spyOn(ContinuityAuditor.prototype as never, "chat" as never).mockResolvedValue({
+      content: JSON.stringify({
+        passed: false,
+        overall_score: 80,
+        transition_check: {
+          status: "contradiction",
+          dimensions_checked: ["time", "location", "physical-state", "device-state", "possession"],
+        },
+        issues: [{
+          severity: "critical",
+          repair_scope: "structural",
+          category: "Transition Continuity",
+          description: "Mực nước đổi nhanh bất thường.",
+          suggestion: "Mô tả nguyên nhân nước dâng.",
+          transition_evidence: {
+            dimension: "physical-state",
+            previous_text: "mốc 1,22m",
+            current_text: "mực 1,34m",
+          },
+        }],
+        summary: "transition contradiction",
+      }),
+      usage: ZERO_USAGE,
+    });
+
+    try {
+      const result = await auditor.auditChapter(bookDir, "Trong đêm, mặt nước trở lại 1,34m.", 2, "other");
+
+      expect(result.parseFailed).toBe(true);
+      expect((result as any).parseFailedReason).toBe("inconsistent-without-evidence");
+      expect((result as any).hostFindings).toEqual([]);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects previous-chapter evidence quoted outside the final-state window", async () => {
+    const { root, bookDir } = await createVietnameseTransitionFixture();
+    const auditor = createTestAuditor(root);
+    vi.spyOn(ContinuityAuditor.prototype as never, "chat" as never).mockResolvedValue({
+      content: JSON.stringify({
+        passed: false,
+        overall_score: 82,
+        transition_check: {
+          status: "contradiction",
+          dimensions_checked: ["time", "location", "physical-state", "device-state", "possession"],
+        },
+        issues: [{
+          severity: "critical",
+          repair_scope: "structural",
+          category: "Transition Continuity",
+          description: "Nhân vật đổi vị trí mà không có cảnh di chuyển.",
+          suggestion: "Thêm đoạn chuyển ngắn.",
+          transition_evidence: {
+            dimension: "location",
+            previous_text: "Ca đêm chỉ còn Minh trực tại phòng ghi chép của trạm bơm.",
+            current_text: "mặt nước thực tế cuồn cuộn ở mốc 1,34m",
+          },
+        }],
+        summary: "transition contradiction",
+      }),
+      usage: ZERO_USAGE,
+    });
+
+    try {
+      const result = await auditor.auditChapter(bookDir, "Trong đêm, mặt nước thực tế cuồn cuộn ở mốc 1,34m.", 2, "other");
+
+      expect(result.parseFailed).toBe(true);
+      expect((result as any).parseFailedReason).toBe("evidence-not-bound");
+      expect((result as any).hostFindings).toEqual([]);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
   it("uses the English scaffold plus exact spelling contract for Vietnamese audit prompts", async () => {
     const root = await mkdtemp(join(tmpdir(), "inkos-auditor-lang-test-"));
     const bookDir = join(root, "book");
@@ -856,6 +934,8 @@ async function createVietnameseTransitionFixture(): Promise<{ root: string; book
     }, null, 2), "utf-8"),
     writeFile(join(chaptersDir, "0001_Moc_Nuoc.md"), [
       "# Chương 1: Mốc Nước",
+      "",
+      "Ca đêm chỉ còn Minh trực tại phòng ghi chép của trạm bơm.",
       "",
       "Vạch mực nước chạm đúng mốc 1,22m lúc 08:40.",
     ].join("\n"), "utf-8"),
