@@ -143,7 +143,7 @@ const safe = {
   runLabel,
   apiFormat: "chat",
   stream: pipelineStream,
-  reasoningEffort: "none",
+  reasoningEffort: "max",
   probeVariant,
   providerCallsAuthorized: true,
   keyPresent: false,
@@ -612,7 +612,7 @@ try {
     thinkingBudget: 0,
     apiFormat: "chat",
     stream: pipelineStream,
-    extra: { reasoning_effort: "none" },
+    extra: { reasoning_effort: "max" },
   }, { diagnostics: providerDiagnosticObserver });
   const defaultLLMConfig = {
     provider: "custom",
@@ -624,7 +624,7 @@ try {
     thinkingBudget: 0,
     apiFormat: "chat",
     stream: pipelineStream,
-    extra: { reasoning_effort: "none" },
+    extra: { reasoning_effort: "max" },
   };
   const runner = new PipelineRunner({
     client,
