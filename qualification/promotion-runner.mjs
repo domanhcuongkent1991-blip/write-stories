@@ -143,7 +143,7 @@ const safe = {
   runLabel,
   apiFormat: "chat",
   stream: pipelineStream,
-  reasoningEffort: "max",
+  reasoningEffort: "xhigh",
   probeVariant,
   providerCallsAuthorized: true,
   keyPresent: false,
@@ -612,7 +612,7 @@ try {
     thinkingBudget: 0,
     apiFormat: "chat",
     stream: pipelineStream,
-    extra: { reasoning_effort: "max" },
+    extra: { reasoning_effort: "xhigh" },
   }, { diagnostics: providerDiagnosticObserver });
   const defaultLLMConfig = {
     provider: "custom",
@@ -624,7 +624,7 @@ try {
     thinkingBudget: 0,
     apiFormat: "chat",
     stream: pipelineStream,
-    extra: { reasoning_effort: "max" },
+    extra: { reasoning_effort: "xhigh" },
   };
   const runner = new PipelineRunner({
     client,
@@ -716,7 +716,7 @@ try {
     try {
       // 25 minutes: late chapters run multi-cycle settlement recovery with
       // 120s+ calls; a 15-minute bound was killing healthy chapter attempts.
-      const operation = await bounded(`chapter-${chapterNumber}`, 25 * 60_000, (signal) =>
+      const operation = await bounded(`chapter-${chapterNumber}`, 45 * 60_000, (signal) =>
         runner.runWithAbortSignal(signal, () => runner.writeNextChapter(bookId, 1150, undefined, externalContext))
       );
       operationRecord.durationMs = operation.durationMs;
