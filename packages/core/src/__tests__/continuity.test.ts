@@ -963,6 +963,120 @@ describe("Vietnamese audit verdict repair", () => {
     }
   });
 
+  it("passes concrete bind-failure context to the repair call", async () => {
+    const { root, bookDir } = await createVietnameseTransitionFixture();
+    const auditor = createTestAuditor(root);
+    const chatSpy = vi.spyOn(ContinuityAuditor.prototype as never, "chat" as never)
+      .mockImplementationOnce((async () => ({
+        content: badEvidenceVerdict(),
+        usage: ZERO_USAGE,
+      })) as never)
+      .mockImplementationOnce((async () => ({
+        content: bindingVerdict(),
+        usage: ZERO_USAGE,
+      })) as never);
+
+    try {
+      const result = await auditor.auditChapter(
+        bookDir,
+        "Trong đêm, mặt nước thực tế cuồn cuộn ở mốc 1,34m mà không có trận mưa mới.",
+        2,
+        "other",
+      );
+
+      expect(chatSpy).toHaveBeenCalledTimes(2);
+      const repairMessages = chatSpy.mock.calls[1]?.[0] as ReadonlyArray<{ role: string; content: string }>;
+      const repairSystem = repairMessages?.[0]?.content ?? "";
+      const repairUser = repairMessages?.[1]?.content ?? "";
+      expect(repairSystem).toContain('"transition_check"');
+      expect(repairSystem).toContain("Never invent or reconstruct evidence");
+      expect(repairUser).toContain("<BEGIN_HOST_BIND_FAILURE_CONTEXT>");
+      expect(repairUser).toContain("was not found verbatim");
+      expect(repairUser).toContain("Câu không tồn tại ở chương trước.");
+      expect(result.parseFailed).not.toBe(true);
+      expect((result as any).hostFindings?.length).toBeGreaterThan(0);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps the fail-closed result when the repair re-emits paraphrased evidence", async () => {
+    const { root, bookDir } = await createVietnameseTransitionFixture();
+    const auditor = createTestAuditor(root);
+    const chatSpy = vi.spyOn(ContinuityAuditor.prototype as never, "chat" as never)
+      .mockImplementationOnce((async () => ({
+        content: badEvidenceVerdict(),
+        usage: ZERO_USAGE,
+      })) as never)
+      .mockImplementationOnce((async () => ({
+        content: JSON.stringify({
+          passed: false,
+          overall_score: 88,
+          transition_check: {
+            status: "contradiction",
+            dimensions_checked: ["time", "location", "physical-state", "device-state", "possession"],
+          },
+          issues: [{
+            severity: "critical",
+            category: "Transition Continuity",
+            description: "Mực nước đảo ngược mà không có nguyên nhân.",
+            transition_evidence: {
+              dimension: "physical-state",
+              previous_text: "Mốc nước đạt 1,22m vào sáng sớm.",
+              current_text: "nước dâng lên 1,34m trong đêm",
+            },
+          }],
+          summary: "transition contradiction",
+        }),
+        usage: ZERO_USAGE,
+      })) as never);
+
+    try {
+      const result = await auditor.auditChapter(bookDir, "Trong đêm, mặt nước trở lại 1,34m.", 2, "other");
+
+      expect(chatSpy).toHaveBeenCalledTimes(2);
+      expect(result.parseFailed).toBe(true);
+      expect((result as any).parseFailedReason).toBe("evidence-not-bound");
+      expect(result.overallScore).toBe(72);
+      expect((result as any).hostFindings).toEqual([]);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps the fail-closed result when the repaired output drops transition_check", async () => {
+    const { root, bookDir } = await createVietnameseTransitionFixture();
+    const auditor = createTestAuditor(root);
+    vi.spyOn(ContinuityAuditor.prototype as never, "chat" as never)
+      .mockImplementationOnce((async () => ({
+        content: badEvidenceVerdict(),
+        usage: ZERO_USAGE,
+      })) as never)
+      .mockImplementationOnce((async () => ({
+        content: JSON.stringify({
+          passed: false,
+          overall_score: 88,
+          issues: [{
+            severity: "critical",
+            category: "Transition Continuity",
+            description: "Mực nước đảo ngược mà không có nguyên nhân.",
+          }],
+          summary: "transition contradiction",
+        }),
+        usage: ZERO_USAGE,
+      })) as never);
+
+    try {
+      const result = await auditor.auditChapter(bookDir, "Trong đêm, mặt nước trở lại 1,34m.", 2, "other");
+
+      expect(result.parseFailed).toBe(true);
+      expect((result as any).parseFailedReason).toBe("evidence-not-bound");
+      expect(result.overallScore).toBe(72);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
   it("keeps the fail-closed result when the repair declines with the sentinel", async () => {
     const { root, bookDir } = await createVietnameseTransitionFixture();
     const auditor = createTestAuditor(root);
