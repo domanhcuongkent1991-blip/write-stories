@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import { z } from "zod";
 import type { AtomicFileWrite } from "../utils/atomic-file-set.js";
 import {
+  AUDIT_PARSE_FAILURE_REASONS,
   type AuditDecision,
   type AuditOperation,
   type AuditPhase,
@@ -74,6 +75,7 @@ export const AuditRunV1Schema = z.object({
   decision: z.enum(["pass", "repair-required", "fail", "inconclusive"]),
   passed: z.boolean(),
   parseFailed: z.boolean().optional(),
+  parseFailedReason: z.enum(AUDIT_PARSE_FAILURE_REASONS).optional(),
   overallScore: z.number().min(0).max(100).optional(),
   findings: z.array(AuditIssueSchema),
   revision: z.object({
@@ -175,6 +177,7 @@ export function createAuditRun(input: {
     decision: input.evaluation.decision,
     passed: input.evaluation.passed,
     parseFailed: input.evaluation.parseFailed,
+    parseFailedReason: input.evaluation.parseFailedReason,
     overallScore: input.evaluation.overallScore,
     findings: input.evaluation.findings.map(truncateIssue),
     revision: input.revision ?? { attempted: false, candidateProduced: false, accepted: false },

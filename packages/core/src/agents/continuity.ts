@@ -17,7 +17,12 @@ import {
 } from "../utils/outline-paths.js";
 import { join } from "node:path";
 import { resolveWritingLanguageProfile } from "../utils/language.js";
-import { computeChapterContentHash } from "../audit/chapter-audit-evaluator.js";
+import {
+  computeChapterContentHash,
+  type AuditParseFailureReason,
+} from "../audit/chapter-audit-evaluator.js";
+
+export type { AuditParseFailureReason };
 import { runWithProviderCallStage } from "../llm/provider-call-telemetry.js";
 
 const AUDIT_REPAIR_REFUSAL_PATTERN = /^\s*audit_repair_rejected\b/i;
@@ -45,6 +50,8 @@ export interface AuditResult {
   readonly summary: string;
   /** True when the auditor response itself was not parseable; callers must not auto-revise content from this result. */
   readonly parseFailed?: boolean;
+  /** Which fail-closed branch produced `parseFailed`; present only when parseFailed is true. */
+  readonly parseFailedReason?: AuditParseFailureReason;
   /** 0-100 overall quality score. Present when the auditor supports scoring. */
   readonly overallScore?: number;
   readonly tokenUsage?: {
@@ -252,6 +259,9 @@ function bindVietnameseTransitionReview(
       ...result,
       passed: false,
       parseFailed: true,
+      parseFailedReason: result.parseFailed
+        ? result.parseFailedReason ?? "unparseable-output"
+        : "transition-check-missing",
       issues: issuesWithoutRawEvidence,
       hostFindings: [],
     };
@@ -264,6 +274,7 @@ function bindVietnameseTransitionReview(
         ...result,
         passed: false,
         parseFailed: true,
+        parseFailedReason: "consistent-with-evidence",
         issues: issuesWithoutRawEvidence,
         hostFindings: [],
       };
@@ -276,6 +287,7 @@ function bindVietnameseTransitionReview(
       ...result,
       passed: false,
       parseFailed: true,
+      parseFailedReason: "inconsistent-without-evidence",
       issues: issuesWithoutRawEvidence,
       hostFindings: [],
     };
@@ -295,6 +307,7 @@ function bindVietnameseTransitionReview(
       ...result,
       passed: false,
       parseFailed: true,
+      parseFailedReason: "evidence-not-bound",
       issues: issuesWithoutRawEvidence,
       hostFindings: [],
     };
@@ -1085,6 +1098,7 @@ ${chapterContent}`;
     return {
       passed: false,
       parseFailed: true,
+      parseFailedReason: "unparseable-output",
       issues: [{
         severity: "critical",
         category: language === "en" ? "System Error" : "系统错误",

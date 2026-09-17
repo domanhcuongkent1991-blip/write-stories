@@ -299,6 +299,7 @@ async function collectChapterEvidence(chapterNumber, result) {
         passed: run.passed === true,
         overallScore: typeof run.overallScore === "number" ? run.overallScore : null,
         parseFailed: run.parseFailed === true,
+        parseFailedReason: typeof run.parseFailedReason === "string" ? run.parseFailedReason : null,
         canonicalCommitOutcome: run.canonicalCommitOutcome ?? null,
         revision: run.revision
           ? { attempted: run.revision.attempted === true, candidateProduced: run.revision.candidateProduced === true, accepted: run.revision.accepted === true }
@@ -340,6 +341,7 @@ async function collectChapterEvidence(chapterNumber, result) {
     lengthWarnings: result?.lengthWarnings ?? [],
     auditDecision: auditResult.decision ?? null,
     auditPassed: auditResult.passed === true,
+    parseFailedReason: typeof auditResult.parseFailedReason === "string" ? auditResult.parseFailedReason : null,
     minorAccepted: auditResult.minorAccepted === true,
     minorNotes: auditResult.minorNotes ?? [],
     overallScore: typeof auditResult.overallScore === "number" ? auditResult.overallScore : null,

@@ -122,6 +122,7 @@ function asEvaluation(result: AuditResult, content: string): ChapterAuditEvaluat
     passed: decision === "pass",
     findings: result.issues,
     parseFailed: result.parseFailed === true,
+    parseFailedReason: result.parseFailedReason,
     overallScore: result.overallScore,
     contentHash: result.contentHash ?? computeChapterContentHash(content),
     tokenUsage: result.tokenUsage,
@@ -303,6 +304,7 @@ export async function runChapterReviewCycle(params: {
           ...rawLlmAudit,
           passed: false,
           parseFailed: true,
+          parseFailedReason: "spelling-binding-invalid",
           summary: `${rawLlmAudit.summary} Vietnamese spelling finding lacked a valid exact content binding.`.trim(),
         }
       : rawLlmAudit;
@@ -359,6 +361,7 @@ export async function runChapterReviewCycle(params: {
       issues: evaluation.findings,
       summary: llmAudit.summary,
       parseFailed: llmAudit.parseFailed,
+      parseFailedReason: llmAudit.parseFailedReason,
       overallScore: evaluation.overallScore,
       tokenUsage: llmAudit.tokenUsage,
       decision: evaluation.decision,

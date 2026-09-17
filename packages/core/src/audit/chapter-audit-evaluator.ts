@@ -14,6 +14,21 @@ export type AuditPhase = "initial" | "post-revision" | "manual";
 export type AuditSource = "deterministic" | "state" | "llm";
 export type AuditVerification = "verified" | "unverified" | "stale";
 
+/**
+ * Stable IDs for every fail-closed path that marks an audit result parseFailed.
+ * Evidence summaries and repair feedback key off these values; they are part
+ * of the qualification evidence contract, so treat them as immutable.
+ */
+export const AUDIT_PARSE_FAILURE_REASONS = [
+  "unparseable-output",
+  "transition-check-missing",
+  "consistent-with-evidence",
+  "inconsistent-without-evidence",
+  "evidence-not-bound",
+  "spelling-binding-invalid",
+] as const;
+export type AuditParseFailureReason = (typeof AUDIT_PARSE_FAILURE_REASONS)[number];
+
 export interface TokenUsage {
   readonly promptTokens: number;
   readonly completionTokens: number;
@@ -25,6 +40,8 @@ export interface ChapterAuditEvaluation {
   readonly passed: boolean;
   readonly findings: ReadonlyArray<AuditIssue>;
   readonly parseFailed: boolean;
+  /** Stable binder-branch ID when parseFailed is true. */
+  readonly parseFailedReason?: AuditParseFailureReason;
   readonly overallScore?: number;
   readonly contentHash: string;
   readonly tokenUsage?: TokenUsage;
@@ -200,6 +217,7 @@ export function evaluateChapterAudit(input: ChapterAuditEvaluationInput): Chapte
     passed: decision === "pass",
     findings,
     parseFailed,
+    ...(parseFailed ? { parseFailedReason: input.llmAudit.parseFailedReason } : {}),
     overallScore: input.llmAudit.overallScore,
     contentHash,
     tokenUsage: input.llmAudit.tokenUsage,

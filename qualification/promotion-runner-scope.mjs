@@ -81,6 +81,9 @@ export function collectChapterFailureDimensions(operationRecord) {
     const minorAccepted = chapter.minorAccepted === true;
     if (chapter.auditDecision !== "pass" && !minorAccepted) dimensions.push("audit-decision");
     if (chapter.auditPassed !== true && !minorAccepted) dimensions.push("audit-passed");
+    if (typeof chapter.parseFailedReason === "string" && chapter.parseFailedReason.length > 0) {
+      dimensions.push(`binder-branch:${chapter.parseFailedReason}`);
+    }
     if (chapter.hardInRange !== true) dimensions.push("hard-range");
     if (chapter.countingMode !== "vi_wordlike_tokens_v1") dimensions.push("counting-mode");
     if (chapter.verifiedBlockerCount !== 0 && !minorAccepted) dimensions.push("verified-blocker");

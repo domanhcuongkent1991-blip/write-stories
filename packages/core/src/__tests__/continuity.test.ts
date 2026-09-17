@@ -297,6 +297,7 @@ describe("ContinuityAuditor", () => {
       const result = await auditor.auditChapter(bookDir, "Trong đêm, mặt nước trở lại 1,34m.", 2, "other");
 
       expect(result.parseFailed).toBe(true);
+      expect((result as any).parseFailedReason).toBe("evidence-not-bound");
       expect((result as any).hostFindings).toEqual([]);
       expect(result.issues.some((issue) => Object.prototype.hasOwnProperty.call(issue, "transitionEvidence"))).toBe(false);
     } finally {
@@ -361,6 +362,75 @@ describe("ContinuityAuditor", () => {
       const result = await auditor.auditChapter(bookDir, "Mực nước giữ ở 1,22m.", 2, "other");
 
       expect(result.parseFailed).toBe(true);
+      expect((result as any).parseFailedReason).toBe("transition-check-missing");
+      expect((result as any).hostFindings).toEqual([]);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("marks a Vietnamese transition audit inconclusive when a consistent check still carries evidence", async () => {
+    const { root, bookDir } = await createVietnameseTransitionFixture();
+    const auditor = createTestAuditor(root);
+    vi.spyOn(ContinuityAuditor.prototype as never, "chat" as never).mockResolvedValue({
+      content: JSON.stringify({
+        passed: false,
+        overall_score: 91,
+        transition_check: {
+          status: "consistent",
+          dimensions_checked: ["time", "location", "physical-state", "device-state", "possession"],
+        },
+        issues: [{
+          severity: "critical",
+          repair_scope: "structural",
+          category: "Transition Continuity",
+          description: "Kết luận nhất quán nhưng vẫn nêu bằng chứng bất nhất.",
+          suggestion: "Loại bỏ bằng chứng hoặc đổi trạng thái sang contradiction.",
+          transition_evidence: {
+            dimension: "physical-state",
+            previous_text: "Vạch mực nước chạm đúng mốc 1,22m lúc 08:40.",
+            current_text: "mặt nước thực tế cuồn cuộn ở mốc 1,34m",
+          },
+        }],
+        summary: "transition consistent",
+      }),
+      usage: ZERO_USAGE,
+    });
+
+    try {
+      const result = await auditor.auditChapter(bookDir, "Trong đêm, mặt nước thực tế cuồn cuộn ở mốc 1,34m.", 2, "other");
+
+      expect(result.parseFailed).toBe(true);
+      expect((result as any).parseFailedReason).toBe("consistent-with-evidence");
+      expect((result as any).hostFindings).toEqual([]);
+      expect(result.issues.some((issue) => Object.prototype.hasOwnProperty.call(issue, "transitionEvidence"))).toBe(false);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("marks a Vietnamese transition audit inconclusive when a contradiction has no evidence", async () => {
+    const { root, bookDir } = await createVietnameseTransitionFixture();
+    const auditor = createTestAuditor(root);
+    vi.spyOn(ContinuityAuditor.prototype as never, "chat" as never).mockResolvedValue({
+      content: JSON.stringify({
+        passed: false,
+        overall_score: 78,
+        transition_check: {
+          status: "contradiction",
+          dimensions_checked: ["time", "location", "physical-state", "device-state", "possession"],
+        },
+        issues: [],
+        summary: "transition contradiction without evidence",
+      }),
+      usage: ZERO_USAGE,
+    });
+
+    try {
+      const result = await auditor.auditChapter(bookDir, "Mực nước giữ ở 1,22m.", 2, "other");
+
+      expect(result.parseFailed).toBe(true);
+      expect((result as any).parseFailedReason).toBe("inconsistent-without-evidence");
       expect((result as any).hostFindings).toEqual([]);
     } finally {
       await rm(root, { recursive: true, force: true });
@@ -946,6 +1016,7 @@ describe("Vietnamese audit verdict repair", () => {
 
     const result = (auditor as any).parseAuditResult("模型只返回了一段散文，没有 JSON。", "zh");
     expect(result.parseFailed).toBe(true);
+    expect(result.parseFailedReason).toBe("unparseable-output");
     expect(chatSpy).not.toHaveBeenCalled();
   });
 });
