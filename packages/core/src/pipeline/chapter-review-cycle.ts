@@ -5,7 +5,7 @@ import type { WriteChapterOutput } from "../agents/writer.js";
 import type { ChapterIntent, ChapterMemo, ContextPackage, RuleStack } from "../models/input-governance.js";
 import type { LengthSpec } from "../models/length-governance.js";
 import { countChapterLength, isOutsideHardRange } from "../utils/length-metrics.js";
-import { computeChapterContentHash } from "../audit/chapter-audit-evaluator.js";
+import { computeChapterContentHash, type AuditReAuditTelemetry } from "../audit/chapter-audit-evaluator.js";
 import type { ChapterAuditEvaluation } from "../audit/chapter-audit-evaluator.js";
 import { decideAudit, evaluateRevisionCandidate } from "../audit/audit-policy.js";
 import { createAuditRun, type AuditRunV1 } from "../audit/audit-run.js";
@@ -299,7 +299,7 @@ export async function runChapterReviewCycle(params: {
     const spellingBinding = params.lengthSpec.countingMode === "vi_wordlike_tokens_v1"
       ? bindVietnameseAuditorSpellingFindings(content, rawLlmAudit.issues)
       : { findings: [] as ReadonlyArray<AuditIssue>, invalid: false };
-    const llmAudit: AuditResult = spellingBinding.invalid
+    let llmAudit: AuditResult = spellingBinding.invalid
       ? {
           ...rawLlmAudit,
           passed: false,
@@ -314,6 +314,50 @@ export async function runChapterReviewCycle(params: {
         auditorTokenUsage ?? { promptTokens: 0, completionTokens: 0, totalTokens: 0 },
         llmAudit.tokenUsage,
       );
+    }
+    // One bounded in-run re-audit: a full second audit attempt when the first
+    // could not be parsed or bound. The verdict-repair inside auditChapter is
+    // format recovery only; this re-issues the audit itself. Fail-closed is
+    // preserved — if the re-audit also fails to parse, its fail-closed result
+    // stands.
+    let reAudit: AuditReAuditTelemetry | undefined;
+    if (llmAudit.parseFailed === true) {
+      const reAuditRaw = await runWithProviderCallStage(
+        "re-audit",
+        () => params.auditor.auditChapter(
+          params.bookDir,
+          content,
+          params.chapterNumber,
+          params.book.genre,
+          params.reducedControlInput
+            ? { ...params.reducedControlInput, ...(options ?? {}) }
+            : options,
+        ),
+      );
+      const reAuditSpelling = params.lengthSpec.countingMode === "vi_wordlike_tokens_v1"
+        ? bindVietnameseAuditorSpellingFindings(content, reAuditRaw.issues)
+        : { findings: [] as ReadonlyArray<AuditIssue>, invalid: false };
+      const reAuditLlm: AuditResult = reAuditSpelling.invalid
+        ? {
+            ...reAuditRaw,
+            passed: false,
+            parseFailed: true,
+            parseFailedReason: "spelling-binding-invalid",
+            summary: `${reAuditRaw.summary} Vietnamese spelling finding lacked a valid exact content binding.`.trim(),
+          }
+        : reAuditRaw;
+      totalUsage = params.addUsage(totalUsage, reAuditLlm.tokenUsage);
+      if (reAuditLlm.tokenUsage) {
+        auditorTokenUsage = params.addUsage(
+          auditorTokenUsage ?? { promptTokens: 0, completionTokens: 0, totalTokens: 0 },
+          reAuditLlm.tokenUsage,
+        );
+      }
+      reAudit = {
+        attempted: true,
+        priorParseFailedReason: llmAudit.parseFailedReason ?? "unparseable-output",
+      };
+      llmAudit = { ...reAuditLlm, reAudit };
     }
     const aiTellsResult = params.analyzeAITells(content);
     const sensitiveResult = params.analyzeSensitiveWords(content);
@@ -330,7 +374,7 @@ export async function runChapterReviewCycle(params: {
       ...aiTellsResult.issues,
       ...sensitiveResult.issues,
       ...postWriteIssues,
-      ...(rawLlmAudit.hostFindings ?? []),
+      ...(llmAudit.hostFindings ?? []),
       ...spellingBinding.findings,
     ]
       .map((issue) => issue.repairTarget ? issue : { ...issue, repairTarget: "prose" as const });
@@ -362,6 +406,7 @@ export async function runChapterReviewCycle(params: {
       summary: llmAudit.summary,
       parseFailed: llmAudit.parseFailed,
       parseFailedReason: llmAudit.parseFailedReason,
+      reAudit: llmAudit.reAudit,
       overallScore: evaluation.overallScore,
       tokenUsage: llmAudit.tokenUsage,
       decision: evaluation.decision,

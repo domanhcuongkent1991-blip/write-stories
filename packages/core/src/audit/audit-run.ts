@@ -76,6 +76,10 @@ export const AuditRunV1Schema = z.object({
   passed: z.boolean(),
   parseFailed: z.boolean().optional(),
   parseFailedReason: z.enum(AUDIT_PARSE_FAILURE_REASONS).optional(),
+  reAudit: z.object({
+    attempted: z.literal(true),
+    priorParseFailedReason: z.enum(AUDIT_PARSE_FAILURE_REASONS),
+  }).optional(),
   overallScore: z.number().min(0).max(100).optional(),
   findings: z.array(AuditIssueSchema),
   revision: z.object({
@@ -178,6 +182,7 @@ export function createAuditRun(input: {
     passed: input.evaluation.passed,
     parseFailed: input.evaluation.parseFailed,
     parseFailedReason: input.evaluation.parseFailedReason,
+    reAudit: input.evaluation.reAudit,
     overallScore: input.evaluation.overallScore,
     findings: input.evaluation.findings.map(truncateIssue),
     revision: input.revision ?? { attempted: false, candidateProduced: false, accepted: false },

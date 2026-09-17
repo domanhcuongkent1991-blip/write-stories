@@ -17,6 +17,7 @@ export const ProviderCallStageSchema = z.enum([
   "settlement-recovery",
   "initial-auditor",
   "post-candidate-auditor",
+  "re-audit",
   "auditor-verdict-repair",
 ]);
 export type ProviderCallStage = z.infer<typeof ProviderCallStageSchema>;

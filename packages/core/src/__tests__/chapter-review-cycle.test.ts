@@ -227,6 +227,80 @@ describe("runChapterReviewCycle v9", () => {
     expect(result.auditResult.parseFailed).toBe(true);
   });
 
+  it("re-audits once when the first audit cannot parse and accepts the recovered verdict", async () => {
+    const auditChapter = vi.fn()
+      .mockResolvedValueOnce(createAuditResult({
+        passed: false,
+        overallScore: 0,
+        parseFailed: true,
+        parseFailedReason: "unparseable-output",
+        summary: "审稿输出解析失败",
+      }))
+      .mockResolvedValueOnce(createAuditResult({ passed: true, decision: "pass", overallScore: 92 }));
+    const reviseChapter = vi.fn().mockResolvedValue({
+      revisedContent: "a".repeat(200),
+      wordCount: 200,
+      fixedIssues: [],
+      updatedState: "",
+      updatedLedger: "",
+      updatedHooks: "",
+      tokenUsage: ZERO_USAGE,
+    });
+    const result = await runChapterReviewCycle({
+      ...baseParams,
+      initialOutput: {
+        content: "b".repeat(200),
+        wordCount: 200,
+        postWriteErrors: [],
+      },
+      createReviser: () => ({ reviseChapter }),
+      auditor: { auditChapter },
+      maxReviewIterations: 1,
+    });
+
+    expect(auditChapter).toHaveBeenCalledTimes(2);
+    expect(result.auditResult.parseFailed).not.toBe(true);
+    expect(result.auditResult.reAudit).toEqual({ attempted: true, priorParseFailedReason: "unparseable-output" });
+    expect(result.auditResult.decision).toBe("pass");
+    expect(reviseChapter).not.toHaveBeenCalled();
+  });
+
+  it("keeps the fail-closed result when the re-audit also cannot parse", async () => {
+    const auditChapter = vi.fn().mockResolvedValue(createAuditResult({
+      passed: false,
+      overallScore: 0,
+      parseFailed: true,
+      parseFailedReason: "evidence-not-bound",
+      summary: "transition evidence did not bind",
+    }));
+    const reviseChapter = vi.fn().mockResolvedValue({
+      revisedContent: "a".repeat(200),
+      wordCount: 200,
+      fixedIssues: ["should not run"],
+      updatedState: "",
+      updatedLedger: "",
+      updatedHooks: "",
+      tokenUsage: ZERO_USAGE,
+    });
+    const result = await runChapterReviewCycle({
+      ...baseParams,
+      initialOutput: {
+        content: "b".repeat(200),
+        wordCount: 200,
+        postWriteErrors: [],
+      },
+      createReviser: () => ({ reviseChapter }),
+      auditor: { auditChapter },
+      maxReviewIterations: 1,
+    });
+
+    expect(auditChapter).toHaveBeenCalledTimes(2);
+    expect(result.auditResult.parseFailed).toBe(true);
+    expect(result.auditResult.parseFailedReason).toBe("evidence-not-bound");
+    expect(result.auditResult.reAudit).toEqual({ attempted: true, priorParseFailedReason: "evidence-not-bound" });
+    expect(result.revised).toBe(false);
+  });
+
   it("turns hard-range drift into an explicit reviser issue and only passes after repair", async () => {
     const shortDraft = "短".repeat(80);
     const repairedDraft = "修".repeat(220);

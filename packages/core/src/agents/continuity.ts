@@ -20,6 +20,7 @@ import { resolveWritingLanguageProfile } from "../utils/language.js";
 import {
   computeChapterContentHash,
   type AuditParseFailureReason,
+  type AuditReAuditTelemetry,
 } from "../audit/chapter-audit-evaluator.js";
 
 export type { AuditParseFailureReason };
@@ -52,6 +53,8 @@ export interface AuditResult {
   readonly parseFailed?: boolean;
   /** Which fail-closed branch produced `parseFailed`; present only when parseFailed is true. */
   readonly parseFailedReason?: AuditParseFailureReason;
+  /** Present when the bounded in-run re-audit ran for this assessment. */
+  readonly reAudit?: AuditReAuditTelemetry;
   /** 0-100 overall quality score. Present when the auditor supports scoring. */
   readonly overallScore?: number;
   readonly tokenUsage?: {

@@ -40,6 +40,7 @@ const PROVIDER_STAGE_CONTEXT = Object.freeze({
   "candidate-settlement": Object.freeze({ agent: "writer", substage: "candidate-settlement" }),
   "initial-auditor": Object.freeze({ agent: "auditor", substage: "initial" }),
   "post-candidate-auditor": Object.freeze({ agent: "auditor", substage: "post-candidate" }),
+  "re-audit": Object.freeze({ agent: "auditor", substage: "re-audit" }),
   "auditor-verdict-repair": Object.freeze({ agent: "auditor", substage: "verdict-repair" }),
 });
 

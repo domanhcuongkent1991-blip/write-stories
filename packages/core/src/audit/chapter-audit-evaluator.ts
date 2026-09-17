@@ -29,6 +29,12 @@ export const AUDIT_PARSE_FAILURE_REASONS = [
 ] as const;
 export type AuditParseFailureReason = (typeof AUDIT_PARSE_FAILURE_REASONS)[number];
 
+/** Telemetry for the bounded in-run re-audit: present only when a second full audit was issued after a parse failure. */
+export interface AuditReAuditTelemetry {
+  readonly attempted: true;
+  readonly priorParseFailedReason: AuditParseFailureReason;
+}
+
 export interface TokenUsage {
   readonly promptTokens: number;
   readonly completionTokens: number;
@@ -42,6 +48,8 @@ export interface ChapterAuditEvaluation {
   readonly parseFailed: boolean;
   /** Stable binder-branch ID when parseFailed is true. */
   readonly parseFailedReason?: AuditParseFailureReason;
+  /** Present when the bounded in-run re-audit ran for this assessment. */
+  readonly reAudit?: AuditReAuditTelemetry;
   readonly overallScore?: number;
   readonly contentHash: string;
   readonly tokenUsage?: TokenUsage;
@@ -218,6 +226,7 @@ export function evaluateChapterAudit(input: ChapterAuditEvaluationInput): Chapte
     findings,
     parseFailed,
     ...(parseFailed ? { parseFailedReason: input.llmAudit.parseFailedReason } : {}),
+    ...(input.llmAudit.reAudit ? { reAudit: input.llmAudit.reAudit } : {}),
     overallScore: input.llmAudit.overallScore,
     contentHash,
     tokenUsage: input.llmAudit.tokenUsage,
