@@ -137,6 +137,55 @@ defer:
     expect(ledger.defer).toEqual([]);
   });
 
+  it("ignores Vietnamese negation placeholders under empty slots (luna-29 ch5)", () => {
+    // The exact resolve: line that killed luna-29 ch5: the model wrote a full
+    // Vietnamese sentence meaning "none" and the diacritic-truncating ID regex
+    // collapsed "Không" to the bogus id "Kh".
+    const memo = `## Hook ledger for this chapter
+advance:
+- H007 "胖虎借条" → planted
+resolve:
+- Không có hook nào được giải quyết hoàn toàn trong chương này.
+defer:
+- Chưa đến lúc
+- ko
+- Chẳng có gì để hoãn
+`;
+    const ledger = parseHookLedger(memo, new Set(["H007"]));
+    expect(ledger.advance.map((e) => e.id)).toEqual(["H007"]);
+    expect(ledger.resolve).toEqual([]);
+    expect(ledger.defer).toEqual([]);
+  });
+
+  it("does not treat a real diacritic-free slug as a negation placeholder", () => {
+    // A genuine hook slug that merely starts with the letters "khong"/"chua"
+    // is one hyphenated token with no diacritics, so it must still parse as an
+    // ID. The placeholder regex is anchored ^...$ on the whole token.
+    const memo = `## Hook ledger for this chapter
+advance:
+- khong-co-nhan-chung "no witnesses" → pressured
+- chua-ro-dong-co "unknown motive" → pressured
+`;
+    const ledger = parseHookLedger(memo, new Set(["khong-co-nhan-chung", "chua-ro-dong-co"]));
+    expect(ledger.advance.map((e) => e.id)).toEqual(["khong-co-nhan-chung", "chua-ro-dong-co"]);
+  });
+
+  it("treats an entirely absent subsection as empty", () => {
+    // A memo may simply omit a subsection; parseHookLedger must return it empty
+    // rather than carrying entries across from a sibling subsection.
+    const memo = `## Hook ledger for this chapter
+open:
+- [new] something new || reason
+advance:
+- H007 "胖虎借条" → planted
+`;
+    const ledger = parseHookLedger(memo, new Set(["H007"]));
+    expect(ledger.resolve).toEqual([]);
+    expect(ledger.defer).toEqual([]);
+    expect(ledger.advance.map((e) => e.id)).toEqual(["H007"]);
+    expect(ledger.newOpenCount).toBe(1);
+  });
+
   it("reclassifies an unknown-ID open: line as a new hook when known IDs are supplied", () => {
     // The luna-28 ch5 failure: a Vietnamese prose lead "Khóa ..." under open:
     // parsed to a bogus truncated ID "Kh" and then failed the contract check.
@@ -374,10 +423,12 @@ advance:
     // hooks), so a Vietnamese prose lead there stays fail-closed — but the
     // error now quotes the full line so the correction retry and evidence are
     // diagnosable instead of showing only the truncated token.
+    // Note: negation leads ("Không ...") are placeholders since the luna-29
+    // fix, so this test uses a non-negation prose lead ("Truy ..." → "Truy").
     expect(() => hookOpsFromLedger(
-      `## Hook ledger for this chapter\ndefer:\n- Không defer hook nào cả`,
+      `## Hook ledger for this chapter\ndefer:\n- Truy dấu vết của hồ sơ bị thiếu`,
       { activeHooks: [], chapterNumber: 5 },
-    )).toThrow(/line "Không defer hook nào cả"/u);
+    )).toThrow(/line "Truy dấu vết của hồ sơ bị thiếu"/u);
   });
 
   it("keeps a generic advance note without a stable ID as an empty typed operation", () => {

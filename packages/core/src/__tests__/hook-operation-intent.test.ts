@@ -132,6 +132,20 @@ describe("canonical hook-operation intent V2", () => {
       .toThrow(/unknown stable hook ID H999/i);
   });
 
+  it("teaches the empty-slot '- none' fix when a prose lead is misread as an ID", () => {
+    // luna-29 ch5: a Vietnamese prose sentence under resolve: was truncated to
+    // a bogus ID and the bounded-correction retry repeated it blindly because
+    // the feedback never explained the empty-slot case. The message must now
+    // point the planner at writing "- none".
+    const memo = governedMemoBody.replace(
+      "- H006 \"signal manipulation device\" -> the inspection confirms the physical device",
+      "- Truy dấu vết còn lại của thiết bị -> pressured",
+    );
+
+    expect(() => bindExpectedHookOperationsV2(memo, { activeHooks, chapterNumber: 2 }))
+      .toThrow(/write exactly "- none"/i);
+  });
+
   it("rejects duplicate and contradictory operations instead of deduplicating them", () => {
     const duplicate = governedMemoBody.replace(
       "- H006 \"signal manipulation device\" -> the inspection confirms the physical device",

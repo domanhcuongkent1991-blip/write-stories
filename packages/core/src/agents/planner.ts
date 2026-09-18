@@ -1292,11 +1292,16 @@ function assertFreshMemoGovernance(
       // Quote the raw line and its subsection: the truncated token alone ("Kh"
       // from a Vietnamese prose lead like "Khóa đường...") is undiagnosable for
       // both the bounded correction retry and the qualification evidence.
+      // The last sentence matters for correction: luna-29 ch5 showed the model
+      // repeating an empty-slot prose sentence ("Không có hook nào...") across
+      // retries because the feedback only taught the new-hook case, not the
+      // empty-slot case it was actually in.
       throw new PlannerParseError(
         `unknown stable hook ID ${entry.id} in fresh memo (subsection "${subsection}"): `
         + `the line "${entry.rawLine}" does not begin with the verbatim ID of an existing hook. `
         + `Under advance/resolve/defer every line must start with an existing hook ID; `
-        + `a brand-new hook belongs under open: written exactly as "- [new] description || reason".`,
+        + `a brand-new hook belongs under open: written exactly as "- [new] description || reason". `
+        + `If this subsection is empty (no hook to ${subsection} this chapter), write exactly "- none" on its own line — never a prose sentence.`,
       );
     }
     const actionsForHook = seenActions.get(entry.id) ?? new Set<ExpectedHookOperationAction>();

@@ -64,9 +64,14 @@ const SUBSECTION_KEYS: ReadonlyArray<keyof HookLedger> = ["open", "advance", "re
 /**
  * Tokens that look like hook_ids but are placeholders meaning "no hooks in
  * this slot". Writers sometimes emit "- 无" or "- none" under an empty slot
- * instead of leaving it blank.
+ * instead of leaving it blank. Vietnamese negations (không/chưa/ko/chẳng) are
+ * included because a VI planner writes "- Không có hook nào..." for an empty
+ * slot; the ID regex below stops at the first diacritic, so without this the
+ * line collapses to the bogus id "Kh"/"Ch". The pattern is anchored ^...$ and
+ * matched against a whole whitespace-delimited token, so a real slug such as
+ * "khong-co-nhan-chung" (one hyphenated token, no diacritics) never matches.
  */
-const PLACEHOLDER_TOKENS = /^(无|空|none|nil|null|暂无|n\/a|na|n-a|tbd|todo|待定)$/i;
+const PLACEHOLDER_TOKENS = /^(无|空|none|nil|null|暂无|n\/a|na|n-a|tbd|todo|待定|không|chưa|ko|chẳng)$/i;
 
 /** Subsection heading words that must not be parsed as hook_ids. */
 const SUBSECTION_WORDS = /^(open|advance|resolve|defer|new)$/i;
@@ -402,7 +407,8 @@ export function bindExpectedHookOperationsV2(
     const hook = knownHooks.get(entry.id);
     if (!hook) {
       throw new HookOperationContractError(
-        `unknown stable hook ID ${entry.id} (line "${entry.rawLine}" does not begin with an existing hook ID)`,
+        `unknown stable hook ID ${entry.id} (line "${entry.rawLine}" does not begin with an existing hook ID); `
+        + `if this line was meant to express an empty slot, write exactly "- none" instead of a prose sentence`,
       );
     }
     if (action === "resolve" && entry.descriptor.trim().length === 0) {
