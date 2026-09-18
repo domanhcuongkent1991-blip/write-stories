@@ -17,6 +17,12 @@ import {
 } from "../utils/outline-paths.js";
 import { join } from "node:path";
 import { resolveWritingLanguageProfile } from "../utils/language.js";
+import { parsePendingHooksMarkdown } from "../utils/memory-retrieval.js";
+import {
+  clampAuditorHookEscalation,
+  computeHookSeverityCaps,
+  renderHostHookSeverityPolicy,
+} from "../utils/hook-audit-policy.js";
 import {
   computeChapterContentHash,
   type AuditParseFailureReason,
@@ -993,13 +999,25 @@ overall_score 评分校准：
         : `\n## 上一章全文（用于衔接检查）\n${previousChapter}\n`
       : "";
 
+    // Deterministic host policy for Hook Check severity: a promoted core hook
+    // this chapter's memo already services, still inside the staleness window,
+    // is capped at warning (see utils/hook-audit-policy.ts). Same ledger state
+    // was graded info in luna-20 and critical in luna-26 — the cap removes
+    // that coin-flip from the auditor's hands.
+    const hostHookCaps = computeHookSeverityCaps({
+      hooks: hooks === "(文件不存在)" ? [] : parsePendingHooksMarkdown(hooks),
+      chapterNumber,
+      memoBody: options?.chapterMemo?.body,
+    });
+    const hostHookPolicyBlock = renderHostHookSeverityPolicy(hostHookCaps, isEnglish ? "en" : "zh");
+
     const userPrompt = isEnglish
       ? `Review chapter ${chapterNumber}.
 
 ## Current State Card
 ${currentState}
 ${ledgerBlock}
-${hooksBlock}${volumeSummariesBlock}${subplotBlock}${emotionalBlock}${matrixBlock}${summariesBlock}${canonBlock}${fanficCanonBlock}${reducedControlBlock}${memoBlock}${prevChapterBlock}${styleGuideBlock}
+${hooksBlock}${volumeSummariesBlock}${subplotBlock}${emotionalBlock}${matrixBlock}${summariesBlock}${canonBlock}${fanficCanonBlock}${reducedControlBlock}${memoBlock}${hostHookPolicyBlock}${prevChapterBlock}${styleGuideBlock}
 
 ## Chapter Content Under Review
 ${chapterContent}`
@@ -1008,7 +1026,7 @@ ${chapterContent}`
 ## 当前状态卡
 ${currentState}
 ${ledgerBlock}
-${hooksBlock}${volumeSummariesBlock}${subplotBlock}${emotionalBlock}${matrixBlock}${summariesBlock}${canonBlock}${fanficCanonBlock}${reducedControlBlock}${memoBlock}${prevChapterBlock}${styleGuideBlock}
+${hooksBlock}${volumeSummariesBlock}${subplotBlock}${emotionalBlock}${matrixBlock}${summariesBlock}${canonBlock}${fanficCanonBlock}${reducedControlBlock}${memoBlock}${hostHookPolicyBlock}${prevChapterBlock}${styleGuideBlock}
 
 ## 待审章节内容
 ${chapterContent}`;
@@ -1017,14 +1035,22 @@ ${chapterContent}`;
       { role: "system" as const, content: systemPrompt },
       { role: "user" as const, content: userPrompt },
     ];
-    const chatOptions = { temperature: options?.temperature ?? 0.3 };
+    // Audit sampling must be as repeatable as possible: the qualification
+    // campaign measured 68/78/72 score swings on near-identical chapters at
+    // temperature 0.3, and identical ledger states were rated info vs critical
+    // across runs. Callers may still override explicitly.
+    const chatOptions = { temperature: options?.temperature ?? 0 };
 
     // Use web search for fact verification when eraResearch is enabled
     const response = gp.eraResearch
       ? await this.chatWithSearch(chatMessages, chatOptions)
       : await this.chat(chatMessages, chatOptions);
 
-    const parsedResult = this.parseAuditResult(response.content, resolvedLanguage);
+    const rawParsedResult = this.parseAuditResult(response.content, resolvedLanguage);
+    const parsedResult: AuditResult = {
+      ...rawParsedResult,
+      issues: clampAuditorHookEscalation(rawParsedResult.issues, hostHookCaps),
+    };
     const boundResult = isVietnamese && previousChapter
       ? bindVietnameseTransitionReview(previousChapter, chapterContent, parsedResult)
       : parsedResult;
@@ -1050,7 +1076,11 @@ ${chapterContent}`;
           totalTokens: (response.usage?.totalTokens ?? 0) + repaired.usage.totalTokens,
         }
       : response.usage;
-    return { ...repaired.result, tokenUsage: mergedUsage };
+    const repairedResult: AuditResult = {
+      ...repaired.result,
+      issues: clampAuditorHookEscalation(repaired.result.issues, hostHookCaps),
+    };
+    return { ...repairedResult, tokenUsage: mergedUsage };
   }
 
   private parseAuditResult(content: string, language: PromptLanguage): AuditResult {

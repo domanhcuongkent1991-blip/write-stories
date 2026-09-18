@@ -895,6 +895,152 @@ describe("ContinuityAuditor", () => {
       await rm(root, { recursive: true, force: true });
     }
   });
+
+  it("injects the host hook severity policy and clamps serviced-hook criticals", async () => {
+    const root = await mkdtemp(join(tmpdir(), "inkos-auditor-hook-cap-"));
+    const bookDir = join(root, "book");
+    const storyDir = join(bookDir, "story");
+    await mkdir(storyDir, { recursive: true });
+
+    // 13-column Phase 7 hotfix 2 ledger row: H004 is promoted + core and
+    // deferred, mirroring the luna-26 chapter-5 evidence.
+    const hookLedger = [
+      "# Pending Hooks",
+      "",
+      "| hook_id | start_chapter | type | status | last_advanced | expected_payoff | payoff_timing | depends_on | pays_off_in_arc | core_hook | half_life | promoted | notes |",
+      "|---|---|---|---|---|---|---|---|---|---|---|---|---|",
+      "| H004 | 0 | world_state | deferred | 0 | Ecoapi source code patch contains a hardcoded telemetry dampening function signed by Vuong Trinh | slow-burn | [H001] | Volume 2 Chapter 5 | true | 30 | true | Background story core link to corporate fraud. |",
+      "",
+    ].join("\n");
+
+    await Promise.all([
+      writeFile(join(bookDir, "book.json"), JSON.stringify({ id: "hook-cap-book", language: "vi" }), "utf-8"),
+      writeFile(join(storyDir, "current_state.md"), "# Current State\n", "utf-8"),
+      writeFile(join(storyDir, "pending_hooks.md"), hookLedger, "utf-8"),
+      writeFile(join(storyDir, "chapter_summaries.md"), "# Chapter Summaries\n", "utf-8"),
+      writeFile(join(storyDir, "style_guide.md"), "# Style\n", "utf-8"),
+    ]);
+
+    const auditor = new ContinuityAuditor({
+      client: {
+        provider: "openai",
+        apiFormat: "chat",
+        stream: false,
+        defaults: {
+          temperature: 0.7,
+          maxTokens: 4096,
+          thinkingBudget: 0, maxTokensCap: null,
+          extra: {},
+        },
+      },
+      model: "test-model",
+      projectRoot: root,
+    });
+
+    const auditVerdict = {
+      passed: false,
+      overall_score: 78,
+      issues: [
+        {
+          severity: "critical",
+          category: "Hook Check",
+          description: "Hook H004 có promoted=true và core_hook=true nhưng vẫn chưa được xử lý tại cuối Volume 2.",
+          suggestion: "Resolve or defer with an updated carried-over plan.",
+        },
+        {
+          severity: "critical",
+          category: "OOC Check",
+          description: "Nhân vật H004-reacts-flat trong cảnh đối đầu.",
+          suggestion: "Sửa cảm xúc.",
+        },
+      ],
+      summary: "Hook debt blocks the chapter",
+    };
+
+    const chatSpy = vi.spyOn(ContinuityAuditor.prototype as never, "chat" as never).mockResolvedValue({
+      content: JSON.stringify(auditVerdict),
+      usage: ZERO_USAGE,
+    });
+
+    const memoBody = [
+      "## Hook ledger for this chapter",
+      "defer:",
+      "- H004 carried over — still blocked by H001 evidence chain",
+    ].join("\n");
+
+    try {
+      const result = await auditor.auditChapter(bookDir, "Chapter body.", 5, "xuanhuan", {
+        chapterMemo: {
+          chapter: 5,
+          goal: "Bảo toàn chứng cứ",
+          isGoldenOpening: false,
+          body: memoBody,
+          threadRefs: [],
+        },
+      });
+
+      const messages = chatSpy.mock.calls[0]?.[0] as
+        | ReadonlyArray<{ content: string }>
+        | undefined;
+      const userPrompt = messages?.[1]?.content ?? "";
+      // Prompt tells the auditor the host policy before it scores.
+      expect(userPrompt).toContain("## Host hook severity policy (deterministic)");
+      expect(userPrompt).toContain("H004");
+
+      // The Hook Check critical quoting H004 is downgraded; the unrelated
+      // OOC critical survives untouched.
+      const hookFinding = result.issues.find((issue) => issue.category === "Hook Check");
+      const oocFinding = result.issues.find((issue) => issue.category === "OOC Check");
+      expect(hookFinding?.severity).toBe("warning");
+      expect(hookFinding?.description).toContain("host cap");
+      expect(oocFinding?.severity).toBe("critical");
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("sends the audit at temperature 0 by default", async () => {
+    const root = await mkdtemp(join(tmpdir(), "inkos-auditor-temp0-"));
+    const bookDir = join(root, "book");
+    const storyDir = join(bookDir, "story");
+    await mkdir(storyDir, { recursive: true });
+
+    await Promise.all([
+      writeFile(join(storyDir, "current_state.md"), "# Current State\n", "utf-8"),
+      writeFile(join(storyDir, "pending_hooks.md"), "# Pending Hooks\n", "utf-8"),
+      writeFile(join(storyDir, "chapter_summaries.md"), "# Chapter Summaries\n", "utf-8"),
+      writeFile(join(storyDir, "style_guide.md"), "# Style\n", "utf-8"),
+    ]);
+
+    const auditor = new ContinuityAuditor({
+      client: {
+        provider: "openai",
+        apiFormat: "chat",
+        stream: false,
+        defaults: {
+          temperature: 0.7,
+          maxTokens: 4096,
+          thinkingBudget: 0, maxTokensCap: null,
+          extra: {},
+        },
+      },
+      model: "test-model",
+      projectRoot: root,
+    });
+
+    const chatSpy = vi.spyOn(ContinuityAuditor.prototype as never, "chat" as never).mockResolvedValue({
+      content: JSON.stringify({ passed: true, issues: [], summary: "ok" }),
+      usage: ZERO_USAGE,
+    });
+
+    try {
+      await auditor.auditChapter(bookDir, "Chapter body.", 3, "xuanhuan");
+      const options = (chatSpy.mock.calls[0] as ReadonlyArray<unknown>)[1] as { temperature?: number };
+      expect(options.temperature).toBe(0);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
 });
 
 function createTestAuditor(projectRoot: string): ContinuityAuditor {
