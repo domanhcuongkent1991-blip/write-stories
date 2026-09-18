@@ -136,6 +136,52 @@ defer:
     expect(ledger.resolve).toEqual([]);
     expect(ledger.defer).toEqual([]);
   });
+
+  it("reclassifies an unknown-ID open: line as a new hook when known IDs are supplied", () => {
+    // The luna-28 ch5 failure: a Vietnamese prose lead "Khóa ..." under open:
+    // parsed to a bogus truncated ID "Kh" and then failed the contract check.
+    const memo = `## Hook ledger for this chapter
+open:
+- Khóa đường đi của trang hồ sơ bị thiếu || lý do: cần đối chiếu ở chương 6
+advance:
+- H007 "胖虎借条" → planted → pressured
+`;
+    const ledger = parseHookLedger(memo, new Set(["H007", "H012"]));
+    // The bogus "Kh" open line is now counted as a brand-new hook, not an ID.
+    expect(ledger.open).toEqual([]);
+    expect(ledger.newOpenCount).toBe(1);
+    expect(ledger.advance.map((e) => e.id)).toEqual(["H007"]);
+  });
+
+  it("keeps a genuine re-opened known hook under open: as an ID entry", () => {
+    const memo = `## Hook ledger for this chapter
+open:
+- H012 re-opening a previously deferred hook || reason: payoff now due
+advance:
+- H007 "胖虎借条" → planted
+`;
+    const ledger = parseHookLedger(memo, new Set(["H007", "H012"]));
+    expect(ledger.open.map((e) => e.id)).toEqual(["H012"]);
+    expect(ledger.newOpenCount).toBe(0);
+  });
+
+  it("does NOT reclassify unknown open: IDs when no known-ID set is supplied", () => {
+    // Backward-compatible default: without the authoritative snapshot the
+    // parser cannot tell a truncated prose lead from a real re-open, so it
+    // preserves the old behavior and leaves strict validation to fail closed.
+    const memo = `## Hook ledger for this chapter
+open:
+- Khóa đường đi của trang hồ sơ
+`;
+    const ledger = parseHookLedger(memo);
+    expect(ledger.open.map((e) => e.id)).toEqual(["Kh"]);
+    expect(ledger.newOpenCount).toBe(0);
+  });
+
+  it("preserves the raw ledger line on each parsed entry for error feedback", () => {
+    const ledger = parseHookLedger(ZH_MEMO);
+    expect(ledger.advance[0]!.rawLine).toBe('H007 "胖虎借条" → planted → pressured');
+  });
 });
 
 describe("validateHookLedger", () => {
@@ -323,6 +369,17 @@ advance:
     })).toThrow(/unknown.*H999/i);
   });
 
+  it("quotes the offending raw line when an advance/defer ID is unknown", () => {
+    // advance:/resolve:/defer: are NOT reclassified (they must reference real
+    // hooks), so a Vietnamese prose lead there stays fail-closed — but the
+    // error now quotes the full line so the correction retry and evidence are
+    // diagnosable instead of showing only the truncated token.
+    expect(() => hookOpsFromLedger(
+      `## Hook ledger for this chapter\ndefer:\n- Không defer hook nào cả`,
+      { activeHooks: [], chapterNumber: 5 },
+    )).toThrow(/line "Không defer hook nào cả"/u);
+  });
+
   it("keeps a generic advance note without a stable ID as an empty typed operation", () => {
     expect(hookOpsFromLedger(`## 本章 hook 账\nadvance: keep the current pressure moving without naming a stable hook`, {
       activeHooks: [],
@@ -333,6 +390,20 @@ advance:
       resolve: [],
       defer: [],
     });
+  });
+
+  it("does not crash on a Vietnamese prose lead under open: (the luna-28 ch5 'Kh' case)", () => {
+    // Before the fix, "Khóa ..." under open: parsed to a bogus ID "Kh", which
+    // then hit `knownHooks.get("Kh")!` in the upsert map and threw / produced
+    // an unknown-ID error. With the authoritative snapshot supplied, the line
+    // is reclassified as a new-hook declaration and simply dropped from ops.
+    const ops = hookOpsFromLedger(
+      `## Hook ledger for this chapter\nopen:\n- Khóa đường đi của trang hồ sơ || lý do\nadvance:\n- H007 "x" → y\n`,
+      { activeHooks: [{ hookId: "H007", startChapter: 1, type: "mystery", status: "open", lastAdvancedChapter: 1, expectedPayoff: "x", notes: "" }], chapterNumber: 5 },
+    );
+    expect(ops.upsert.map((h) => h.hookId)).toEqual(["H007"]);
+    expect(ops.defer).toEqual([]);
+    expect(ops.resolve).toEqual([]);
   });
 });
 

@@ -35,6 +35,8 @@ export interface HookLedgerEntry {
   readonly descriptor: string;
   /** 2+ char CJK sequences and 3+ letter ASCII words extracted from descriptor. */
   readonly keywords: ReadonlyArray<string>;
+  /** The cleaned ledger line as written, for actionable error feedback. */
+  readonly rawLine: string;
 }
 
 export interface HookLedger {
@@ -69,7 +71,7 @@ const PLACEHOLDER_TOKENS = /^(无|空|none|nil|null|暂无|n\/a|na|n-a|tbd|todo|
 /** Subsection heading words that must not be parsed as hook_ids. */
 const SUBSECTION_WORDS = /^(open|advance|resolve|defer|new)$/i;
 
-export function parseHookLedger(memoBody: string): HookLedger {
+export function parseHookLedger(memoBody: string, knownHookIds?: ReadonlySet<string>): HookLedger {
   const section = extractLedgerSection(memoBody);
   if (!section) {
     return { open: [], advance: [], resolve: [], defer: [], newOpenCount: 0 };
@@ -108,7 +110,23 @@ export function parseHookLedger(memoBody: string): HookLedger {
     }
 
     const entry = extractLedgerEntry(line);
-    if (entry) result[current].push(entry);
+    if (!entry) continue;
+
+    // Under open:, a line whose leading token is not a known hook ID is a
+    // brand-new hook declaration — models regularly emit the description
+    // without the [new] marker, and Vietnamese prose leads ("Khóa ...",
+    // "Không ...") parse as bogus truncated IDs like "Kh". open: is the only
+    // subsection where unknown IDs are structurally safe to reclassify: new
+    // hooks have no ID yet, and a real re-opened hook always matches a known
+    // ID. The stable ID is synthesized later by settlement, never taken from
+    // this token. Under advance/resolve/defer an unknown ID stays a hard
+    // contract error — those sections must reference existing hooks.
+    if (current === "open" && knownHookIds !== undefined && !knownHookIds.has(entry.id)) {
+      newOpenCount += 1;
+      continue;
+    }
+
+    result[current].push(entry);
   }
 
   return { ...result, newOpenCount };
@@ -234,7 +252,8 @@ export function hookOpsFromLedger(
   memoBody: string,
   options?: HookOpsFromLedgerOptions,
 ): HookOps {
-  const ledger = parseHookLedger(memoBody);
+  const knownIds = new Set((options?.activeHooks ?? []).map((hook) => hook.hookId));
+  const ledger = parseHookLedger(memoBody, knownIds);
   const entries = [...ledger.open, ...ledger.advance, ...ledger.resolve, ...ledger.defer];
   if (entries.length > 0 && !options) {
     throw new HookLedgerReferenceError(
@@ -244,7 +263,9 @@ export function hookOpsFromLedger(
   const knownHooks = new Map((options?.activeHooks ?? []).map((hook) => [hook.hookId, hook]));
   for (const entry of entries) {
     if (!knownHooks.has(entry.id)) {
-      throw new HookLedgerReferenceError(`unknown stable hook ID ${entry.id} in chapter memo`);
+      throw new HookLedgerReferenceError(
+        `unknown stable hook ID ${entry.id} in chapter memo (line "${entry.rawLine}" does not begin with an existing hook ID)`,
+      );
     }
   }
   return {
@@ -326,7 +347,7 @@ export function assessMemoHookDebtGovernance(
     return { compliant: true, violations: [] };
   }
 
-  const ledger = parseHookLedger(memoBody);
+  const ledger = parseHookLedger(memoBody, new Set(options.activeHooks.map((hook) => hook.hookId)));
   const violations: string[] = [];
 
   const readyIds = new Set(debtHooks
@@ -358,8 +379,8 @@ export function bindExpectedHookOperationsV2(
   memoBody: string,
   options: HookOpsFromLedgerOptions,
 ): HookOperationIntentV2 {
-  const ledger = parseHookLedger(memoBody);
   const knownHooks = new Map(options.activeHooks.map((hook) => [hook.hookId, hook] as const));
+  const ledger = parseHookLedger(memoBody, new Set(knownHooks.keys()));
   const entries: Array<{ readonly action: ExpectedHookOperationAction; readonly entry: HookLedgerEntry }> = [
     ...ledger.open.map((entry) => ({ action: "advance" as const, entry })),
     ...ledger.advance.map((entry) => ({ action: "advance" as const, entry })),
@@ -380,7 +401,9 @@ export function bindExpectedHookOperationsV2(
 
     const hook = knownHooks.get(entry.id);
     if (!hook) {
-      throw new HookOperationContractError(`unknown stable hook ID ${entry.id}`);
+      throw new HookOperationContractError(
+        `unknown stable hook ID ${entry.id} (line "${entry.rawLine}" does not begin with an existing hook ID)`,
+      );
     }
     if (action === "resolve" && entry.descriptor.trim().length === 0) {
       throw new HookOperationContractError(
@@ -505,7 +528,7 @@ function extractLedgerEntry(line: string): HookLedgerEntry | undefined {
   if (PLACEHOLDER_TOKENS.test(candidate)) return undefined;
 
   const descriptor = cleaned.slice(candidate.length).trim();
-  return { id: candidate, descriptor, keywords: extractKeywords(descriptor) };
+  return { id: candidate, descriptor, keywords: extractKeywords(descriptor), rawLine: cleaned };
 }
 
 /**

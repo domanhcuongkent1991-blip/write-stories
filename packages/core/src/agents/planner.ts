@@ -1273,21 +1273,31 @@ function assertFreshMemoGovernance(
 
   if (authoritativeActiveHooks === undefined) return;
   const hooksById = new Map(authoritativeActiveHooks.map((hook) => [hook.hookId, hook] as const));
-  const ledger = parseHookLedger(memoBody);
+  const knownIds = new Set(hooksById.keys());
+  const ledger = parseHookLedger(memoBody, knownIds);
   const governedEntries: ReadonlyArray<{
+    readonly subsection: "open" | "advance" | "resolve" | "defer";
     readonly action: ExpectedHookOperationAction;
     readonly entry: (typeof ledger.advance)[number];
   }> = [
-    ...ledger.open.map((entry) => ({ action: "advance" as const, entry })),
-    ...ledger.advance.map((entry) => ({ action: "advance" as const, entry })),
-    ...ledger.resolve.map((entry) => ({ action: "resolve" as const, entry })),
-    ...ledger.defer.map((entry) => ({ action: "defer" as const, entry })),
+    ...ledger.open.map((entry) => ({ subsection: "open" as const, action: "advance" as const, entry })),
+    ...ledger.advance.map((entry) => ({ subsection: "advance" as const, action: "advance" as const, entry })),
+    ...ledger.resolve.map((entry) => ({ subsection: "resolve" as const, action: "resolve" as const, entry })),
+    ...ledger.defer.map((entry) => ({ subsection: "defer" as const, action: "defer" as const, entry })),
   ];
   const seenActions = new Map<string, Set<ExpectedHookOperationAction>>();
-  for (const { action, entry } of governedEntries) {
+  for (const { subsection, action, entry } of governedEntries) {
     const hook = hooksById.get(entry.id);
     if (!hook) {
-      throw new PlannerParseError(`unknown stable hook ID ${entry.id} in fresh memo`);
+      // Quote the raw line and its subsection: the truncated token alone ("Kh"
+      // from a Vietnamese prose lead like "Khóa đường...") is undiagnosable for
+      // both the bounded correction retry and the qualification evidence.
+      throw new PlannerParseError(
+        `unknown stable hook ID ${entry.id} in fresh memo (subsection "${subsection}"): `
+        + `the line "${entry.rawLine}" does not begin with the verbatim ID of an existing hook. `
+        + `Under advance/resolve/defer every line must start with an existing hook ID; `
+        + `a brand-new hook belongs under open: written exactly as "- [new] description || reason".`,
+      );
     }
     const actionsForHook = seenActions.get(entry.id) ?? new Set<ExpectedHookOperationAction>();
     actionsForHook.add(action);
