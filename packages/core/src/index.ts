@@ -601,7 +601,7 @@ export { buildFanficCanonSection, buildCharacterVoiceProfiles, buildFanficModeIn
 export * from "./prompts/index.js";
 
 // Utils
-export { isNewLayoutBook, isBookFoundationComplete } from "./utils/outline-paths.js";
+export { isNewLayoutBook, isBookFoundationComplete, readVolumeMap } from "./utils/outline-paths.js";
 export { fetchUrl, searchWeb } from "./utils/web-search.js";
 export {
   runResearchReport,
@@ -647,6 +647,13 @@ export {
 } from "./utils/hook-governance.js";
 export { arbitrateRuntimeStateDeltaHooks, type HookArbiterDecision } from "./utils/hook-arbiter.js";
 export { analyzeHookHealth } from "./utils/hook-health.js";
+export {
+  assessOutlineCoverage,
+  parseVolumeBoundaries,
+  extractPromisedPayoffChapter,
+  type OutlineCoverageReport,
+} from "./utils/outline-coverage.js";
+export { parsePendingHooksMarkdown } from "./utils/story-markdown.js";
 
 // Pipeline
 export { PipelineRunner, type PipelineConfig, type ChapterPipelineResult, type PreviewChapterResult, type WriteChaptersOptions, type DraftResult, type PlanChapterResult, type ComposeChapterResult, type ReviseResult, type TruthFiles, type BookStatusInfo, type ImportChaptersInput, type ImportChaptersResult, type TokenUsageSummary } from "./pipeline/runner.js";

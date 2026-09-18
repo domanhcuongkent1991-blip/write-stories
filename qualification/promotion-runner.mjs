@@ -55,7 +55,10 @@ const {
 } = core;
 
 const baselineRoot = "C:/Users/Admin/Documents/Codex/InkOS/vi-writing-sandbox";
-const baselineBookId = "phase-a-ecoapi-1150-20260831-0";
+// The default baseline plans only 5 chapters; a 15-chapter gate must point at
+// a baseline whose outline covers the target depth (outline-depth guard below).
+const baselineBookId = process.env.INKOS_QUALIFICATION_BASELINE_BOOK_ID?.trim()
+  || "phase-a-ecoapi-1150-20260831-0";
 const probeVariant = (process.env.INKOS_QUALIFICATION_PROBE_VARIANT ?? "stream").trim().toLowerCase();
 if (!["stream", "nonstream"].includes(probeVariant)) throw new Error("probe variant must be stream or nonstream");
 const pipelineStream = probeVariant === "stream";
@@ -166,6 +169,7 @@ const safe = {
   priorProviderRequestCount: campaignHistory.providerRequestCount,
   checkpoints: [],
   recoveryDrill: null,
+  outlineCoverage: null,
   operations: [],
   finalInvariants: null,
   exitReason: null,
@@ -560,6 +564,33 @@ try {
       || transactionDirs.length !== 0
     ) {
       throw new Error("Resume preflight refused: qualification book is not at the expected failed-chapter checkpoint");
+    }
+  }
+
+  // Deterministic outline-depth guard. The luna-27 campaign failed at ch11
+  // because the baseline outline plans only 5 chapters while targetChapters is
+  // 15: chapters past the outline leave every hook payoff permanently overdue
+  // and deep chapters fail hook-debt audits by construction. Fail fast, before
+  // spending any provider request, so the operator regenerates the baseline
+  // instead of burning a whole budget on an unfixable structure.
+  currentStage = "outline-depth-guard";
+  {
+    const { assessOutlineCoverage, readVolumeMap } = core;
+    const coverage = assessOutlineCoverage({
+      volumeMapMarkdown: await readVolumeMap(bookDir, ""),
+      targetChapters,
+    });
+    safe.outlineCoverage = {
+      maxOutlinedChapter: coverage.maxOutlinedChapter,
+      volumeCount: coverage.volumeCount,
+      targetChapters,
+      coversTarget: coverage.coversTarget,
+      unplannedChapters: coverage.unplannedChapters,
+      issues: [...coverage.issues],
+    };
+    if (!coverage.coversTarget) {
+      safe.exitReason = "BLOCKED_OUTLINE_DEPTH";
+      throw new Error(`Outline depth guard refused: ${coverage.issues.join(" ")}`);
     }
   }
 

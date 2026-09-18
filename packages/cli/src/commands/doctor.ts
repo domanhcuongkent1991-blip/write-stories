@@ -267,6 +267,41 @@ export const doctorCommand = new Command("doctor")
       }
     }
 
+    // 5c. Check outline depth vs targetChapters for each book. Detects the
+    // luna-27 failure mode: targetChapters raised after the foundation was
+    // generated, leaving deep chapters with no planned arc.
+    {
+      const { existsSync } = await import("node:fs");
+      if (existsSync(join(root, "books"))) {
+        const { StateManager, assessOutlineCoverage, readVolumeMap } = await import("@actalk/inkos-core");
+        const sm = new StateManager(root);
+        const bookIds = await sm.listBooks();
+        const mismatched: string[] = [];
+        for (const bid of bookIds) {
+          const book = await sm.loadBookConfig(bid).catch(() => undefined);
+          if (!book || !book.targetChapters) continue;
+          const volumeMap = await readVolumeMap(sm.bookDir(bid), "");
+          if (!volumeMap.trim()) continue;
+          const coverage = assessOutlineCoverage({
+            volumeMapMarkdown: volumeMap,
+            targetChapters: book.targetChapters,
+          });
+          if (!coverage.coversTarget) {
+            mismatched.push(`${bid} (outline plans ${coverage.maxOutlinedChapter ?? "?"}, target ${book.targetChapters})`);
+          }
+        }
+        if (mismatched.length > 0) {
+          checks.push({
+            name: "Outline Depth",
+            ok: false,
+            detail: `${mismatched.length} book(s) have a target deeper than the outline plans: ${mismatched.join("; ")}. Regenerate the foundation for the new depth or lower targetChapters.`,
+          });
+        } else if (bookIds.length > 0) {
+          checks.push({ name: "Outline Depth", ok: true, detail: "All books' outlines cover their targetChapters" });
+        }
+      }
+    }
+
     // 6. API connectivity test
     try {
       const { createLLMClient, chatCompletion, LLMConfigSchema, isApiKeyOptionalForEndpoint, resolveServiceModelsBaseUrl } = await import("@actalk/inkos-core");
