@@ -651,6 +651,8 @@ export {
   assessOutlineCoverage,
   parseVolumeBoundaries,
   extractPromisedPayoffChapter,
+  selectDuePayoffHooks,
+  selectOverduePayoffHooks,
   type OutlineCoverageReport,
 } from "./utils/outline-coverage.js";
 export { parsePendingHooksMarkdown } from "./utils/story-markdown.js";

@@ -3,6 +3,8 @@ import {
   assessOutlineCoverage,
   extractPromisedPayoffChapter,
   parseVolumeBoundaries,
+  selectDuePayoffHooks,
+  selectOverduePayoffHooks,
 } from "../utils/outline-coverage.js";
 import type { StoredHook } from "../state/memory-db.js";
 
@@ -127,5 +129,49 @@ describe("assessOutlineCoverage", () => {
     expect(report.coversTarget).toBe(false);
     expect(report.maxOutlinedChapter).toBeNull();
     expect(report.issues[0]).toContain("No parseable");
+  });
+});
+
+describe("selectDuePayoffHooks", () => {
+  it("selects hooks whose payoff promise names this chapter, including deferred ones", () => {
+    // luna-30b ch8: H002/H005 were due at Chapter 8 and omitted from the memo
+    // ledger entirely. Deferred hooks must be included — a deferred hook whose
+    // promise names this chapter is exactly the case needing a decision.
+    const hooks = [
+      createHook({ hookId: "H002", status: "deferred", paysOffInArc: "Chapter 8" }),
+      createHook({ hookId: "H005", status: "progressing", paysOffInArc: "Volume 2 Chapter 8" }),
+      createHook({ hookId: "H007", status: "open", paysOffInArc: "Chapter 12" }),
+    ];
+    expect(selectDuePayoffHooks(hooks, 8).map((h) => h.hookId)).toEqual(["H002", "H005"]);
+  });
+
+  it("excludes resolved hooks and hooks without a parseable promise", () => {
+    const hooks = [
+      createHook({ hookId: "H001", status: "resolved", paysOffInArc: "Chapter 8" }),
+      createHook({ hookId: "H003", status: "open", paysOffInArc: "the end of Volume 2" }),
+      createHook({ hookId: "H004", status: "open" }),
+    ];
+    expect(selectDuePayoffHooks(hooks, 8)).toEqual([]);
+  });
+
+  it("treats decorated statuses like 'progressing (blocked=[...])' as non-terminal", () => {
+    // Real ledgers render diagnostics into the status cell; only resolved is
+    // terminal for due-hook purposes.
+    const hooks = [
+      createHook({ hookId: "H005", status: "progressing (blocked=[H002],distance=8)", paysOffInArc: "Chapter 8" }),
+    ];
+    expect(selectDuePayoffHooks(hooks, 8).map((h) => h.hookId)).toEqual(["H005"]);
+  });
+});
+
+describe("selectOverduePayoffHooks", () => {
+  it("includes promises at or before the current chapter and excludes later ones", () => {
+    const hooks = [
+      createHook({ hookId: "H003", status: "open", paysOffInArc: "Chapter 6" }),
+      createHook({ hookId: "H005", status: "deferred", paysOffInArc: "Chapter 8" }),
+      createHook({ hookId: "H007", status: "open", paysOffInArc: "Chapter 12" }),
+      createHook({ hookId: "H001", status: "resolved", paysOffInArc: "Chapter 4" }),
+    ];
+    expect(selectOverduePayoffHooks(hooks, 8).map((h) => h.hookId)).toEqual(["H003", "H005"]);
   });
 });

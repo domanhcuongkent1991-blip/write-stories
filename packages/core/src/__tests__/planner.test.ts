@@ -511,6 +511,145 @@ describe("PlannerAgent.planChapter memo generation", () => {
     expect(memo.body).toContain("world-state-minh-ecoapi-can");
   });
 
+  it("teaches and self-heals when the memo silently omits a hook due this chapter (luna-30b ch8)", async () => {
+    // The ch8 planner omitted both volume-climax hooks (payoff=Chapter 8) from
+    // the ledger; the writer followed the memo and the chapter shipped without
+    // its payoff. The guard must (a) reject each attempt with a teaching
+    // message fed into the bounded correction retry, and (b) if retries are
+    // exhausted, the fallback memo must still commit the due hook instead of
+    // silently dropping it.
+    const ledgerHooks = [
+      { hookId: "H03", startChapter: 1, type: "mystery", status: "progressing", lastAdvancedChapter: 1, expectedPayoff: "Door 7 anomaly", notes: "" },
+      { hookId: "S004", startChapter: 1, type: "sub", status: "open", lastAdvancedChapter: 1, expectedPayoff: "scratch marks", notes: "" },
+      { hookId: "H07", startChapter: 1, type: "mystery", status: "progressing", lastAdvancedChapter: 1, expectedPayoff: "mastermind", notes: "" },
+    ] as const;
+    const dueHook = {
+      hookId: "H005",
+      startChapter: 1,
+      type: "timestamp_evidence",
+      status: "deferred (blocked=[H002],distance=8)",
+      lastAdvancedChapter: 1,
+      expectedPayoff: "post-event alteration proven",
+      paysOffInArc: "Volume 2 Chapter 8",
+      coreHook: true,
+      notes: "",
+    } as const;
+    const input = {
+      storyDir: join(bookDir, "story"),
+      bookDir,
+      chapterNumber: 8,
+      isGoldenOpening: false,
+      fallbackGoal: "close Volume 2",
+      chapterSummariesRaw: "",
+      authoritativeActiveHooks: [...ledgerHooks, dueHook],
+      lengthSpec: {
+        target: 1150, softMin: 1100, softMax: 1300, hardMin: 1000, hardMax: 1800,
+        countingMode: "vi_wordlike_tokens_v1" as const,
+      },
+      language: "en" as const,
+    };
+    const chatSpy = vi.spyOn(llmProvider, "chatCompletion").mockResolvedValue({
+      content: validMemoRaw(8),
+      usage: ZERO_USAGE,
+    } as unknown as Awaited<ReturnType<typeof llmProvider.chatCompletion>>);
+
+    const memo = await makePlanner().planChapterMemo(input);
+    // Both bounded attempts were rejected by the due-hook guard...
+    expect(chatSpy).toHaveBeenCalledTimes(2);
+    // ...the correction retry carried the teaching message...
+    const retryUser = (chatSpy.mock.calls[1]![2] as ReadonlyArray<{ role: string; content: string }>)
+      .find((m) => m.role === "user");
+    expect(retryUser?.content).toMatch(/due-hook omission/i);
+    expect(retryUser?.content).toMatch(/H005/i);
+    expect(retryUser?.content).toMatch(/under resolve:/i);
+    // ...and the fallback memo commits the due hook instead of dropping it.
+    expect(memo.body).toContain("H005");
+    expect(memo.body).toMatch(/^(resolve|advance):\r?\n- H005/um);
+  });
+
+  it("accepts a memo that places the due hook under resolve", async () => {
+    const ledgerHooks = [
+      { hookId: "H03", startChapter: 1, type: "mystery", status: "progressing", lastAdvancedChapter: 1, expectedPayoff: "Door 7 anomaly", notes: "" },
+      { hookId: "H07", startChapter: 1, type: "mystery", status: "progressing", lastAdvancedChapter: 1, expectedPayoff: "mastermind", notes: "" },
+    ] as const;
+    const dueHook = {
+      hookId: "H005",
+      startChapter: 1,
+      type: "timestamp_evidence",
+      status: "progressing",
+      lastAdvancedChapter: 7,
+      expectedPayoff: "锁芯刮痕",
+      paysOffInArc: "Chapter 8",
+      coreHook: true,
+      notes: "",
+    } as const;
+    const input = {
+      storyDir: join(bookDir, "story"),
+      bookDir,
+      chapterNumber: 8,
+      isGoldenOpening: false,
+      fallbackGoal: "close Volume 2",
+      chapterSummariesRaw: "",
+      authoritativeActiveHooks: [...ledgerHooks, dueHook],
+      lengthSpec: {
+        target: 1150, softMin: 1100, softMax: 1300, hardMin: 1000, hardMax: 1800,
+        countingMode: "vi_wordlike_tokens_v1" as const,
+      },
+      language: "en" as const,
+    };
+    const chatSpy = vi.spyOn(llmProvider, "chatCompletion").mockResolvedValue({
+      // validMemoRaw(8) resolves S004; swap it to resolve the due hook H005.
+      content: validMemoRaw(8).replace(/resolve:\n- S004/u, "resolve:\n- H005"),
+      usage: ZERO_USAGE,
+    } as unknown as Awaited<ReturnType<typeof llmProvider.chatCompletion>>);
+
+    const memo = await makePlanner().planChapterMemo(input);
+    expect(chatSpy).toHaveBeenCalledTimes(1);
+    expect(memo.body).toContain("H005");
+  });
+
+  it("does not reject when the due hook is explicitly deferred with carry-over", async () => {
+    // Structural guard only: a genuinely blocked payoff may still defer, as
+    // long as the hook is addressed rather than silently omitted.
+    const ledgerHooks = [
+      { hookId: "H03", startChapter: 1, type: "mystery", status: "progressing", lastAdvancedChapter: 1, expectedPayoff: "Door 7 anomaly", notes: "" },
+      { hookId: "S004", startChapter: 1, type: "sub", status: "open", lastAdvancedChapter: 1, expectedPayoff: "scratch marks", notes: "" },
+    ] as const;
+    const dueHook = {
+      hookId: "H005",
+      startChapter: 1,
+      type: "timestamp_evidence",
+      status: "deferred",
+      lastAdvancedChapter: 1,
+      expectedPayoff: "post-event alteration proven",
+      paysOffInArc: "Chapter 8",
+      coreHook: true,
+      notes: "",
+    } as const;
+    const input = {
+      storyDir: join(bookDir, "story"),
+      bookDir,
+      chapterNumber: 8,
+      isGoldenOpening: false,
+      fallbackGoal: "close Volume 2",
+      chapterSummariesRaw: "",
+      authoritativeActiveHooks: [...ledgerHooks, dueHook],
+      lengthSpec: {
+        target: 1150, softMin: 1100, softMax: 1300, hardMin: 1000, hardMax: 1800,
+        countingMode: "vi_wordlike_tokens_v1" as const,
+      },
+      language: "en" as const,
+    };
+    const chatSpy = vi.spyOn(llmProvider, "chatCompletion").mockResolvedValue({
+      content: validMemoRaw(8).replace(/defer:\n- H07[^\n]*/u, "defer:\n- H005 carried to Chapter 15"),
+      usage: ZERO_USAGE,
+    } as unknown as Awaited<ReturnType<typeof llmProvider.chatCompletion>>);
+
+    const memo = await makePlanner().planChapterMemo(input);
+    expect(chatSpy).toHaveBeenCalledTimes(1);
+    expect(memo.body).toContain("H005");
+  });
+
   it("accepts and promotes a selected dormant hook exposed to the memo planner", async () => {
     await writeFile(join(bookDir, "story/pending_hooks.md"), [
       "| hook_id | start_chapter | type | status | last_advanced | expected_payoff | payoff_timing | depends_on | pays_off_in_arc | core_hook | half_life | promoted | notes |",

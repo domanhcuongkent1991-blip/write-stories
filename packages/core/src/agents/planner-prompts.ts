@@ -269,6 +269,9 @@ export const PLANNER_MEMO_USER_TEMPLATE_EN = `# Chapter {{chapterNumber}} memo r
 ## Stale hooks — MUST be advanced / resolved / explicitly deferred this chapter
 {{recyclable_hooks}}
 
+## Hooks DUE this chapter (pays_off_in names THIS chapter — each MUST appear under resolve: with material-proof evidence; silently omitting one fails the memo)
+{{due_hooks}}
+
 ## Out-of-volume constraints for this chapter
 - Golden opening chapter: {{isGoldenOpening}}
 - Chapter length budget: target {{lengthTarget}} {{lengthUnit}}; preferred {{lengthSoftMin}}-{{lengthSoftMax}}; hard {{lengthHardMin}}-{{lengthHardMax}}
@@ -319,6 +322,9 @@ export const PLANNER_MEMO_USER_TEMPLATE = `# 第 {{chapterNumber}} 章 memo 请�
 ## 必须回收的陈旧 hook（本章必须 advance / resolve / 显式 defer）
 {{recyclable_hooks}}
 
+## 本章到期的 hook（pays_off_in=本章；必须 resolve 并给出实质证明场景，不可缺席）
+{{due_hooks}}
+
 ## 本章卷外约束
 - 是否黄金三章：{{isGoldenOpening}}
 - 章节篇幅预算：目标 {{lengthTarget}} {{lengthUnit}}；建议 {{lengthSoftMin}}-{{lengthSoftMax}}；硬区间 {{lengthHardMin}}-{{lengthHardMax}}
@@ -337,6 +343,8 @@ export interface PlannerUserMessageInput {
   readonly collaboratorRows: string;
   readonly relevantThreads: string;
   readonly recyclableHooks: string;
+  /** Pre-rendered "due this chapter" block; "" when no hook pays off now. */
+  readonly dueHooks?: string;
   readonly isGoldenOpening: boolean;
   readonly bookRulesRelevant: string;
   readonly lengthBudget: {
@@ -373,6 +381,7 @@ export function buildPlannerUserMessage(input: PlannerUserMessageInput): string 
     .replaceAll("{{collaborator_rows}}", input.collaboratorRows)
     .replaceAll("{{relevant_threads}}", input.relevantThreads)
     .replaceAll("{{recyclable_hooks}}", input.recyclableHooks)
+    .replaceAll("{{due_hooks}}", input.dueHooks ?? "")
     .replaceAll("{{isGoldenOpening}}", input.isGoldenOpening ? yesText : noText)
     .replaceAll("{{lengthTarget}}", String(input.lengthBudget.target))
     .replaceAll("{{lengthSoftMin}}", String(input.lengthBudget.softMin))

@@ -304,3 +304,36 @@ export function formatRecyclableHooks(
     : "规划时必须把以下每个 hook 放入 advance / resolve / defer（若 defer，必须写出理由）：";
   return [header, ...lines].join("\n");
 }
+
+/**
+ * Luna-30b ch8 hardening: render hooks whose pays_off_in promise names THIS
+ * chapter. Silence-based recyclable selection misses these (a due hook touched
+ * recently is not "stale"), and the ch8 planner silently omitted both volume-
+ * climax hooks, shipping a chapter without its payoff. This block is the
+ * prompt-side counterpart of the plan-time due-hook guard in planner.ts: the
+ * guard rejects, this block teaches where the hooks must go.
+ */
+export function formatDueHooks(
+  hooks: ReadonlyArray<StoredHook>,
+  chapterNumber: number,
+  language: ScaffoldLanguage = "zh",
+): string {
+  if (hooks.length === 0) {
+    return language === "en"
+      ? "(no hook pays off in this chapter)"
+      : "（本章没有到期的 hook）";
+  }
+
+  const lines = hooks.map((hook) => {
+    const payoff = hook.expectedPayoff?.trim() || hook.notes?.trim() || "";
+    const core = hook.coreHook === true ? (language === "en" ? " [core]" : " [核心]") : "";
+    return language === "en"
+      ? `- ${hook.hookId} "${payoff}" — pays_off_in=${(hook.paysOffInArc ?? "").trim()}, status=${hook.status}${core}`
+      : `- ${hook.hookId} "${payoff}" — pays_off_in=${(hook.paysOffInArc ?? "").trim()}，状态=${hook.status}${core}`;
+  });
+
+  const header = language === "en"
+    ? `Each hook below promised its payoff in chapter ${chapterNumber} (THIS chapter). Each one MUST appear under resolve: in the hook ledger with material-proof evidence (how correctness is demonstrated — independent re-measurement, physical dossier with photos/timestamps, third-party confirmation, a reproducible cross-check; restating known numbers is NOT a payoff). Only if a payoff is genuinely blocked may it go under defer: instead, with an explicit carry-over promise naming the new payoff chapter. Omitting a due hook fails the memo:`
+    : `以下每个 hook 都承诺在第 ${chapterNumber} 章（即本章）兑现。每个都必须出现在 hook 账的 resolve: 段，并给出实质证明场景（说明正确性如何被证明——独立复测、带照片/时间戳的物证档案、第三方确认、可复核对照；仅重述已知数字不算兑现）。只有当兑现确实被阻塞时才可改放 defer:，且必须写明顺延承诺（新的兑现章节）。缺席任何一个到期 hook 都会导致 memo 被驳回：`;
+  return [header, ...lines].join("\n");
+}

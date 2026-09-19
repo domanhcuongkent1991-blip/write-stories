@@ -44,6 +44,7 @@ import {
   formatRelevantThreads,
   formatRecentSummaries,
   formatRecyclableHooks,
+  formatDueHooks,
   readBookRules,
   readCharacterMatrix,
   readEmotionalArcs,
@@ -61,6 +62,7 @@ import {
   type ExpectedHookOperationAction,
   type HookOperationIntentV2,
 } from "../models/hook-operation-intent.js";
+import { selectDuePayoffHooks } from "../utils/outline-coverage.js";
 
 export interface PlanChapterInput {
   readonly book: BookConfig;
@@ -539,6 +541,11 @@ export class PlannerAgent extends BaseAgent {
         input.chapterNumber,
         language,
       ),
+      dueHooks: formatDueHooks(
+        selectDuePayoffHooks(input.authoritativeActiveHooks ?? [], input.chapterNumber),
+        input.chapterNumber,
+        language,
+      ),
       isGoldenOpening: input.isGoldenOpening,
       bookRulesRelevant: bookRulesRaw.trim().length > 0 ? bookRulesRaw.trim() : noBookRules,
       lengthBudget: {
@@ -593,6 +600,7 @@ export class PlannerAgent extends BaseAgent {
           governedMemo.body,
           input.authoritativeActiveHooks,
           input.includeAllowedHookActions === true,
+          input.chapterNumber,
         );
         return { memo: governedMemo, ...(tokenUsage ? { tokenUsage } : {}) };
       } catch (error) {
@@ -616,6 +624,12 @@ export class PlannerAgent extends BaseAgent {
         errorMessage: fallbackError.message,
         language,
         lengthSpec: input.lengthSpec,
+        // The fallback must not silently drop hooks whose payoff is due this
+        // chapter: an empty ledger is exactly how luna-30b ch8 shipped without
+        // its volume climax. Commit them under resolve: deterministically; the
+        // resolve preflight still judges evidence quality and strips anything
+        // unsupported, so this stays fail-safe.
+        dueHooks: selectDuePayoffHooks(input.authoritativeActiveHooks ?? [], input.chapterNumber),
       }),
       input.chapterNumber,
       input.isGoldenOpening,
@@ -629,6 +643,7 @@ export class PlannerAgent extends BaseAgent {
     readonly errorMessage: string;
     readonly language: ScaffoldLanguage;
     readonly lengthSpec: LengthSpec;
+    readonly dueHooks?: ReadonlyArray<StoredHook>;
   }): string {
     const sceneOneBudget = Math.round(input.lengthSpec.target * 0.3);
     const sceneTwoBudget = Math.round(input.lengthSpec.target * 0.4);
@@ -636,6 +651,31 @@ export class PlannerAgent extends BaseAgent {
       1,
       input.lengthSpec.target - sceneOneBudget - sceneTwoBudget,
     );
+    // A due hook must be *addressed*, but the action must stay legal for its
+    // current status: getLegalHookActions forbids resolve on a deferred hook,
+    // and the downstream contract check would reject the fallback memo. So
+    // route each due hook into resolve when legal, otherwise advance.
+    const dueByAction = new Map<"resolve" | "advance", string[]>();
+    for (const hook of input.dueHooks ?? []) {
+      const action: "resolve" | "advance" = getLegalHookActions(hook).includes("resolve")
+        ? "resolve"
+        : "advance";
+      const payoff = hook.expectedPayoff?.trim() || "promised payoff";
+      const line = input.language === "en"
+        ? `- ${hook.hookId} "${payoff}" → material-proof payoff scene required this chapter (independent verification, physical dossier, or third-party confirmation)`
+        : `- ${hook.hookId} "${payoff}" → 本章必须给出实质证明场景（独立复测、物证档案或第三方确认）`;
+      dueByAction.set(action, [...(dueByAction.get(action) ?? []), line]);
+    }
+    const buildLedger = (emptyText: string): string => {
+      const parts: string[] = [];
+      const advanceLines = dueByAction.get("advance");
+      if (advanceLines) parts.push("advance:", ...advanceLines);
+      const resolveLines = dueByAction.get("resolve");
+      if (resolveLines) parts.push("resolve:", ...resolveLines);
+      return parts.length > 0 ? parts.join("\n") : emptyText;
+    };
+    const fallbackLedgerEn = buildLedger("advance: keep the active promise moving; resolve: only settle what has evidence; defer: preserve larger threads for later chapters.");
+    const fallbackLedgerZh = buildLedger("advance: 推进当前活跃承诺；resolve: 只结清已有证据支撑的线索；defer: 大线继续保留到更合适的位置。");
     if (input.language === "en") {
       return [
         `# Chapter ${input.chapterNumber} memo`,
@@ -671,7 +711,7 @@ export class PlannerAgent extends BaseAgent {
         "End with a concrete change in information, pressure, relationship, objective, or risk so the chapter is not only summary.",
         "",
         "## Hook ledger for this chapter",
-        "advance: keep the active promise moving; resolve: only settle what has evidence; defer: preserve larger threads for later chapters.",
+        fallbackLedgerEn,
         "",
         "## Do not",
         "Do not contradict established facts, ignore the user's current instruction, or turn the fallback memo into a new outline.",
@@ -715,7 +755,7 @@ export class PlannerAgent extends BaseAgent {
       "章尾至少要在信息、压力、关系、目标或风险上发生一个明确变化，避免只有剧情摘要没有推进。",
       "",
       "## 本章 hook 账",
-      "advance: 推进当前活跃承诺；resolve: 只结清已有证据支撑的线索；defer: 大线继续保留到更合适的位置。",
+      fallbackLedgerZh,
       "",
       "## 不要做",
       "不要违背既成事实，不要无视用户当前指令，不要把 fallback memo 当成新大纲重写整本书。",
@@ -1260,6 +1300,7 @@ function assertFreshMemoGovernance(
   memoBody: string,
   authoritativeActiveHooks?: ReadonlyArray<StoredHook>,
   enforceLegalHookActions = false,
+  chapterNumber?: number,
 ): void {
   const match = memoBody.match(
     /^##\s*(?:节奏代码|Pacing Code)\s*\r?\n\s*([^\r\n]+?)\s*$/imu,
@@ -1316,6 +1357,39 @@ function assertFreshMemoGovernance(
       const allowed = getLegalHookActions(hook).filter((candidate) => candidate !== "mention");
       throw new PlannerParseError(
         `hook ${entry.id} with status ${hook.status} does not allow ${action}; allowed actions: ${allowed.join("|") || "none"}`,
+      );
+    }
+  }
+
+  // Due-hook guard (luna-30b ch8): a hook whose pays_off_in names THIS chapter
+  // must appear in the ledger under advance/resolve/defer. The ch8 planner
+  // omitted both volume-climax hooks (H002+H005, payoff=Chapter 8) entirely;
+  // the writer followed the memo, the chapter shipped without its climax, and
+  // two bounded rewrites could not recover because the defect is in the memo.
+  // Silence-based recyclable selection cannot catch this: a due hook touched
+  // recently has low silence and never surfaces as debt. The check is purely
+  // structural — it demands the hook be *addressed*, not forcibly resolved:
+  // the planner may still defer with an explicit carry-over promise, and the
+  // audit tier keeps judging payoff quality.
+  if (chapterNumber !== undefined) {
+    const addressed = new Set([
+      ...ledger.advance.map((entry) => entry.id),
+      ...ledger.resolve.map((entry) => entry.id),
+      ...ledger.defer.map((entry) => entry.id),
+    ]);
+    const omittedDue = selectDuePayoffHooks(authoritativeActiveHooks ?? [], chapterNumber)
+      .filter((hook) => !addressed.has(hook.hookId));
+    if (omittedDue.length > 0) {
+      const dueList = omittedDue
+        .map((hook) => `${hook.hookId} (pays_off_in=${(hook.paysOffInArc ?? "").trim()})`)
+        .join(", ");
+      throw new PlannerParseError(
+        `due-hook omission: hook(s) ${dueList} promise their payoff in THIS chapter (${chapterNumber}) `
+        + `but do not appear anywhere under advance:/resolve:/defer: in the hook ledger. `
+        + `Each due hook MUST be placed under resolve: with material-proof evidence (how correctness is `
+        + `demonstrated: independent re-measurement, physical dossier, third-party confirmation), or — only if `
+        + `the payoff is genuinely blocked — under defer: with an explicit carry-over promise naming the new `
+        + `payoff chapter and the evidence preserved. A due hook may not be silently omitted.`,
       );
     }
   }

@@ -5,6 +5,7 @@ import {
   extractCollaboratorRows,
   extractOpponentRows,
   extractProtagonistRow,
+  formatDueHooks,
   formatRelevantThreads,
 } from "../agents/planner-context.js";
 
@@ -203,5 +204,40 @@ describe("formatRelevantThreads", () => {
     ], "", "en", { includeAllowedActions: true });
 
     expect(threads).not.toContain("pays_off_in=");
+  });
+});
+
+describe("formatDueHooks", () => {
+  const dueHook = {
+    hookId: "H005",
+    startChapter: 1,
+    type: "timestamp_evidence",
+    status: "deferred",
+    lastAdvancedChapter: 1,
+    expectedPayoff: "post-event alteration proven",
+    paysOffInArc: "Volume 2 Chapter 8",
+    coreHook: true,
+    notes: "",
+  };
+
+  it("renders an empty-due marker when no hook pays off this chapter", () => {
+    expect(formatDueHooks([], 8, "en")).toContain("no hook pays off");
+    expect(formatDueHooks([], 8, "zh")).toContain("没有到期的 hook");
+  });
+
+  it("names each due hook with its promise and demands resolve in the ledger", () => {
+    const block = formatDueHooks([dueHook], 8, "en");
+    expect(block).toContain("H005");
+    expect(block).toContain("pays_off_in=Volume 2 Chapter 8");
+    expect(block).toContain("post-event alteration proven");
+    expect(block).toContain("[core]");
+    expect(block).toMatch(/MUST appear under resolve:/i);
+  });
+
+  it("renders the Chinese block for zh books", () => {
+    const block = formatDueHooks([dueHook], 8, "zh");
+    expect(block).toContain("H005");
+    expect(block).toContain("[核心]");
+    expect(block).toContain("resolve:");
   });
 });

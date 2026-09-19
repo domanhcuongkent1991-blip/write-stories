@@ -299,6 +299,34 @@ export const doctorCommand = new Command("doctor")
         } else if (bookIds.length > 0) {
           checks.push({ name: "Outline Depth", ok: true, detail: "All books' outlines cover their targetChapters" });
         }
+
+        // Hook payoff drift: hooks whose promised payoff chapter has passed
+        // without the ledger marking them resolved (luna-30b ch8 class of
+        // silent omission). Report only; the planner guard prevents new ones,
+        // this surfaces existing drift for manual repair.
+        const { parsePendingHooksMarkdown, selectOverduePayoffHooks } = await import("@actalk/inkos-core");
+        const overdue: string[] = [];
+        for (const bid of bookIds) {
+          const hooksPath = join(sm.bookDir(bid), "story", "pending_hooks.md");
+          if (!existsSync(hooksPath)) continue;
+          const index = await sm.loadChapterIndex(bid).catch(() => []);
+          const currentChapter = index.reduce((max, ch) => Math.max(max, ch.number), 0);
+          if (currentChapter <= 0) continue;
+          const hooks = parsePendingHooksMarkdown(await readFile(hooksPath, "utf-8"));
+          const overdueHooks = selectOverduePayoffHooks(hooks, currentChapter);
+          if (overdueHooks.length > 0) {
+            overdue.push(`${bid} (ch${currentChapter}: ${overdueHooks.map((h) => `${h.hookId} due ch${h.paysOffInArc?.trim()}`).join(", ")})`);
+          }
+        }
+        if (overdue.length > 0) {
+          checks.push({
+            name: "Hook Payoff Drift",
+            ok: false,
+            detail: `${overdue.length} book(s) carry unresolved hooks past their promised payoff chapter: ${overdue.join("; ")}. Resolve them via 'inkos revise <n> --instruction ...' or update the ledger payoff promise explicitly.`,
+          });
+        } else if (bookIds.length > 0) {
+          checks.push({ name: "Hook Payoff Drift", ok: true, detail: "No unresolved hook is past its promised payoff chapter" });
+        }
       }
     }
 

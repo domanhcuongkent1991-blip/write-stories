@@ -1,5 +1,6 @@
 import type { StoredHook } from "../state/memory-db.js";
 import type { VolumeBoundary } from "./hook-promotion.js";
+import { normalizeStoredHookStatus } from "./hook-lifecycle.js";
 
 /**
  * Deterministic outline-depth assessment shared by the doctor check, the
@@ -133,6 +134,43 @@ export function extractPromisedPayoffChapter(paysOffInArc: string | undefined): 
   const chapter = parseInt(chapterToken, 10);
   if (!Number.isFinite(chapter) || chapter <= 0) return null;
   return chapter;
+}
+
+/**
+ * Hooks whose concrete payoff promise lands on `chapterNumber` and that are not
+ * resolved yet. Silence-based recyclable selection cannot surface these: a due
+ * hook touched recently has low silence and never appears as debt, which is how
+ * luna-30b ch8 silently lost its volume-climax hooks. `deferred`/`paused` hooks
+ * ARE included on purpose — a deferred hook whose promise names this chapter is
+ * exactly the case that needs an explicit decision.
+ *
+ * Shared by the planner due-hook guard, the planner prompt "due this chapter"
+ * block, and the doctor overdue-payoff check so all three cannot drift apart.
+ */
+export function selectDuePayoffHooks(
+  hooks: ReadonlyArray<StoredHook>,
+  chapterNumber: number,
+): StoredHook[] {
+  return hooks.filter((hook) => {
+    if (normalizeStoredHookStatus(hook.status) === "resolved") return false;
+    return extractPromisedPayoffChapter(hook.paysOffInArc) === chapterNumber;
+  });
+}
+
+/**
+ * Same predicate as `selectDuePayoffHooks` but keeps every due hook whose
+ * promise chapter is at or before `chapterNumber`, for post-hoc drift checks
+ * (doctor) where a promise silently slipped past its deadline.
+ */
+export function selectOverduePayoffHooks(
+  hooks: ReadonlyArray<StoredHook>,
+  chapterNumber: number,
+): StoredHook[] {
+  return hooks.filter((hook) => {
+    if (normalizeStoredHookStatus(hook.status) === "resolved") return false;
+    const promised = extractPromisedPayoffChapter(hook.paysOffInArc);
+    return promised !== null && promised <= chapterNumber;
+  });
 }
 
 
