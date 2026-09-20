@@ -72,6 +72,11 @@ const resumeBookId = process.argv[3]?.trim() || null;
 const startChapter = Number.parseInt(process.argv[4] ?? "1", 10);
 const runThroughChapter = Number.parseInt(process.argv[5] ?? String(targetChapters), 10);
 const providerCallBudget = Number.parseInt(process.argv[6] ?? "90", 10);
+// Budget ceiling defaults to 300 (the standing gate protocol). Operators may
+// raise it via INKOS_QUALIFICATION_BUDGET_CAP when a namespace legitimately
+// needs more headroom — e.g. resuming a long 15-chapter campaign whose total
+// already sits near the default ceiling — without editing the harness.
+const providerCallBudgetCap = Number.parseInt(process.env.INKOS_QUALIFICATION_BUDGET_CAP ?? "300", 10);
 const externalContext = process.env.INKOS_QUALIFICATION_EXTERNAL_CONTEXT?.trim() || undefined;
 if (!Number.isInteger(startChapter) || startChapter < 1 || startChapter > targetChapters) {
   throw new Error("start chapter must be within the target book range");
@@ -79,8 +84,11 @@ if (!Number.isInteger(startChapter) || startChapter < 1 || startChapter > target
 if (!Number.isInteger(runThroughChapter) || runThroughChapter < startChapter || runThroughChapter > targetChapters) {
   throw new Error("run-through chapter must be between start chapter and target chapter count");
 }
-if (!Number.isInteger(providerCallBudget) || providerCallBudget < 1 || providerCallBudget > 300) {
-  throw new Error("provider call budget must be between 1 and 300");
+if (!Number.isInteger(providerCallBudgetCap) || providerCallBudgetCap < 1 || providerCallBudgetCap > 1000) {
+  throw new Error("provider call budget cap must be between 1 and 1000");
+}
+if (!Number.isInteger(providerCallBudget) || providerCallBudget < 1 || providerCallBudget > providerCallBudgetCap) {
+  throw new Error(`provider call budget must be between 1 and ${providerCallBudgetCap}`);
 }
 if (resumeBookId && resumeBookId !== runScope.bookId) {
   throw new Error("resume book id is outside the qualification namespace");
