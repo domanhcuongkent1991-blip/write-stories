@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 import {
   createTranslationProjectFromFile,
+  loadTranslationGlossary,
   runTranslationProject,
   writeTranslationExport,
   type TranslationModelPort,
@@ -71,5 +72,47 @@ describe("translation runner", () => {
     expect(markdown).toContain("EN:第一段。");
     expect(markdown).toContain("EN:第二段。");
     expect(markdown).not.toContain("\n第一段。\n");
+  });
+
+  it("normalizes glossary v1 files and preserves v2 fields", async () => {
+    const created = await createTranslationProjectFromFile(root, {
+      filePath: "inputs/book.md",
+      sourceLanguage: "zh",
+      targetLanguage: "en",
+    });
+    const glossaryPath = join(root, "translations", created.manifest.id, "glossary.json");
+
+    await writeFile(glossaryPath, JSON.stringify({
+      terms: [{ source: "雨夜", target: "rainy night" }],
+    }), "utf-8");
+    const legacy = await loadTranslationGlossary(root, created.manifest.id);
+    expect(legacy[0]).toMatchObject({
+      source: "雨夜",
+      target: "rainy night",
+      origin: "auto",
+      pinned: false,
+      aliases: [],
+    });
+
+    await writeFile(glossaryPath, JSON.stringify({
+      version: 2,
+      terms: [{
+        source: "李明",
+        target: "Lý Minh",
+        category: "person",
+        aliases: ["小明"],
+        origin: "approved",
+        pinned: true,
+      }],
+    }), "utf-8");
+    const v2 = await loadTranslationGlossary(root, created.manifest.id);
+    expect(v2).toEqual([{
+      source: "李明",
+      target: "Lý Minh",
+      category: "person",
+      aliases: ["小明"],
+      origin: "approved",
+      pinned: true,
+    }]);
   });
 });

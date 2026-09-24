@@ -58,10 +58,24 @@ export interface TranslationProjectCreateResult {
   readonly manifest: TranslationProjectManifest;
 }
 
+export type TranslationTermCategory =
+  | "person"
+  | "place"
+  | "organization"
+  | "sect"
+  | "technique"
+  | "item"
+  | "other";
+export type TranslationTermOrigin = "seed" | "auto" | "approved";
+
 export interface TranslationGlossaryTerm {
   readonly source: string;
   readonly target: string;
   readonly note?: string;
+  readonly category?: TranslationTermCategory;
+  readonly aliases?: ReadonlyArray<string>;
+  readonly origin?: TranslationTermOrigin;
+  readonly pinned?: boolean;
 }
 
 export interface TranslationModelPort {

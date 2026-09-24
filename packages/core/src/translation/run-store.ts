@@ -4,6 +4,8 @@ import type {
   TranslationChapterFile,
   TranslationGlossaryTerm,
   TranslationProjectManifest,
+  TranslationTermCategory,
+  TranslationTermOrigin,
 } from "./types.js";
 import { commitAtomicFileSet } from "../utils/atomic-file-set.js";
 
@@ -52,7 +54,12 @@ export async function loadTranslationGlossary(
     const raw = JSON.parse(await readFile(join(translationProjectDir(projectRoot, projectId), "glossary.json"), "utf-8")) as {
       terms?: unknown;
     };
-    return Array.isArray(raw.terms) ? raw.terms.filter(isGlossaryTerm) : [];
+    return Array.isArray(raw.terms)
+      ? raw.terms.flatMap((term) => {
+          const normalized = normalizeGlossaryTerm(term);
+          return normalized ? [normalized] : [];
+        })
+      : [];
   } catch {
     return [];
   }
@@ -62,10 +69,15 @@ export async function saveTranslationGlossary(
   projectRoot: string,
   projectId: string,
   terms: ReadonlyArray<TranslationGlossaryTerm>,
+  meta?: { readonly prepCompletedAt?: string },
 ): Promise<void> {
   await writeFile(
     join(translationProjectDir(projectRoot, projectId), "glossary.json"),
-    JSON.stringify({ terms: mergeGlossaryTerms(terms) }, null, 2),
+    JSON.stringify({
+      version: 2,
+      terms: mergeGlossaryTerms(terms),
+      ...(meta ? { meta } : {}),
+    }, null, 2),
     "utf-8",
   );
 }
@@ -86,7 +98,7 @@ export async function saveTranslationProgress(
       },
       {
         relativePath: join("translations", projectId, "glossary.json"),
-        content: `${JSON.stringify({ terms: mergeGlossaryTerms(terms) }, null, 2)}\n`,
+        content: `${JSON.stringify({ version: 2, terms: mergeGlossaryTerms(terms) }, null, 2)}\n`,
       },
     ],
   });
@@ -101,13 +113,46 @@ export function mergeGlossaryTerms(terms: ReadonlyArray<TranslationGlossaryTerm>
       source: term.source.trim(),
       target: term.target.trim(),
       ...(term.note?.trim() ? { note: term.note.trim() } : {}),
+      ...(term.category ? { category: term.category } : {}),
+      ...(term.aliases?.length ? { aliases: term.aliases } : {}),
+      ...(term.origin ? { origin: term.origin } : {}),
+      ...(term.pinned ? { pinned: true } : {}),
     });
   }
   return [...map.values()];
 }
 
-function isGlossaryTerm(value: unknown): value is TranslationGlossaryTerm {
-  if (!value || typeof value !== "object") return false;
+const TERM_CATEGORIES: ReadonlyArray<TranslationTermCategory> = [
+  "person",
+  "place",
+  "organization",
+  "sect",
+  "technique",
+  "item",
+  "other",
+];
+const TERM_ORIGINS: ReadonlyArray<TranslationTermOrigin> = ["seed", "auto", "approved"];
+
+function normalizeGlossaryTerm(value: unknown): TranslationGlossaryTerm | undefined {
+  if (!value || typeof value !== "object") return undefined;
   const record = value as Record<string, unknown>;
-  return typeof record.source === "string" && typeof record.target === "string";
+  if (typeof record.source !== "string" || typeof record.target !== "string") return undefined;
+  const category = typeof record.category === "string" && TERM_CATEGORIES.includes(record.category as TranslationTermCategory)
+    ? record.category as TranslationTermCategory
+    : undefined;
+  const origin = typeof record.origin === "string" && TERM_ORIGINS.includes(record.origin as TranslationTermOrigin)
+    ? record.origin as TranslationTermOrigin
+    : "auto";
+  const aliases = Array.isArray(record.aliases)
+    ? record.aliases.filter((alias): alias is string => typeof alias === "string" && alias.trim().length > 0)
+    : [];
+  return {
+    source: record.source,
+    target: record.target,
+    ...(typeof record.note === "string" && record.note.trim() ? { note: record.note } : {}),
+    ...(category ? { category } : {}),
+    aliases,
+    origin,
+    pinned: record.pinned === true,
+  };
 }
