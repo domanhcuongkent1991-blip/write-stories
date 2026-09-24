@@ -11,6 +11,7 @@ export interface SplitChapter {
  * - "第一回 xxxx" / "第1回 xxxx"
  * - "# 第1章 xxxx" / "## 第23章 xxxx"
  * - "CHAPTER I." / "CHAPTER II."
+ * - "Chương 1: xxxx" / "CHƯƠNG 12" / "chương 3 xxxx"
  *
  * Each match marks the start of a new chapter. Content between matches
  * belongs to the preceding chapter.
@@ -19,7 +20,7 @@ export function splitChapters(
   text: string,
   pattern?: string,
 ): ReadonlyArray<SplitChapter> {
-  const defaultPattern = /^#{0,2}\s*(?:第[零〇○Ｏ０一二三四五六七八九十百千万\d]+(?:章|回)(?:[:：]|\s+)?\s*(.*)|Chapter\s+(?:\d+|[IVXLCDM]+)(?:\.|:|\s+)?\s*(.*))/i;
+  const defaultPattern = /^#{0,2}\s*(?:第[零〇○Ｏ０一二三四五六七八九十百千万\d]+(?:章|回)(?:[:：]|\s+)?\s*(.*)|Chapter\s+(?:\d+|[IVXLCDM]+)(?:\.|:|\s+)?\s*(.*)|Chương\s+\d+(?:[:：]|\s+)?\s*(.*))/i;
   const regex = pattern ? new RegExp(pattern, "m") : defaultPattern;
 
   const lines = text.split("\n");
@@ -29,7 +30,7 @@ export function splitChapters(
     const match = lines[i]!.match(regex);
     if (match) {
       chapters.push({
-        title: (match[1] ?? match[2] ?? "").trim(),
+        title: (match[1] ?? match[2] ?? match[3] ?? "").trim(),
         startLine: i,
       });
     }
@@ -74,6 +75,10 @@ function inferFallbackTitle(headingLine: string, chapterNumber: number): string 
 
   if (/第[零一二三四五六七八九十百千万\d]+回/.test(headingLine)) {
     return `第${chapterNumber}回`;
+  }
+
+  if (/chương\s+\d+/i.test(headingLine)) {
+    return `Chương ${chapterNumber}`;
   }
 
   return `第${chapterNumber}章`;
