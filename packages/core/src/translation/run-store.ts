@@ -7,6 +7,7 @@ import type {
   TranslationTermCategory,
   TranslationTermOrigin,
 } from "./types.js";
+import { mergeGlossaryTermsV2 } from "./glossary-merge.js";
 import { commitAtomicFileSet } from "../utils/atomic-file-set.js";
 
 export function translationProjectDir(projectRoot: string, projectId: string): string {
@@ -105,21 +106,7 @@ export async function saveTranslationProgress(
 }
 
 export function mergeGlossaryTerms(terms: ReadonlyArray<TranslationGlossaryTerm>): ReadonlyArray<TranslationGlossaryTerm> {
-  const map = new Map<string, TranslationGlossaryTerm>();
-  for (const term of terms) {
-    const key = term.source.trim().toLowerCase();
-    if (!key) continue;
-    map.set(key, {
-      source: term.source.trim(),
-      target: term.target.trim(),
-      ...(term.note?.trim() ? { note: term.note.trim() } : {}),
-      ...(term.category ? { category: term.category } : {}),
-      ...(term.aliases?.length ? { aliases: term.aliases } : {}),
-      ...(term.origin ? { origin: term.origin } : {}),
-      ...(term.pinned ? { pinned: true } : {}),
-    });
-  }
-  return [...map.values()];
+  return mergeGlossaryTermsV2(terms, []).terms;
 }
 
 const TERM_CATEGORIES: ReadonlyArray<TranslationTermCategory> = [
