@@ -104,6 +104,14 @@ export interface TranslationModelPort {
     readonly summary: string;
     readonly issues: ReadonlyArray<string>;
   }>;
+  readonly extractGlossary?: (input: {
+    readonly sourceLanguage: string;
+    readonly targetLanguage: string;
+    readonly namingPolicy: string;
+    readonly samples: ReadonlyArray<{ readonly chapterNumber: number; readonly text: string }>;
+  }) => Promise<{
+    readonly terms: ReadonlyArray<TranslationGlossaryTerm>;
+  }>;
 }
 
 export interface RunTranslationProjectResult {

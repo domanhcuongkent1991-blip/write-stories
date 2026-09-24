@@ -2,7 +2,22 @@ import type { LLMClient } from "../llm/provider.js";
 import { runWorkerAgent } from "../agent/worker-agent.js";
 import { appendActivatedSkillGuidance } from "../agents/base.js";
 import type { ActivatedSkillGuidance } from "../agent/skill-tool.js";
-import type { TranslationGlossaryTerm, TranslationModelPort, TranslationSegment } from "./types.js";
+import type {
+  TranslationGlossaryTerm,
+  TranslationModelPort,
+  TranslationSegment,
+  TranslationTermCategory,
+} from "./types.js";
+
+const GLOSSARY_CATEGORIES: ReadonlySet<string> = new Set([
+  "person",
+  "place",
+  "organization",
+  "sect",
+  "technique",
+  "item",
+  "other",
+]);
 
 export function createLLMTranslationModel(input: {
   readonly client: LLMClient;
@@ -76,6 +91,31 @@ export function createLLMTranslationModel(input: {
         issues: Array.isArray(parsed.issues) ? parsed.issues.filter((issue): issue is string => typeof issue === "string") : [],
       };
     },
+    async extractGlossary(request) {
+      const response = await runWorkerAgent(input.client, input.model, appendActivatedSkillGuidance([
+        {
+          role: "system",
+          content: [
+            "You are InkOS Translation Glossary Agent.",
+            "Extract recurring proper nouns and domain terminology from the supplied source excerpts.",
+            "Propose one locked target translation per source term and group address variants of the same entity as aliases.",
+            "Apply the supplied naming policy when proposing targets.",
+            "Return JSON only: {\"terms\":[{\"source\":\"...\",\"target\":\"...\",\"category\":\"person|place|organization|sect|technique|item|other\",\"aliases\":[\"...\"],\"note\":\"optional\"}]}",
+          ].join("\n"),
+        },
+        {
+          role: "user",
+          content: JSON.stringify({
+            sourceLanguage: request.sourceLanguage,
+            targetLanguage: request.targetLanguage,
+            namingPolicy: request.namingPolicy,
+            samples: request.samples,
+          }, null, 2),
+        },
+      ], input.activatedSkills), { temperature: 0.1, maxTokens: input.maxTokens ?? 8192, signal: input.signal });
+      const parsed = parseJsonObject(response.content);
+      return { terms: parseGlossary(parsed.terms) };
+    },
   };
 }
 
@@ -112,11 +152,22 @@ function parseGlossary(value: unknown): ReadonlyArray<TranslationGlossaryTerm> {
     const source = typeof record.source === "string" ? record.source.trim() : "";
     const target = typeof record.target === "string" ? record.target.trim() : "";
     if (!source || !target) return [];
+    const category = typeof record.category === "string" && GLOSSARY_CATEGORIES.has(record.category)
+      ? record.category as TranslationTermCategory
+      : undefined;
+    const aliases = Array.isArray(record.aliases)
+      ? record.aliases
+        .filter((alias): alias is string => typeof alias === "string" && alias.trim().length > 0)
+        .map((alias) => alias.trim())
+      : [];
     return [{
       source,
       target,
       ...(typeof record.note === "string" && record.note.trim() ? { note: record.note.trim() } : {}),
-    }];
+      ...(category ? { category } : {}),
+      ...(aliases.length ? { aliases } : {}),
+      origin: "auto",
+    } satisfies TranslationGlossaryTerm];
   });
 }
 

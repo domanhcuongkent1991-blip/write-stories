@@ -8,3 +8,4 @@ export * from "./llm-model.js";
 export * from "./run-store.js";
 export * from "./glossary-merge.js";
 export * from "./document-sampler.js";
+export * from "./glossary-prep.js";
