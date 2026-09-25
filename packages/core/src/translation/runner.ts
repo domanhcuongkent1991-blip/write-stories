@@ -8,7 +8,7 @@ import {
 import { buildBatchContext } from "./context.js";
 import { mergeGlossaryTermsV2 } from "./glossary-merge.js";
 import { filterGlossaryForText } from "./glossary-filter.js";
-import { runChapterQa } from "./qa.js";
+import { collectThirdPersonForms, runChapterQa } from "./qa.js";
 import { normalizeLanguageCode, resolveStyleContract } from "./vi-contract.js";
 import { prepareTranslationGlossary } from "./glossary-prep.js";
 import {
@@ -70,6 +70,7 @@ export async function runTranslationProject(
     const reportLines = [`# Translation Review`, ""];
     let translatedSegments = 0;
     let reviewedChapters = 0;
+    let previousChapterForms: ReadonlyArray<string> | undefined;
     const batchSize = Math.max(1, Math.min(options.batchSize ?? 8, 32));
 
     // Auto-prep: seed the glossary once before the first run unless skipped.
@@ -117,6 +118,7 @@ export async function runTranslationProject(
         contextAfter: batchContext.contextAfter,
         previousTargetTail: batchContext.previousTargetTail,
         ...(chapterSummary ? { chapterSummary } : {}),
+        ...(previousChapterForms?.length ? { previousAddressForms: previousChapterForms } : {}),
       });
       for (const item of result.segments) {
         const original = source.segments.find((segment) => segment.index === item.index);
@@ -217,8 +219,18 @@ export async function runTranslationProject(
     manifest = updateChapterStatus(manifest, chapterInfo.number, "refined");
     await saveTranslationManifest(projectRoot, manifest);
 
-    const completedSegments = orderedTranslatedSegments(source.segments, translatedByIndex);
-    const qaReport = runChapterQa({
+    let completedSegments = orderedTranslatedSegments(source.segments, translatedByIndex);
+
+    // Self-healing loop: when Han characters remain, re-refine exactly those
+    // segments with concrete feedback (Try–Heal–Retry pattern). Capped at 2
+    // attempts; a chapter that stays dirty keeps its QA flag (fail-closed).
+    // Only chapters actually touched by this run are healed — previously
+    // refined chapters are never rewritten behind the caller's back.
+    const touched = undrafted.length > 0 || unrefined.length > 0;
+    const HAN_PATTERN = /\p{Script=Han}/u;
+    const MAX_CJK_RETRIES = 2;
+    let cjkRetries = 0;
+    let qaReport = runChapterQa({
       sourceLanguage,
       targetLanguage,
       segments: completedSegments.map((segment) => ({
@@ -227,6 +239,53 @@ export async function runTranslationProject(
       })),
       glossary,
     });
+    while (touched && qaReport.metrics.cjkResidue > 0 && options.model.refineSegments && cjkRetries < MAX_CJK_RETRIES) {
+      cjkRetries += 1;
+      const segmentsWithHan = completedSegments.filter((segment) => HAN_PATTERN.test(segment.target ?? ""));
+      if (segmentsWithHan.length === 0) break;
+      const hanChars = [...new Set(
+        segmentsWithHan.flatMap((segment) => segment.target?.match(/\p{Script=Han}/gu) ?? []),
+      )].join("");
+      const refined = await options.model.refineSegments({
+        sourceLanguage,
+        targetLanguage,
+        chapterTitle: source.title,
+        segments: segmentsWithHan,
+        glossary: filterGlossaryForText(
+          glossary,
+          segmentsWithHan.map((segment) => segment.source).join("\n\n"),
+        ),
+        previousRefinedTail: buildBatchContext(
+          source.segments.map((segment) => ({ index: segment.index, source: segment.source })),
+          translatedTargetsByIndex(),
+          segmentsWithHan.map((segment) => ({ index: segment.index, source: segment.source })),
+          { tailChars: REFINED_TAIL_CHARS },
+        ).previousTargetTail,
+        styleContract,
+        instructions: `The previous translation still contains Han characters (${hanChars}). Replace EVERY remaining Han character with natural Vietnamese; do not leave any Chinese text in the output.`,
+      });
+      for (const item of refined.segments) {
+        const current = translatedByIndex.get(item.index);
+        if (!current) continue;
+        translatedByIndex.set(item.index, { ...current, target: item.target, stage: "refined" });
+      }
+      await saveTranslationProgress(projectRoot, projectId, chapterInfo.translatedPath, {
+        ...source,
+        segments: orderedTranslatedSegments(source.segments, translatedByIndex),
+      }, glossary);
+      completedSegments = orderedTranslatedSegments(source.segments, translatedByIndex);
+      qaReport = runChapterQa({
+        sourceLanguage,
+        targetLanguage,
+        segments: completedSegments.map((segment) => ({
+          source: segment.source,
+          target: segment.target ?? "",
+        })),
+        glossary,
+      });
+      reportLines.push(`- cjk auto-retry ${cjkRetries}: re-refined ${segmentsWithHan.length} segment(s)`);
+    }
+
     const qaPath = `translations/${projectId}/qa/chapter-${String(chapterInfo.number).padStart(4, "0")}.json`;
     await mkdir(join(projectRoot, "translations", projectId, "qa"), { recursive: true });
     await writeFile(join(projectRoot, qaPath), JSON.stringify({
@@ -286,6 +345,7 @@ export async function runTranslationProject(
     }
     manifest = updateChapterStatus(manifest, chapterInfo.number, status);
     await saveTranslationManifest(projectRoot, manifest);
+    previousChapterForms = collectThirdPersonForms(completedSegments);
   }
 
     const reportPath = `translations/${projectId}/review-report.md`;

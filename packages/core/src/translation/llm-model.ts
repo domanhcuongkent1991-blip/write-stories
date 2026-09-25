@@ -136,6 +136,7 @@ export function createLLMTranslationModel(input: {
             segments: request.segments,
             context: { previousTargetTail: request.previousRefinedTail },
             glossaryFiltered: request.glossary,
+            instructions: request.instructions,
           }),
         },
       ], input.activatedSkills), { temperature: 0.3, maxTokens: input.maxTokens ?? 8192, signal: input.signal });

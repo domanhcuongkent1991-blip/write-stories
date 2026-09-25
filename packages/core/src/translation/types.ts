@@ -131,6 +131,7 @@ export interface TranslationModelPort {
     readonly glossary: ReadonlyArray<TranslationGlossaryTerm>;
     readonly previousRefinedTail?: string;
     readonly styleContract?: string;
+    readonly instructions?: string;
   }) => Promise<{
     readonly segments: ReadonlyArray<{
       readonly index: number;

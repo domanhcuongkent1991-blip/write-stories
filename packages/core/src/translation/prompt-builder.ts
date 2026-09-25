@@ -20,6 +20,7 @@ export interface BuildTranslationUserPayloadInput {
   readonly segments: ReadonlyArray<TranslationSegment>;
   readonly context: PromptContext;
   readonly glossaryFiltered: ReadonlyArray<TranslationGlossaryTerm>;
+  readonly instructions?: string;
 }
 
 const GLOSSARY_LABEL = "# GLOSSARY - REQUIRED TRANSLATIONS";
@@ -96,6 +97,7 @@ export function buildRefineSystemPrompt(input: BuildTranslationSystemPromptInput
 export function buildRefineUserPayload(input: BuildTranslationUserPayloadInput): string {
   return buildLabeledPayload(input.chapterTitle, input.segments, input.context, input.glossaryFiltered, {
     includeDraft: true,
+    instructions: input.instructions,
   });
 }
 
@@ -104,7 +106,7 @@ function buildLabeledPayload(
   segments: ReadonlyArray<TranslationSegment>,
   context: PromptContext,
   glossary: ReadonlyArray<TranslationGlossaryTerm>,
-  options: { readonly includeDraft: boolean },
+  options: { readonly includeDraft: boolean; readonly instructions?: string },
 ): string {
   const lines: string[] = [`Chapter: ${chapterTitle}`];
 
@@ -139,6 +141,10 @@ function buildLabeledPayload(
       `The previous chapter used these third-person address forms: ${context.previousAddressForms.join(", ")}.`,
       "Keep the same forms for the same characters unless the source clearly switches to a different character.",
     );
+  }
+
+  if (options.instructions?.trim()) {
+    lines.push("", "# EXTRA INSTRUCTIONS", options.instructions.trim());
   }
 
   lines.push("", TASK_LABEL);

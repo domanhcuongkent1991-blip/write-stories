@@ -193,13 +193,13 @@ describe("translation runner", () => {
     const translateSegments = vi.fn<TranslationModelPort["translateSegments"]>(async ({ segments }) => ({
       segments: segments.map((segment) => ({
         index: segment.index,
-        target: `DRAFT:${segment.source}`,
+        target: `DRAFT-seg${segment.index}`,
       })),
     }));
     const refineSegments = vi.fn<NonNullable<TranslationModelPort["refineSegments"]>>(async ({ segments }) => ({
       segments: segments.map((segment) => ({
         index: segment.index,
-        target: `REFINED:${segment.source}`,
+        target: `REFINED-seg${segment.index}`,
       })),
     }));
     const refineSegmentsFailing = vi.fn<NonNullable<TranslationModelPort["refineSegments"]>>(async ({ segments }) => {
@@ -207,7 +207,7 @@ describe("translation runner", () => {
       return {
         segments: segments.map((segment) => ({
           index: segment.index,
-          target: `REFINED:${segment.source}`,
+          target: `REFINED-seg${segment.index}`,
         })),
       };
     });
@@ -222,13 +222,13 @@ describe("translation runner", () => {
 
     const afterCrash = await loadTranslationChapter(root, chapterInfo.translatedPath);
     expect(afterCrash.segments[0]).toMatchObject({
-      draft: "DRAFT:第一段。",
-      target: "REFINED:第一段。",
+      draft: "DRAFT-seg1",
+      target: "REFINED-seg1",
       stage: "refined",
     });
     expect(afterCrash.segments[1]).toMatchObject({
-      draft: "DRAFT:第二段。",
-      target: "DRAFT:第二段。",
+      draft: "DRAFT-seg2",
+      target: "DRAFT-seg2",
       stage: "draft",
     });
     const manifestAfterCrash = await readFile(join(root, "translations", created.manifest.id, "manifest.json"), "utf-8");
@@ -246,7 +246,7 @@ describe("translation runner", () => {
     expect((refineSegments.mock.calls[0]![0] as { segments: ReadonlyArray<{ index: number }> }).segments.map((segment) => segment.index)).toEqual([2]);
 
     const finalChapter = await loadTranslationChapter(root, chapterInfo.translatedPath);
-    expect(finalChapter.segments[1]).toMatchObject({ stage: "refined", target: "REFINED:第二段。" });
+    expect(finalChapter.segments[1]).toMatchObject({ stage: "refined", target: "REFINED-seg2" });
 
     const summaries = JSON.parse(
       await readFile(join(root, "translations", created.manifest.id, "summaries.json"), "utf-8"),
@@ -308,7 +308,7 @@ describe("translation runner", () => {
     const translateSegments = vi.fn<TranslationModelPort["translateSegments"]>(async ({ segments }) => ({
       segments: segments.map((segment) => ({
         index: segment.index,
-        target: `DRAFT:${segment.source}`,
+        target: `DRAFT-seg${segment.index}`,
       })),
     }));
 
@@ -319,13 +319,13 @@ describe("translation runner", () => {
 
     const chapter = await loadTranslationChapter(root, created.manifest.chapters[0]!.translatedPath);
     expect(chapter.segments[0]).toMatchObject({
-      draft: "DRAFT:第一段。",
-      target: "DRAFT:第一段。",
+      draft: "DRAFT-seg1",
+      target: "DRAFT-seg1",
       stage: "refined",
     });
     expect(chapter.segments[1]).toMatchObject({
-      draft: "DRAFT:第二段。",
-      target: "DRAFT:第二段。",
+      draft: "DRAFT-seg2",
+      target: "DRAFT-seg2",
       stage: "refined",
     });
   });
@@ -353,14 +353,14 @@ describe("translation runner", () => {
         return {
           segments: segments.map((segment) => ({
             index: segment.index,
-            target: `${label}:${segment.source}`,
+            target: `${label}-seg${segment.index}`,
           })),
         };
       },
       refineSegments: async ({ segments }) => ({
         segments: segments.map((segment) => ({
           index: segment.index,
-          target: `${label}:refined:${segment.source}`,
+          target: `${label}-r-seg${segment.index}`,
         })),
       }),
     });
@@ -382,8 +382,8 @@ describe("translation runner", () => {
 
     const chapter1 = await loadTranslationChapter(root, created.manifest.chapters[0]!.translatedPath);
     const chapter2 = await loadTranslationChapter(root, created.manifest.chapters[1]!.translatedPath);
-    expect(chapter1.segments[0]).toMatchObject({ target: "PASS1:refined:第一段。" });
-    expect(chapter2.segments[0]).toMatchObject({ target: "PASS2:refined:第二段。", draft: "PASS2:第二段。" });
+    expect(chapter1.segments[0]).toMatchObject({ target: "PASS1-r-seg1" });
+    expect(chapter2.segments[0]).toMatchObject({ target: "PASS2-r-seg1", draft: "PASS2-seg1" });
     expect(counter).toBe(callsBefore + 1);
   });
 
@@ -414,5 +414,121 @@ describe("translation runner", () => {
 
     await runTranslationProject(root, created.manifest.id, { model: makeModel(), batchSize: 4 });
     expect(extractGlossary).toHaveBeenCalledTimes(1);
+  });
+
+  it("auto-retries han-residue segments with feedback until clean (cap 2)", async () => {
+    const created = await createTranslationProjectFromFile(root, {
+      filePath: "inputs/book.md",
+      sourceLanguage: "zh",
+      targetLanguage: "vi",
+    });
+
+    const translateSegments = vi.fn<TranslationModelPort["translateSegments"]>(async ({ segments }) => ({
+      segments: segments.map((segment) => ({
+        index: segment.index,
+        target: `DRAFT-seg${segment.index}`,
+      })),
+    }));
+    // Pass-2 refine keeps Han residue; the auto-retry call (identified by the
+    // instructions field) returns a clean Vietnamese target.
+    const refineSegments = vi.fn<NonNullable<TranslationModelPort["refineSegments"]>>(async ({ segments, instructions }) => ({
+      segments: segments.map((segment) => ({
+        index: segment.index,
+        target: instructions ? `Bản dịch sạch cho đoạn ${segment.index}.` : `REFINED:${segment.source}`,
+      })),
+    }));
+
+    const result = await runTranslationProject(root, created.manifest.id, {
+      model: { translateSegments, refineSegments },
+      batchSize: 8,
+    });
+    expect(result.translatedSegments).toBe(2);
+
+    // Pass-2 refine once + one successful auto-retry.
+    expect(refineSegments).toHaveBeenCalledTimes(2);
+    const retryCall = refineSegments.mock.calls[1]![0]!;
+    expect(retryCall.instructions).toContain("Han");
+
+    const chapter = await loadTranslationChapter(root, created.manifest.chapters[0]!.translatedPath);
+    expect(chapter.segments[0]!.target).not.toMatch(/\p{Script=Han}/u);
+
+    const qaReport = JSON.parse(
+      await readFile(join(root, "translations", created.manifest.id, "qa", "chapter-0001.json"), "utf-8"),
+    ) as { passed: boolean; metrics: { cjkResidue: number } };
+    expect(qaReport.passed).toBe(true);
+    expect(qaReport.metrics.cjkResidue).toBe(0);
+
+    const report = await readFile(join(root, "translations", created.manifest.id, "review-report.md"), "utf-8");
+    expect(report).toContain("cjk auto-retry");
+  });
+
+  it("caps cjk auto-retry at 2 attempts and keeps the chapter flagged", async () => {
+    const created = await createTranslationProjectFromFile(root, {
+      filePath: "inputs/book.md",
+      sourceLanguage: "zh",
+      targetLanguage: "vi",
+    });
+
+    const refineSegments = vi.fn<NonNullable<TranslationModelPort["refineSegments"]>>(async ({ segments }) => ({
+      segments: segments.map((segment) => ({
+        index: segment.index,
+        target: `REFINED:${segment.source}`,
+      })),
+    }));
+
+    const result = await runTranslationProject(root, created.manifest.id, {
+      model: {
+        translateSegments: async ({ segments }) => ({
+          segments: segments.map((segment) => ({ index: segment.index, target: `DRAFT:${segment.source}` })),
+        }),
+        refineSegments,
+      },
+      batchSize: 8,
+    });
+
+    // Pass-2 refine once + 2 capped auto-retries = 3 calls, no throw.
+    expect(refineSegments).toHaveBeenCalledTimes(3);
+    expect(result.translatedSegments).toBe(2);
+
+    const qaReport = JSON.parse(
+      await readFile(join(root, "translations", created.manifest.id, "qa", "chapter-0001.json"), "utf-8"),
+    ) as { passed: boolean; metrics: { cjkResidue: number } };
+    expect(qaReport.passed).toBe(false);
+    expect(qaReport.metrics.cjkResidue).toBeGreaterThan(0);
+  });
+
+  it("passes the previous chapter's third-person forms into prompts", async () => {
+    await writeFile(join(root, "inputs", "book2.md"), [
+      "# 第一章 雨夜",
+      "",
+      "第一段。",
+      "",
+      "他想回家。",
+      "",
+      "# 第二章 清晨",
+      "",
+      "第二段。",
+    ].join("\n"));
+    const created = await createTranslationProjectFromFile(root, {
+      filePath: "inputs/book2.md",
+      sourceLanguage: "zh",
+      targetLanguage: "vi",
+    });
+
+    const seenForms: Array<ReadonlyArray<string> | undefined> = [];
+    const translateSegments = vi.fn<TranslationModelPort["translateSegments"]>(async ({ segments, previousAddressForms }) => {
+      seenForms.push(previousAddressForms);
+      return {
+        segments: segments.map((segment) => ({ index: segment.index, target: `Y:${segment.index}` })),
+      };
+    });
+
+    await runTranslationProject(root, created.manifest.id, {
+      model: { translateSegments },
+      batchSize: 8,
+    });
+
+    expect(seenForms[0]).toBeUndefined();
+    expect(seenForms[1]).toEqual(["y"]);
   });
 });
