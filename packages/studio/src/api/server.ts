@@ -6712,14 +6712,19 @@ export function createStudioServer(
     if (!isSafeBookId(id)) {
       return c.json({ error: { code: "INVALID_ID", message: `invalid translation id: ${id}` } }, 400);
     }
-    const body: { batchSize?: number; maxTokens?: number } = await c.req.json().catch(() => ({}));
+    const body: { batchSize?: number; maxTokens?: number; model?: string; baseUrl?: string } = await c.req.json().catch(() => ({}));
     try {
       const currentConfig = await loadCurrentProjectConfig();
       const configuredSkills = await loadAvailableAgentSkills({ projectRoot: root });
       const activatedSkills = resolveProductionSkillActivations(configuredSkills.skills, "translation");
+      const runLLMConfig: typeof currentConfig.llm = {
+        ...currentConfig.llm,
+        ...(body.model?.trim() ? { model: body.model.trim() } : {}),
+        ...(body.baseUrl?.trim() ? { baseUrl: body.baseUrl.trim() } : {}),
+      };
       const model = createLLMTranslationModel({
-        client: createLLMClient(currentConfig.llm),
-        model: currentConfig.llm.model,
+        client: createLLMClient(runLLMConfig),
+        model: runLLMConfig.model,
         maxTokens: body.maxTokens,
         activatedSkills,
         signal: c.req.raw.signal,
