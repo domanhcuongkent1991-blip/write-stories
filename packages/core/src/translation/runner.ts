@@ -1,4 +1,5 @@
 import { join } from "node:path";
+import { mkdir, writeFile } from "node:fs/promises";
 import {
   commitProductionArtifacts,
   createProductionRunSnapshot,
@@ -7,6 +8,7 @@ import {
 import { buildBatchContext } from "./context.js";
 import { mergeGlossaryTermsV2 } from "./glossary-merge.js";
 import { filterGlossaryForText } from "./glossary-filter.js";
+import { runChapterQa } from "./qa.js";
 import { normalizeLanguageCode, resolveStyleContract } from "./vi-contract.js";
 import {
   loadTranslationChapter,
@@ -204,6 +206,45 @@ export async function runTranslationProject(
     manifest = updateChapterStatus(manifest, chapterInfo.number, "refined");
     await saveTranslationManifest(projectRoot, manifest);
 
+    const completedSegments = orderedTranslatedSegments(source.segments, translatedByIndex);
+    const qaReport = runChapterQa({
+      sourceLanguage,
+      targetLanguage,
+      segments: completedSegments.map((segment) => ({
+        source: segment.source,
+        target: segment.target ?? "",
+      })),
+      glossary,
+    });
+    const qaPath = `translations/${projectId}/qa/chapter-${String(chapterInfo.number).padStart(4, "0")}.json`;
+    await mkdir(join(projectRoot, "translations", projectId, "qa"), { recursive: true });
+    await writeFile(join(projectRoot, qaPath), JSON.stringify({
+      number: chapterInfo.number,
+      title: source.title,
+      sourceLanguage,
+      targetLanguage,
+      passed: qaReport.passed,
+      metrics: qaReport.metrics,
+      issues: qaReport.issues,
+    }, null, 2), "utf-8");
+    manifest = {
+      ...manifest,
+      updatedAt: new Date().toISOString(),
+      chapters: manifest.chapters.map((chapter) =>
+        chapter.number === chapterInfo.number
+          ? { ...chapter, qa: { passed: qaReport.passed, reportPath: qaPath } }
+          : chapter,
+      ),
+    };
+    await saveTranslationManifest(projectRoot, manifest);
+    reportLines.push(
+      `- qa: passed=${qaReport.passed ? "yes" : "no"}, adherence=${Math.round(qaReport.metrics.adherence * 1000) / 10}%, cjkResidue=${qaReport.metrics.cjkResidue}, addressVariants=${qaReport.metrics.addressVariants}, variants=${qaReport.metrics.variants}`,
+    );
+    for (const issue of qaReport.issues) {
+      reportLines.push(`- qa issue: ${issue}`);
+    }
+    reportLines.push("");
+
     if (options.model.summarizeChapter && source.segments.some((segment) => translatedByIndex.get(segment.index)?.target?.trim())) {
       const { summary } = await options.model.summarizeChapter({
         sourceLanguage,
@@ -215,7 +256,6 @@ export async function runTranslationProject(
       await saveTranslationSummaries(projectRoot, projectId, summaries);
     }
 
-    const completedSegments = orderedTranslatedSegments(source.segments, translatedByIndex);
     let status: "refined" | "reviewed" = "refined";
     if (options.model.reviewChapter && completedSegments.some((segment) => segment.target?.trim())) {
       const review = await options.model.reviewChapter({

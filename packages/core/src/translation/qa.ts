@@ -59,18 +59,18 @@ export function runChapterQa(input: {
     issues.push(`address-variants: source pronoun(s) ${[...flaggedPronouns].join(", ")} map to multiple Vietnamese address forms within a ${ADDRESS_WINDOW_SIZE}-segment window.`);
   }
 
-  const variants = countGlossaryVariants(input.glossary);
-  if (variants > 0) {
-    issues.push(`variant-detection: ${variants} glossary source term(s) resolve to more than one target.`);
+  const variantKeys = findGlossaryVariantKeys(input.glossary);
+  if (variantKeys.length > 0) {
+    issues.push(`variant-detection: glossary source term(s) resolve to more than one target: ${variantKeys.join(", ")}.`);
   }
 
   return {
-    passed: cjkResidue === 0 && flaggedPronouns.size === 0 && variants === 0,
+    passed: cjkResidue === 0 && flaggedPronouns.size === 0 && variantKeys.length === 0,
     metrics: {
       adherence: measureAdherence(input.glossary, combinedSource, combinedTarget),
       cjkResidue,
       addressVariants: flaggedPronouns.size,
-      variants,
+      variants: variantKeys.length,
     },
     issues,
   };
@@ -89,24 +89,46 @@ function measureAdherence(
   combinedSource: string,
   combinedTarget: string,
 ): number {
-  const applicable = glossary.filter(
-    (term) => term.source.trim().length > 0 && combinedSource.includes(term.source.trim()),
+  const applicable = glossary.filter((term) =>
+    sourceForms(term).some((form) => combinedSource.includes(form)),
   );
   if (applicable.length === 0) return 1;
-  const hits = applicable.filter((term) => combinedTarget.includes(term.target.trim())).length;
+  const hits = applicable.filter((term) =>
+    targetForms(term).some((form) => combinedTarget.includes(form)),
+  ).length;
   return hits / applicable.length;
 }
 
-function countGlossaryVariants(glossary: ReadonlyArray<TranslationGlossaryTerm>): number {
-  const targetsByKey = new Map<string, Set<string>>();
+function findGlossaryVariantKeys(
+  glossary: ReadonlyArray<TranslationGlossaryTerm>,
+): ReadonlyArray<string> {
+  const targetsByKey = new Map<string, { source: string; targets: Set<string> }>();
   for (const term of glossary) {
     const key = term.source.trim().toLowerCase();
     if (!key) continue;
-    const targets = targetsByKey.get(key) ?? new Set<string>();
-    targets.add(term.target.trim());
-    targetsByKey.set(key, targets);
+    const entry = targetsByKey.get(key) ?? { source: term.source.trim(), targets: new Set<string>() };
+    entry.targets.add(term.target.trim());
+    targetsByKey.set(key, entry);
   }
-  return [...targetsByKey.values()].filter((targets) => targets.size > 1).length;
+  const keys: string[] = [];
+  for (const entry of targetsByKey.values()) {
+    if (entry.targets.size > 1) {
+      keys.push(entry.source);
+    }
+  }
+  return keys;
+}
+
+// Source forms include aliases: 小李 is the same entity as 李明, so a term
+// counts as present in the chapter when either form appears.
+function sourceForms(term: TranslationGlossaryTerm): ReadonlyArray<string> {
+  return [term.source, ...(term.aliases ?? [])].map((form) => form.trim()).filter(Boolean);
+}
+
+// Target forms accept the aliases as well: the locked target is preferred,
+// but a recognized alias in the output still counts as a hit.
+function targetForms(term: TranslationGlossaryTerm): ReadonlyArray<string> {
+  return [term.target, ...(term.aliases ?? [])].map((form) => form.trim()).filter(Boolean);
 }
 
 function findAddressVariants(

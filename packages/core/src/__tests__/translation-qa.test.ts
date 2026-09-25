@@ -119,6 +119,41 @@ describe("runChapterQa", () => {
     expect(report.metrics.adherence).toBe(1);
   });
 
+  it("treats an alias occurrence as a glossary hit for alias-aware adherence", () => {
+    const report = runChapterQa({
+      sourceLanguage: "zh",
+      targetLanguage: "vi",
+      segments: [{ source: "小明走进落霞城。", target: "小明 bước vào thành Lạc Hà." }],
+      glossary: [{ source: "李明", target: "Lý Minh", aliases: ["小明"] }],
+    });
+    expect(report.metrics.adherence).toBe(1);
+  });
+
+  it("scores alias-aware adherence against the locked target when only the source alias appears", () => {
+    const report = runChapterQa({
+      sourceLanguage: "zh",
+      targetLanguage: "vi",
+      segments: [{ source: "小明走进落霞城。", target: "Lý Minh bước vào thành Lạc Hà." }],
+      glossary: [{ source: "李明", target: "Lý Minh", aliases: ["小明"] }],
+    });
+    expect(report.metrics.adherence).toBe(1);
+  });
+
+  it("lists variant glossary keys when one source resolves to two targets", () => {
+    const report = runChapterQa({
+      sourceLanguage: "zh",
+      targetLanguage: "vi",
+      segments: [{ source: "李明到了。", target: "Lý Mạc đã đến." }],
+      glossary: [
+        { source: "李明", target: "Lý Minh" },
+        { source: "李明", target: "Lý Mạc" },
+      ],
+    });
+    expect(report.metrics.variants).toBe(1);
+    expect(report.passed).toBe(false);
+    expect(report.issues.join("\n")).toContain("李明");
+  });
+
   it("passes an empty chapter", () => {
     const report = runChapterQa({
       sourceLanguage: "zh",

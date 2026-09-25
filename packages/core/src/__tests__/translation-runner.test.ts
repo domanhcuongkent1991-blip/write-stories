@@ -253,6 +253,49 @@ describe("translation runner", () => {
     expect(summarizeChapter).toHaveBeenCalledTimes(1);
   });
 
+  it("writes a chapter qa report and records it in the manifest", async () => {
+    const created = await createTranslationProjectFromFile(root, {
+      filePath: "inputs/book.md",
+      sourceLanguage: "zh",
+      targetLanguage: "vi",
+    });
+    const projectId = created.manifest.id;
+
+    await runTranslationProject(root, projectId, {
+      model: {
+        translateSegments: async ({ segments }) => ({
+          segments: segments.map((segment) => ({
+            index: segment.index,
+            target: `clean target ${segment.index}`,
+          })),
+        }),
+      },
+      batchSize: 2,
+    });
+
+    const qaPath = join(root, "translations", projectId, "qa", "chapter-0001.json");
+    const qaReport = JSON.parse(await readFile(qaPath, "utf-8")) as {
+      number: number;
+      passed: boolean;
+      metrics: { adherence: number; cjkResidue: number };
+    };
+    expect(qaReport.number).toBe(1);
+    expect(qaReport.passed).toBe(true);
+    expect(qaReport.metrics.cjkResidue).toBe(0);
+    expect(qaReport.metrics.adherence).toBe(1);
+
+    const manifest = JSON.parse(
+      await readFile(join(root, "translations", projectId, "manifest.json"), "utf-8"),
+    ) as { chapters: Array<{ qa?: { passed: boolean; reportPath: string } }> };
+    expect(manifest.chapters[0]!.qa).toEqual({
+      passed: true,
+      reportPath: `translations/${projectId}/qa/chapter-0001.json`,
+    });
+
+    const report = await readFile(join(root, "translations", projectId, "review-report.md"), "utf-8");
+    expect(report).toContain("qa:");
+  });
+
   it("keeps the draft as the final target when the model cannot refine", async () => {
     const created = await createTranslationProjectFromFile(root, {
       filePath: "inputs/book.md",
