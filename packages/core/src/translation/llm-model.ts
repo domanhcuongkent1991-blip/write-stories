@@ -49,6 +49,7 @@ export function createLLMTranslationModel(input: {
               contextBefore: request.contextBefore,
               contextAfter: request.contextAfter,
               previousTargetTail: request.previousTargetTail,
+              previousAddressForms: request.previousAddressForms,
             },
             glossaryFiltered: request.glossary,
           }),

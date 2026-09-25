@@ -8,6 +8,10 @@ describe("resolveStyleContract", () => {
     expect(contract).toContain("xưng hô");
     expect(contract).toContain("Hán-Việt");
     expect(contract).toContain("không dịch từng chữ");
+    // Hardened rules (approved P2): one third-person form per character and
+    // zero Han characters left behind.
+    expect(contract).toContain("ngôi thứ ba");
+    expect(contract).toContain("chữ Hán");
   });
 
   it("returns no contract for the vi->zh direction", () => {

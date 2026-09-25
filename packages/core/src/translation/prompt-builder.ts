@@ -5,6 +5,7 @@ export interface PromptContext {
   readonly contextAfter?: string;
   readonly previousTargetTail?: string;
   readonly chapterSummary?: string;
+  readonly previousAddressForms?: ReadonlyArray<string>;
 }
 
 export interface BuildTranslationSystemPromptInput {
@@ -129,6 +130,15 @@ function buildLabeledPayload(
 
   if (options.includeDraft) {
     lines.push("", DRAFT_LABEL, "Refine this draft for each segment. Keep the segment order and meaning.");
+  }
+
+  if (context.previousAddressForms && context.previousAddressForms.length > 0) {
+    lines.push(
+      "",
+      "# CONTINUITY (do NOT translate)",
+      `The previous chapter used these third-person address forms: ${context.previousAddressForms.join(", ")}.`,
+      "Keep the same forms for the same characters unless the source clearly switches to a different character.",
+    );
   }
 
   lines.push("", TASK_LABEL);

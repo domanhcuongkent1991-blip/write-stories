@@ -105,6 +105,32 @@ describe("buildTranslationUserPayload", () => {
     expect(payload).toMatchSnapshot();
   });
 
+  it("renders a CONTINUITY block with previous third-person forms when provided", () => {
+    const payload = buildTranslationUserPayload({
+      chapterTitle: "入门",
+      segments,
+      context: { previousAddressForms: ["hắn", "nàng"] },
+      glossaryFiltered: glossary,
+    });
+    const blockPosition = payload.indexOf("# CONTINUITY (do NOT translate)");
+    expect(blockPosition).toBeGreaterThanOrEqual(0);
+    expect(payload).toContain("hắn, nàng");
+    expect(payload).toContain("Keep the same forms");
+    // Continuity sits after the context blocks, before TASK.
+    const taskPosition = payload.indexOf("# TASK");
+    expect(blockPosition < taskPosition).toBe(true);
+  });
+
+  it("omits the CONTINUITY block when no previous address forms are known", () => {
+    const payload = buildTranslationUserPayload({
+      chapterTitle: "入门",
+      segments,
+      context: {},
+      glossaryFiltered: [],
+    });
+    expect(payload).not.toContain("# CONTINUITY");
+  });
+
   it("omits context blocks when the context is empty", () => {
     const payload = buildTranslationUserPayload({
       chapterTitle: "入门",

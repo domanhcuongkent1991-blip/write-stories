@@ -95,6 +95,7 @@ export interface TranslationModelPort {
     readonly contextAfter?: string;
     readonly previousTargetTail?: string;
     readonly chapterSummary?: string;
+    readonly previousAddressForms?: ReadonlyArray<string>;
   }) => Promise<{
     readonly segments: ReadonlyArray<{
       readonly index: number;

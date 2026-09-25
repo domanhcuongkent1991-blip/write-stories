@@ -43,6 +43,8 @@ const ZH_VI_STYLE_CONTRACT = [
   "2. Tên riêng theo chính sách Hán-Việt có chọn lọc: tên người và tên môn phái/giáo phái đọc theo âm Hán-Việt (Lý Minh, Thanh Vân Môn); địa danh quen thuộc dùng âm Hán-Việt đã phổ biến, còn lại dịch nghĩa; thuật ngữ và vật phẩm ưu tiên từ Việt tự nhiên (linh thạch, luyện đan...), chỉ Hán-Việt khi không có từ Việt tương ứng.",
   "3. Câu tiếng Việt tự nhiên: không dịch từng chữ, tránh calque trật tự tiếng Trung, tránh lặp trơ 'đã... đã', giữ nhịp câu hội thoại sống động, lời nói của nhân vật dùng cách nói của người Việt.",
   "4. Sát nghĩa nhưng không cứng nhắc: được phép thay đổi cấu trúc câu và lựa chọn từ để câu đọc mượt, miễn không thêm hay bớt ý, không diễn giải thêm, không tóm tắt.",
+  "5. Ngôi thứ ba khóa cứng: mỗi nhân vật giữ MỘT form ngôi thứ ba (hắn/nàng/y/cậu...) và giữ nguyên xuyên suốt toàn bộ chương, không đổi form giữa các đoạn; nếu chương trước đã dùng một form cho nhân vật đó thì tiếp tục dùng đúng form đó.",
+  "6. Tuyệt đối không để lại bất kỳ chữ Hán nào trong bản dịch: mọi ký tự Hán còn sót trong văn bản tiếng Việt đều là lỗi bắt buộc phải dịch hết.",
 ].join("\n");
 
 // v1 ships only the zh->vi contract; other directions keep the generic prompt.
