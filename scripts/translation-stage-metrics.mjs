@@ -23,11 +23,12 @@ const { values } = parseArgs({
     stage: { type: "string" },
     root: { type: "string" },
     out: { type: "string" },
+    glossary: { type: "string" },
   },
 });
 
 if (!values.project || !values.stage) {
-  console.error("Usage: node scripts/translation-stage-metrics.mjs --project <projectId> --stage <name> [--root <projectRoot>] [--out <metricsPath>]");
+  console.error("Usage: node scripts/translation-stage-metrics.mjs --project <projectId> --stage <name> [--root <projectRoot>] [--out <metricsPath>] [--glossary <sharedGlossaryPath>]");
   process.exit(1);
 }
 
@@ -49,10 +50,22 @@ if (!existsSync(manifestPath)) {
 const manifest = JSON.parse(await readFile(manifestPath, "utf-8"));
 
 let glossary = [];
-const glossaryPath = join(projectDir, "glossary.json");
-if (existsSync(glossaryPath)) {
-  const raw = JSON.parse(await readFile(glossaryPath, "utf-8"));
-  glossary = Array.isArray(raw.terms) ? raw.terms : [];
+if (values.glossary) {
+  // Shared reference glossary: measures adherence fairly for ALL pipelines
+  // (baseline self-generated glossaries would otherwise always self-match).
+  const sharedPath = resolve(values.glossary);
+  if (!existsSync(sharedPath)) {
+    console.error(`Missing shared glossary: ${sharedPath}`);
+    process.exit(1);
+  }
+  const shared = JSON.parse(await readFile(sharedPath, "utf-8"));
+  glossary = Array.isArray(shared.terms) ? shared.terms : [];
+} else {
+  const glossaryPath = join(projectDir, "glossary.json");
+  if (existsSync(glossaryPath)) {
+    const raw = JSON.parse(await readFile(glossaryPath, "utf-8"));
+    glossary = Array.isArray(raw.terms) ? raw.terms : [];
+  }
 }
 
 const chapters = [];
