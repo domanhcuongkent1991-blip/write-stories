@@ -94,6 +94,7 @@ export interface TranslationModelPort {
     readonly contextBefore?: string;
     readonly contextAfter?: string;
     readonly previousTargetTail?: string;
+    readonly chapterSummary?: string;
   }) => Promise<{
     readonly segments: ReadonlyArray<{
       readonly index: number;
@@ -134,6 +135,14 @@ export interface TranslationModelPort {
       readonly index: number;
       readonly target: string;
     }>;
+  }>;
+  readonly summarizeChapter?: (input: {
+    readonly sourceLanguage: string;
+    readonly targetLanguage: string;
+    readonly chapterTitle: string;
+    readonly segments: ReadonlyArray<TranslationSegment>;
+  }) => Promise<{
+    readonly summary: string;
   }>;
 }
 

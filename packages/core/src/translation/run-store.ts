@@ -109,6 +109,43 @@ export async function saveTranslationProgress(
   });
 }
 
+export async function loadTranslationSummaries(
+  projectRoot: string,
+  projectId: string,
+): Promise<ReadonlyArray<TranslationChapterSummary>> {
+  try {
+    const raw = JSON.parse(await readFile(join(translationProjectDir(projectRoot, projectId), "summaries.json"), "utf-8")) as {
+      summaries?: unknown;
+    };
+    return Array.isArray(raw.summaries) ? raw.summaries.filter(isChapterSummary) : [];
+  } catch {
+    return [];
+  }
+}
+
+export async function saveTranslationSummaries(
+  projectRoot: string,
+  projectId: string,
+  summaries: ReadonlyArray<TranslationChapterSummary>,
+): Promise<void> {
+  await writeFile(
+    join(translationProjectDir(projectRoot, projectId), "summaries.json"),
+    JSON.stringify({ summaries }, null, 2),
+    "utf-8",
+  );
+}
+
+export interface TranslationChapterSummary {
+  readonly number: number;
+  readonly summary: string;
+}
+
+function isChapterSummary(value: unknown): value is TranslationChapterSummary {
+  if (!value || typeof value !== "object") return false;
+  const record = value as Record<string, unknown>;
+  return typeof record.number === "number" && typeof record.summary === "string";
+}
+
 export function mergeGlossaryTerms(terms: ReadonlyArray<TranslationGlossaryTerm>): ReadonlyArray<TranslationGlossaryTerm> {
   return mergeGlossaryTermsV2(terms, []).terms;
 }

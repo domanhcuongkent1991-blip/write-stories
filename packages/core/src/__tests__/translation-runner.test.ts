@@ -179,4 +179,109 @@ describe("translation runner", () => {
     expect(loaded.segments[0]).toMatchObject({ target: "EN:第一段。", stage: "draft" });
     expect(loaded.segments[1]!.stage).toBeUndefined();
   });
+
+  it("runs draft and refine passes, saves summaries, and resumes between passes", async () => {
+    const created = await createTranslationProjectFromFile(root, {
+      filePath: "inputs/book.md",
+      sourceLanguage: "zh",
+      targetLanguage: "vi",
+    });
+    const chapterInfo = created.manifest.chapters[0]!;
+
+    const translateSegments = vi.fn<TranslationModelPort["translateSegments"]>(async ({ segments }) => ({
+      segments: segments.map((segment) => ({
+        index: segment.index,
+        target: `DRAFT:${segment.source}`,
+      })),
+    }));
+    const refineSegments = vi.fn<NonNullable<TranslationModelPort["refineSegments"]>>(async ({ segments }) => ({
+      segments: segments.map((segment) => ({
+        index: segment.index,
+        target: `REFINED:${segment.source}`,
+      })),
+    }));
+    const refineSegmentsFailing = vi.fn<NonNullable<TranslationModelPort["refineSegments"]>>(async ({ segments }) => {
+      if (segments.some((segment) => segment.index === 2)) throw new Error("refine boom");
+      return {
+        segments: segments.map((segment) => ({
+          index: segment.index,
+          target: `REFINED:${segment.source}`,
+        })),
+      };
+    });
+    const summarizeChapter = vi.fn<NonNullable<TranslationModelPort["summarizeChapter"]>>(async () => ({
+      summary: "tóm tắt chương một",
+    }));
+
+    await expect(runTranslationProject(root, created.manifest.id, {
+      model: { translateSegments, refineSegments: refineSegmentsFailing, summarizeChapter },
+      batchSize: 1,
+    })).rejects.toThrow("refine boom");
+
+    const afterCrash = await loadTranslationChapter(root, chapterInfo.translatedPath);
+    expect(afterCrash.segments[0]).toMatchObject({
+      draft: "DRAFT:第一段。",
+      target: "REFINED:第一段。",
+      stage: "refined",
+    });
+    expect(afterCrash.segments[1]).toMatchObject({
+      draft: "DRAFT:第二段。",
+      target: "DRAFT:第二段。",
+      stage: "draft",
+    });
+    const manifestAfterCrash = await readFile(join(root, "translations", created.manifest.id, "manifest.json"), "utf-8");
+    expect(manifestAfterCrash).toContain('"drafted"');
+    expect(translateSegments).toHaveBeenCalledTimes(2);
+    expect(summarizeChapter).not.toHaveBeenCalled();
+
+    await runTranslationProject(root, created.manifest.id, {
+      model: { translateSegments, refineSegments, summarizeChapter },
+      batchSize: 1,
+    });
+
+    expect(translateSegments).toHaveBeenCalledTimes(2);
+    expect(refineSegments).toHaveBeenCalledTimes(1);
+    expect((refineSegments.mock.calls[0]![0] as { segments: ReadonlyArray<{ index: number }> }).segments.map((segment) => segment.index)).toEqual([2]);
+
+    const finalChapter = await loadTranslationChapter(root, chapterInfo.translatedPath);
+    expect(finalChapter.segments[1]).toMatchObject({ stage: "refined", target: "REFINED:第二段。" });
+
+    const summaries = JSON.parse(
+      await readFile(join(root, "translations", created.manifest.id, "summaries.json"), "utf-8"),
+    ) as { summaries: Array<{ number: number; summary: string }> };
+    expect(summaries.summaries).toEqual([{ number: 1, summary: "tóm tắt chương một" }]);
+    expect(summarizeChapter).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps the draft as the final target when the model cannot refine", async () => {
+    const created = await createTranslationProjectFromFile(root, {
+      filePath: "inputs/book.md",
+      sourceLanguage: "zh",
+      targetLanguage: "vi",
+    });
+
+    const translateSegments = vi.fn<TranslationModelPort["translateSegments"]>(async ({ segments }) => ({
+      segments: segments.map((segment) => ({
+        index: segment.index,
+        target: `DRAFT:${segment.source}`,
+      })),
+    }));
+
+    await runTranslationProject(root, created.manifest.id, {
+      model: { translateSegments },
+      batchSize: 2,
+    });
+
+    const chapter = await loadTranslationChapter(root, created.manifest.chapters[0]!.translatedPath);
+    expect(chapter.segments[0]).toMatchObject({
+      draft: "DRAFT:第一段。",
+      target: "DRAFT:第一段。",
+      stage: "refined",
+    });
+    expect(chapter.segments[1]).toMatchObject({
+      draft: "DRAFT:第二段。",
+      target: "DRAFT:第二段。",
+      stage: "refined",
+    });
+  });
 });
