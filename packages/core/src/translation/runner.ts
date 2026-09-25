@@ -10,9 +10,11 @@ import { mergeGlossaryTermsV2 } from "./glossary-merge.js";
 import { filterGlossaryForText } from "./glossary-filter.js";
 import { runChapterQa } from "./qa.js";
 import { normalizeLanguageCode, resolveStyleContract } from "./vi-contract.js";
+import { prepareTranslationGlossary } from "./glossary-prep.js";
 import {
   loadTranslationChapter,
   loadTranslationGlossary,
+  loadTranslationGlossaryMeta,
   loadTranslationManifest,
   loadTranslationSummaries,
   saveTranslationProgress,
@@ -37,6 +39,7 @@ export async function runTranslationProject(
   options: {
     readonly model: TranslationModelPort;
     readonly batchSize?: number;
+    readonly skipPrep?: boolean;
   },
 ): Promise<RunTranslationProjectResult> {
   const runPath = join("translations", projectId, "status.json");
@@ -68,6 +71,14 @@ export async function runTranslationProject(
     let translatedSegments = 0;
     let reviewedChapters = 0;
     const batchSize = Math.max(1, Math.min(options.batchSize ?? 8, 32));
+
+    // Auto-prep: seed the glossary once before the first run unless skipped.
+    const glossaryMeta = await loadTranslationGlossaryMeta(projectRoot, projectId);
+    if (!options.skipPrep && options.model.extractGlossary && !glossaryMeta.prepCompletedAt) {
+      const prep = await prepareTranslationGlossary(projectRoot, projectId, { model: options.model });
+      glossary = prep.terms;
+      reportLines.push(`- glossary prep: ${prep.terms.length} term(s), ${prep.conflicts.length} conflict(s)`, "");
+    }
 
   for (const chapterInfo of manifest.chapters) {
     const source = await loadTranslationChapter(projectRoot, chapterInfo.sourcePath);
@@ -368,4 +379,35 @@ function updateChapterStatus(
       chapter.number === chapterNumber ? { ...chapter, status } : chapter,
     ),
   };
+}
+
+// Fix loop: clears draft/target/stage of the selected chapters and reruns the
+// two passes with the current glossary. Other chapters stay untouched.
+export async function retranslateChapters(
+  projectRoot: string,
+  projectId: string,
+  options: {
+    readonly model: TranslationModelPort;
+    readonly chapters: ReadonlyArray<number>;
+  },
+): Promise<RunTranslationProjectResult> {
+  const manifest = await loadTranslationManifest(projectRoot, projectId);
+  const selected = new Set(options.chapters);
+  const glossary = await loadTranslationGlossary(projectRoot, projectId);
+  for (const chapterInfo of manifest.chapters) {
+    if (!selected.has(chapterInfo.number)) continue;
+    const source = await loadTranslationChapter(projectRoot, chapterInfo.sourcePath);
+    await saveTranslationProgress(projectRoot, projectId, chapterInfo.translatedPath, {
+      ...source,
+      segments: source.segments.map(({ index, source: segmentSource }) => ({ index, source: segmentSource })),
+    }, glossary);
+  }
+  await saveTranslationManifest(projectRoot, {
+    ...manifest,
+    updatedAt: new Date().toISOString(),
+    chapters: manifest.chapters.map((chapter) =>
+      selected.has(chapter.number) ? { ...chapter, status: "pending", qa: undefined } : chapter,
+    ),
+  });
+  return runTranslationProject(projectRoot, projectId, { model: options.model, skipPrep: true });
 }

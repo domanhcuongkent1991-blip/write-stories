@@ -6,6 +6,8 @@ import {
   createTranslationProjectFromFile,
   loadTranslationChapter,
   loadTranslationGlossary,
+  loadTranslationGlossaryMeta,
+  retranslateChapters,
   runTranslationProject,
   saveTranslationGlossary,
   writeTranslationExport,
@@ -326,5 +328,91 @@ describe("translation runner", () => {
       target: "DRAFT:第二段。",
       stage: "refined",
     });
+  });
+
+  it("retranslates only the selected chapters with the current glossary", async () => {
+    await writeFile(join(root, "inputs", "book2.md"), [
+      "# 第一章 雨夜",
+      "",
+      "第一段。",
+      "",
+      "# 第二章 清晨",
+      "",
+      "第二段。",
+    ].join("\n"));
+    const created = await createTranslationProjectFromFile(root, {
+      filePath: "inputs/book2.md",
+      sourceLanguage: "zh",
+      targetLanguage: "vi",
+    });
+
+    let counter = 0;
+    const makeModel = (label: string): TranslationModelPort => ({
+      translateSegments: async ({ segments }) => {
+        counter += 1;
+        return {
+          segments: segments.map((segment) => ({
+            index: segment.index,
+            target: `${label}:${segment.source}`,
+          })),
+        };
+      },
+      refineSegments: async ({ segments }) => ({
+        segments: segments.map((segment) => ({
+          index: segment.index,
+          target: `${label}:refined:${segment.source}`,
+        })),
+      }),
+    });
+
+    await runTranslationProject(root, created.manifest.id, {
+      model: makeModel("PASS1"),
+      batchSize: 4,
+    });
+    const callsBefore = counter;
+    await saveTranslationGlossary(root, created.manifest.id, [
+      { source: "雨夜", target: "mưa đêm", origin: "approved" },
+    ]);
+
+    const result = await retranslateChapters(root, created.manifest.id, {
+      model: makeModel("PASS2"),
+      chapters: [2],
+    });
+    expect(result.translatedSegments).toBe(1);
+
+    const chapter1 = await loadTranslationChapter(root, created.manifest.chapters[0]!.translatedPath);
+    const chapter2 = await loadTranslationChapter(root, created.manifest.chapters[1]!.translatedPath);
+    expect(chapter1.segments[0]).toMatchObject({ target: "PASS1:refined:第一段。" });
+    expect(chapter2.segments[0]).toMatchObject({ target: "PASS2:refined:第二段。", draft: "PASS2:第二段。" });
+    expect(counter).toBe(callsBefore + 1);
+  });
+
+  it("auto-preps the glossary once before running unless skipPrep is set", async () => {
+    const created = await createTranslationProjectFromFile(root, {
+      filePath: "inputs/book.md",
+      sourceLanguage: "zh",
+      targetLanguage: "vi",
+    });
+    const translateSegments = vi.fn<TranslationModelPort["translateSegments"]>(async ({ segments }) => ({
+      segments: segments.map((segment) => ({
+        index: segment.index,
+        target: `T:${segment.index}`,
+      })),
+    }));
+    const extractGlossary = vi.fn<NonNullable<TranslationModelPort["extractGlossary"]>>(async () => ({
+      terms: [{ source: "雨夜", target: "mưa đêm" }],
+    }));
+    const makeModel = (): TranslationModelPort => ({ translateSegments, extractGlossary });
+
+    await runTranslationProject(root, created.manifest.id, { model: makeModel(), batchSize: 4, skipPrep: true });
+    expect(extractGlossary).not.toHaveBeenCalled();
+
+    await runTranslationProject(root, created.manifest.id, { model: makeModel(), batchSize: 4 });
+    expect(extractGlossary).toHaveBeenCalledTimes(1);
+    const meta = await loadTranslationGlossaryMeta(root, created.manifest.id);
+    expect(typeof meta.prepCompletedAt).toBe("string");
+
+    await runTranslationProject(root, created.manifest.id, { model: makeModel(), batchSize: 4 });
+    expect(extractGlossary).toHaveBeenCalledTimes(1);
   });
 });

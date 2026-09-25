@@ -70,6 +70,20 @@ export async function loadTranslationGlossary(
   }
 }
 
+export async function loadTranslationGlossaryMeta(
+  projectRoot: string,
+  projectId: string,
+): Promise<{ readonly prepCompletedAt?: string }> {
+  try {
+    const raw = JSON.parse(await readFile(join(translationProjectDir(projectRoot, projectId), "glossary.json"), "utf-8")) as {
+      meta?: { prepCompletedAt?: string };
+    };
+    return raw.meta ?? {};
+  } catch {
+    return {};
+  }
+}
+
 export async function saveTranslationGlossary(
   projectRoot: string,
   projectId: string,
