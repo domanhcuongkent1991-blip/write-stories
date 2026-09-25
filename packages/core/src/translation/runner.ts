@@ -4,6 +4,9 @@ import {
   createProductionRunSnapshot,
   writeProductionRunSnapshot,
 } from "../production/harness.js";
+import { buildBatchContext } from "./context.js";
+import { filterGlossaryForText } from "./glossary-filter.js";
+import { normalizeLanguageCode } from "./vi-contract.js";
 import {
   loadTranslationChapter,
   loadTranslationGlossary,
@@ -49,6 +52,8 @@ export async function runTranslationProject(
   try {
     let manifest = await loadTranslationManifest(projectRoot, projectId);
     let glossary = [...await loadTranslationGlossary(projectRoot, projectId)];
+    const sourceLanguage = normalizeLanguageCode(manifest.sourceLanguage) ?? manifest.sourceLanguage;
+    const targetLanguage = normalizeLanguageCode(manifest.targetLanguage) ?? manifest.targetLanguage;
     const reportLines = [`# Translation Review`, ""];
     let translatedSegments = 0;
     let reviewedChapters = 0;
@@ -65,12 +70,26 @@ export async function runTranslationProject(
 
     for (let offset = 0; offset < pending.length; offset += batchSize) {
       const batch = pending.slice(offset, offset + batchSize);
+      const batchContext = buildBatchContext(
+        source.segments.map((segment) => ({ index: segment.index, source: segment.source })),
+        new Map<number, string>([...translatedByIndex.entries()]
+          .map(([index, segment]): [number, string] => [index, segment.target ?? ""])
+          .filter(([, target]) => target.length > 0)),
+        batch.map((segment) => ({ index: segment.index, source: segment.source })),
+      );
+      const batchGlossary = filterGlossaryForText(
+        glossary,
+        batch.map((segment) => segment.source).join("\n\n"),
+      );
       const result = await options.model.translateSegments({
-        sourceLanguage: manifest.sourceLanguage,
-        targetLanguage: manifest.targetLanguage,
+        sourceLanguage,
+        targetLanguage,
         chapterTitle: source.title,
         segments: batch,
-        glossary,
+        glossary: batchGlossary,
+        contextBefore: batchContext.contextBefore,
+        contextAfter: batchContext.contextAfter,
+        previousTargetTail: batchContext.previousTargetTail,
       });
       for (const item of result.segments) {
         const original = source.segments.find((segment) => segment.index === item.index);
@@ -108,8 +127,8 @@ export async function runTranslationProject(
     let status: "translated" | "reviewed" = "translated";
     if (options.model.reviewChapter && completedChapter.segments.some((segment) => segment.target?.trim())) {
       const review = await options.model.reviewChapter({
-        sourceLanguage: manifest.sourceLanguage,
-        targetLanguage: manifest.targetLanguage,
+        sourceLanguage,
+        targetLanguage,
         chapterTitle: source.title,
         segments: completedChapter.segments,
         glossary,

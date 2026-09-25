@@ -23,7 +23,11 @@ export interface TranslationChapterManifest {
   readonly translatedPath: string;
   readonly segmentCount: number;
   readonly charCount: number;
-  readonly status: "pending" | "translated" | "reviewed";
+  readonly status: "pending" | "drafted" | "refined" | "reviewed" | "translated";
+  readonly qa?: {
+    readonly passed: boolean;
+    readonly reportPath: string;
+  };
 }
 
 export interface TranslationProjectManifest {
@@ -42,6 +46,8 @@ export interface TranslationSegment {
   readonly source: string;
   readonly target?: string;
   readonly notes?: string;
+  readonly draft?: string;
+  readonly stage?: "draft" | "refined";
 }
 
 export interface TranslationChapterFile {
@@ -85,6 +91,9 @@ export interface TranslationModelPort {
     readonly chapterTitle: string;
     readonly segments: ReadonlyArray<TranslationSegment>;
     readonly glossary: ReadonlyArray<TranslationGlossaryTerm>;
+    readonly contextBefore?: string;
+    readonly contextAfter?: string;
+    readonly previousTargetTail?: string;
   }) => Promise<{
     readonly segments: ReadonlyArray<{
       readonly index: number;

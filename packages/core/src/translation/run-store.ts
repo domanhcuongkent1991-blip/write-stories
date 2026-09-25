@@ -36,7 +36,11 @@ export async function loadTranslationChapter(
   projectRoot: string,
   chapterPath: string,
 ): Promise<TranslationChapterFile> {
-  return JSON.parse(await readFile(join(projectRoot, chapterPath), "utf-8")) as TranslationChapterFile;
+  const raw = JSON.parse(await readFile(join(projectRoot, chapterPath), "utf-8")) as TranslationChapterFile;
+  return {
+    ...raw,
+    segments: Array.isArray(raw.segments) ? raw.segments.map(normalizeLegacySegment) : raw.segments,
+  };
 }
 
 export async function saveTranslationChapter(
@@ -119,6 +123,14 @@ const TERM_CATEGORIES: ReadonlyArray<TranslationTermCategory> = [
   "other",
 ];
 const TERM_ORIGINS: ReadonlyArray<TranslationTermOrigin> = ["seed", "auto", "approved"];
+
+// Legacy chapters stored a bare target with no stage: treat those segments
+// as first-pass drafts so the refine pass can pick them up.
+function normalizeLegacySegment<T extends { target?: string; stage?: string }>(segment: T): T {
+  const hasTarget = typeof segment.target === "string" && segment.target.trim().length > 0;
+  if (!hasTarget || segment.stage) return segment;
+  return { ...segment, stage: "draft" };
+}
 
 function normalizeGlossaryTerm(value: unknown): TranslationGlossaryTerm | undefined {
   if (!value || typeof value !== "object") return undefined;

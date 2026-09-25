@@ -4,8 +4,10 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 import {
   createTranslationProjectFromFile,
+  loadTranslationChapter,
   loadTranslationGlossary,
   runTranslationProject,
+  saveTranslationGlossary,
   writeTranslationExport,
   type TranslationModelPort,
 } from "../translation/index.js";
@@ -114,5 +116,67 @@ describe("translation runner", () => {
       origin: "approved",
       pinned: true,
     }]);
+  });
+
+  it("sends normalized language codes, batch context, and batch-filtered glossary", async () => {
+    const created = await createTranslationProjectFromFile(root, {
+      filePath: "inputs/book.md",
+      sourceLanguage: "Chinese (Simplified)",
+      targetLanguage: "Vietnamese",
+    });
+    await saveTranslationGlossary(root, created.manifest.id, [
+      { source: "落霞城", target: "thành Lạc Hà", category: "place" },
+      { source: "李明", target: "Lý Minh", category: "person" },
+    ]);
+
+    const translateSegments = vi.fn<TranslationModelPort["translateSegments"]>(async ({ segments }) => ({
+      segments: segments.map((segment) => ({
+        index: segment.index,
+        target: `VI:${segment.source}`,
+      })),
+    }));
+
+    await runTranslationProject(root, created.manifest.id, {
+      model: { translateSegments },
+      batchSize: 1,
+    });
+
+    expect(translateSegments).toHaveBeenCalledTimes(2);
+    const first = translateSegments.mock.calls[0]![0]!;
+    expect(first.sourceLanguage).toBe("zh");
+    expect(first.targetLanguage).toBe("vi");
+    expect(first.glossary.map((term) => term.source)).toEqual(["李明"]);
+    expect(first.contextBefore).toBe("");
+    expect(first.previousTargetTail).toBe("");
+
+    const second = translateSegments.mock.calls[1]![0]!;
+    expect(second.sourceLanguage).toBe("zh");
+    expect(second.contextBefore).toBe("第一段。");
+    expect(second.contextAfter).toBe("");
+    expect(second.previousTargetTail).toBe("VI:第一段。");
+    expect(second.glossary.map((term) => term.source)).toEqual(["李明"]);
+  });
+
+  it("normalizes legacy translated segments to the draft stage on load", async () => {
+    const created = await createTranslationProjectFromFile(root, {
+      filePath: "inputs/book.md",
+      sourceLanguage: "zh",
+      targetLanguage: "en",
+    });
+    const chapterInfo = created.manifest.chapters[0]!;
+    await writeFile(join(root, chapterInfo.translatedPath), JSON.stringify({
+      number: 1,
+      title: "雨夜",
+      sourceLanguage: "zh",
+      targetLanguage: "en",
+      segments: [
+        { index: 1, source: "第一段。", target: "EN:第一段。" },
+        { index: 2, source: "第二段。" },
+      ],
+    }, null, 2), "utf-8");
+
+    const loaded = await loadTranslationChapter(root, chapterInfo.translatedPath);
+    expect(loaded.segments[0]).toMatchObject({ target: "EN:第一段。", stage: "draft" });
+    expect(loaded.segments[1]!.stage).toBeUndefined();
   });
 });

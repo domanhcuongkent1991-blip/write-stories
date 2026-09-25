@@ -2,6 +2,8 @@ import type { LLMClient } from "../llm/provider.js";
 import { runWorkerAgent } from "../agent/worker-agent.js";
 import { appendActivatedSkillGuidance } from "../agents/base.js";
 import type { ActivatedSkillGuidance } from "../agent/skill-tool.js";
+import { buildTranslationSystemPrompt, buildTranslationUserPayload } from "./prompt-builder.js";
+import { resolveStyleContract } from "./vi-contract.js";
 import type {
   TranslationGlossaryTerm,
   TranslationModelPort,
@@ -31,26 +33,25 @@ export function createLLMTranslationModel(input: {
       const response = await runWorkerAgent(input.client, input.model, appendActivatedSkillGuidance([
         {
           role: "system",
-          content: [
-            "You are InkOS Translation Agent.",
-            "Translate faithfully between the requested languages.",
-            "Preserve paragraph order, scene meaning, names, tone, and terminology.",
-            "Do not summarize. Do not add commentary outside JSON.",
-            "Return JSON only: {\"segments\":[{\"index\":1,\"target\":\"...\",\"notes\":\"optional\"}],\"glossary\":[{\"source\":\"...\",\"target\":\"...\",\"note\":\"optional\"}]}",
-          ].join("\n"),
+          content: buildTranslationSystemPrompt({
+            sourceLanguage: request.sourceLanguage,
+            targetLanguage: request.targetLanguage,
+            glossary: request.glossary,
+            styleContract: resolveStyleContract(request.sourceLanguage, request.targetLanguage),
+          }),
         },
         {
           role: "user",
-          content: JSON.stringify({
-            sourceLanguage: request.sourceLanguage,
-            targetLanguage: request.targetLanguage,
+          content: buildTranslationUserPayload({
             chapterTitle: request.chapterTitle,
-            glossary: request.glossary,
-            segments: request.segments.map((segment) => ({
-              index: segment.index,
-              source: segment.source,
-            })),
-          }, null, 2),
+            segments: request.segments,
+            context: {
+              contextBefore: request.contextBefore,
+              contextAfter: request.contextAfter,
+              previousTargetTail: request.previousTargetTail,
+            },
+            glossaryFiltered: request.glossary,
+          }),
         },
       ], input.activatedSkills), { temperature: 0.2, maxTokens: input.maxTokens ?? 8192, signal: input.signal });
       const parsed = parseJsonObject(response.content);
