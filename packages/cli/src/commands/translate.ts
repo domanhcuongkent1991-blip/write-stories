@@ -4,6 +4,7 @@ import {
   createLLMTranslationModel,
   createTranslationProjectFromFile,
   loadAvailableAgentSkills,
+  prepareTranslationGlossary,
   resolveProductionSkillActivations,
   runTranslationProject,
   writeTranslationExport,
@@ -81,6 +82,44 @@ translateCommand
       }
     } catch (error) {
       fail("translate.runFailure", error, opts.json);
+    }
+  });
+
+translateCommand
+  .command("prep")
+  .description("Sample source chapters and prepare an editable glossary seed")
+  .argument("<project-id>", "Translation project ID under translations/")
+  .option("--sample-count <n>", "Number of chapters sampled across the book", parseInt)
+  .option("--max-tokens <n>", "Max output tokens for glossary extraction", parseInt)
+  .option("--json", "Output JSON")
+  .action(async (projectId: string, opts) => {
+    try {
+      const root = findProjectRoot();
+      if (!opts.json) {
+        log(formatCurrentCliMessage("translate.prepStarted", { id: projectId }));
+      }
+      const config = await loadConfig({ requireApiKey: true, projectRoot: root });
+      const configuredSkills = await loadAvailableAgentSkills({ projectRoot: root });
+      const activatedSkills = resolveProductionSkillActivations(configuredSkills.skills, "translation");
+      const model = createLLMTranslationModel({
+        client: createClient(config),
+        model: config.llm.model,
+        maxTokens: opts.maxTokens,
+        activatedSkills,
+      });
+      const result = await prepareTranslationGlossary(root, projectId, {
+        model,
+        sampleCount: opts.sampleCount,
+      });
+      if (opts.json) {
+        // i18n-raw: structured glossary prep result must remain locale-independent.
+        log(JSON.stringify(result, null, 2));
+      } else {
+        log(formatCurrentCliMessage("translate.prepTerms", { count: result.terms.length }));
+        log(formatCurrentCliMessage("translate.prepConflicts", { count: result.conflicts.length }));
+      }
+    } catch (error) {
+      fail("translate.prepFailure", error, opts.json);
     }
   });
 
