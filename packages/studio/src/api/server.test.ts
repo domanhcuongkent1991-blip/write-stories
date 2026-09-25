@@ -453,8 +453,11 @@ vi.mock("@actalk/inkos-core", async (importOriginal) => {
     createLLMTranslationModel: createLLMTranslationModelMock,
     createTranslationProjectFromFile: actual.createTranslationProjectFromFile,
     loadTranslationChapter: actual.loadTranslationChapter,
+    loadTranslationGlossary: actual.loadTranslationGlossary,
     loadTranslationManifest: actual.loadTranslationManifest,
+    prepareTranslationGlossary: actual.prepareTranslationGlossary,
     runTranslationProject: actual.runTranslationProject,
+    saveTranslationGlossary: actual.saveTranslationGlossary,
     writeTranslationExport: actual.writeTranslationExport,
   };
 });
@@ -7302,7 +7305,7 @@ describe("createStudioServer daemon lifecycle", () => {
     const exported = await app.request(`http://localhost/api/v1/translations/${created.manifest.id}/export`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ format: "md" }),
+      body: JSON.stringify({ format: "md", force: true }),
     });
     expect(exported.status).toBe(200);
     const exportedBody = await exported.json() as { outputPath: string; chaptersExported: number };
@@ -7418,6 +7421,94 @@ describe("createStudioServer daemon lifecycle", () => {
         },
       ],
     });
+  });
+
+  it("exposes glossary, prep, and qa endpoints for translation projects", async () => {
+    const { createStudioServer } = await import("./server.js");
+    const app = createStudioServer(cloneProjectConfig() as never, root);
+    const source = "# 第一章 雨夜\n\n雨水落在旧码头。\n";
+    const dataUrl = `data:text/markdown;base64,${Buffer.from(source, "utf-8").toString("base64")}`;
+
+    const upload = await app.request("http://localhost/api/v1/translations/upload", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ filename: "source.md", dataUrl }),
+    });
+    const uploaded = await upload.json() as { storedPath: string };
+    const create = await app.request("http://localhost/api/v1/translations/create", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        filePath: uploaded.storedPath,
+        sourceLanguage: "zh",
+        targetLanguage: "vi",
+        title: "Glossary Project",
+      }),
+    });
+    const created = await create.json() as { projectId: string };
+    const projectId = created.projectId;
+    const glossaryUrl = `http://localhost/api/v1/translations/${projectId}/glossary`;
+
+    const initial = await app.request(glossaryUrl);
+    expect(initial.status).toBe(200);
+    await expect(initial.json()).resolves.toMatchObject({ version: 2, terms: [] });
+
+    const put = await app.request(glossaryUrl, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        terms: [{
+          source: "李明",
+          target: "Lý Minh",
+          category: "person",
+          aliases: ["小明"],
+          origin: "approved",
+          pinned: true,
+        }],
+      }),
+    });
+    expect(put.status).toBe(200);
+    await expect(put.json()).resolves.toMatchObject({
+      version: 2,
+      terms: [expect.objectContaining({ source: "李明", target: "Lý Minh", pinned: true })],
+    });
+
+    const invalid = await app.request(glossaryUrl, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ terms: [{ target: "no source" }] }),
+    });
+    expect(invalid.status).toBe(400);
+
+    createLLMTranslationModelMock.mockReturnValueOnce({
+      extractGlossary: vi.fn(async () => ({
+        terms: [{ source: "青云门", target: "Thanh Vân Môn", category: "sect" }],
+      })),
+    });
+    const prep = await app.request(`http://localhost/api/v1/translations/${projectId}/prep`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({}),
+    });
+    expect(prep.status).toBe(200);
+    const prepBody = await prep.json() as { terms: Array<{ source: string }>; conflicts: unknown[]; sampleCount: number };
+    expect(prepBody.terms.map((term) => term.source)).toEqual(["李明", "青云门"]);
+    expect(prepBody.conflicts).toEqual([]);
+    expect(typeof prepBody.sampleCount).toBe("number");
+
+    const run = await app.request(`http://localhost/api/v1/translations/${projectId}/run`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ batchSize: 8 }),
+    });
+    expect(run.status).toBe(200);
+
+    const qa = await app.request(`http://localhost/api/v1/translations/${projectId}/qa`);
+    expect(qa.status).toBe(200);
+    const qaBody = await qa.json() as { reports: Array<{ number: number; passed: boolean; metrics: { cjkResidue: number } }> };
+    expect(qaBody.reports).toHaveLength(1);
+    expect(qaBody.reports[0]!.number).toBe(1);
+    expect(typeof qaBody.reports[0]!.metrics.cjkResidue).toBe("number");
   });
 
   describe("Phase A Internal route-wiring characterization", () => {

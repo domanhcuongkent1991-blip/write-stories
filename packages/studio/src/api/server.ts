@@ -117,9 +117,13 @@ import {
   saveChapterUserBrief,
   createTranslationProjectFromFile,
   loadTranslationChapter,
+  loadTranslationGlossary,
   loadTranslationManifest,
+  prepareTranslationGlossary,
   runTranslationProject,
+  saveTranslationGlossary,
   writeTranslationExport,
+  type TranslationGlossaryTerm,
   filmLLMDepsFromClient,
   applyGraphDelta,
   loadStoryGraph,
@@ -6742,12 +6746,98 @@ export function createStudioServer(
     if (!isSafeBookId(id)) {
       return c.json({ error: { code: "INVALID_ID", message: `invalid translation id: ${id}` } }, 400);
     }
-    const body: { format?: "txt" | "md" | "epub"; outputPath?: string } = await c.req.json().catch(() => ({}));
+    const body: { format?: "txt" | "md" | "epub"; outputPath?: string; force?: boolean } = await c.req.json().catch(() => ({}));
     const result = await writeTranslationExport(root, id, {
       format: body.format ?? "md",
       outputPath: body.outputPath,
+      force: body.force,
     });
     return c.json(result);
+  });
+
+  app.get("/api/v1/translations/:id/glossary", async (c) => {
+    const id = c.req.param("id");
+    if (!isSafeBookId(id)) {
+      return c.json({ error: { code: "INVALID_ID", message: `invalid translation id: ${id}` } }, 400);
+    }
+    const terms = await loadTranslationGlossary(root, id);
+    return c.json({ version: 2, terms });
+  });
+
+  app.put("/api/v1/translations/:id/glossary", async (c) => {
+    const id = c.req.param("id");
+    if (!isSafeBookId(id)) {
+      return c.json({ error: { code: "INVALID_ID", message: `invalid translation id: ${id}` } }, 400);
+    }
+    const body: { terms?: unknown } = await c.req.json().catch(() => ({}));
+    const terms = body.terms;
+    if (!Array.isArray(terms)) {
+      return c.json({ error: { code: "MISSING_TERMS", message: "terms array is required" } }, 400);
+    }
+    for (const term of terms) {
+      if (!term || typeof term !== "object") {
+        return c.json({ error: { code: "INVALID_TERM", message: "each term must be an object" } }, 400);
+      }
+      const record = term as Record<string, unknown>;
+      if (typeof record.source !== "string" || !record.source.trim()
+        || typeof record.target !== "string" || !record.target.trim()) {
+        return c.json({ error: { code: "INVALID_TERM", message: "each term needs a non-empty source and target" } }, 400);
+      }
+    }
+    await saveTranslationGlossary(root, id, terms as ReadonlyArray<TranslationGlossaryTerm>);
+    return c.json({ version: 2, terms: await loadTranslationGlossary(root, id) });
+  });
+
+  app.post("/api/v1/translations/:id/prep", async (c) => {
+    const id = c.req.param("id");
+    if (!isSafeBookId(id)) {
+      return c.json({ error: { code: "INVALID_ID", message: `invalid translation id: ${id}` } }, 400);
+    }
+    try {
+      const currentConfig = await loadCurrentProjectConfig();
+      const configuredSkills = await loadAvailableAgentSkills({ projectRoot: root });
+      const activatedSkills = resolveProductionSkillActivations(configuredSkills.skills, "translation");
+      const model = createLLMTranslationModel({
+        client: createLLMClient(currentConfig.llm),
+        model: currentConfig.llm.model,
+        activatedSkills,
+        signal: c.req.raw.signal,
+      });
+      const result = await prepareTranslationGlossary(root, id, { model });
+      return c.json({ ...result, skillIds: activatedSkillIds(activatedSkills) });
+    } catch (error) {
+      if (error instanceof ApiError) throw error;
+      const message = error instanceof Error ? error.message : String(error);
+      throw new ApiError(500, "TRANSLATION_PREP_FAILED", message || "Translation glossary prep failed.");
+    }
+  });
+
+  app.get("/api/v1/translations/:id/qa", async (c) => {
+    const id = c.req.param("id");
+    if (!isSafeBookId(id)) {
+      return c.json({ error: { code: "INVALID_ID", message: `invalid translation id: ${id}` } }, 400);
+    }
+    try {
+      const manifest = await loadTranslationManifest(root, id);
+      const reports = [];
+      for (const chapter of manifest.chapters) {
+        if (!chapter.qa?.reportPath) continue;
+        const raw = await readFile(join(root, chapter.qa.reportPath), "utf-8").catch(() => null);
+        if (!raw) continue;
+        try {
+          const report = JSON.parse(raw) as Record<string, unknown>;
+          reports.push({ ...report, reportPath: chapter.qa.reportPath });
+        } catch {
+          // Skip malformed qa reports.
+        }
+      }
+      return c.json({ reports });
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+        return c.json({ error: { code: "NOT_FOUND", message: `translation project not found for ${id}` } }, 404);
+      }
+      throw error;
+    }
   });
 
   app.post("/api/v1/projects/:id/story-graph/delta", async (c) => {
