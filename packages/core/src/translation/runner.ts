@@ -345,7 +345,9 @@ export async function runTranslationProject(
     }
     manifest = updateChapterStatus(manifest, chapterInfo.number, status);
     await saveTranslationManifest(projectRoot, manifest);
-    previousChapterForms = collectThirdPersonForms(completedSegments);
+    previousChapterForms = collectThirdPersonForms(
+      completedSegments.map((segment) => ({ source: segment.source, target: segment.target ?? "" })),
+    );
   }
 
     const reportPath = `translations/${projectId}/review-report.md`;
