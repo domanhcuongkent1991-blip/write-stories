@@ -69,7 +69,7 @@ describe("translation runner", () => {
     expect(second.translatedSegments).toBe(0);
     expect(translateSegments).toHaveBeenCalledTimes(2);
 
-    const exported = await writeTranslationExport(root, created.manifest.id, { format: "md" });
+    const exported = await writeTranslationExport(root, created.manifest.id, { format: "md", force: true });
     const markdown = await readFile(exported.outputPath, "utf-8");
     expect(markdown).toContain("EN:第一段。");
     expect(markdown).toContain("EN:第二段。");

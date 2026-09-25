@@ -2,7 +2,7 @@ import { mkdir, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { EPub } from "epub-gen-memory";
 import { loadTranslationChapter, loadTranslationManifest, translationProjectDir } from "./run-store.js";
-import type { TranslationExportFormat, TranslationExportResult } from "./types.js";
+import type { TranslationExportFormat, TranslationExportResult, TranslationProjectManifest } from "./types.js";
 
 export async function writeTranslationExport(
   projectRoot: string,
@@ -10,10 +10,14 @@ export async function writeTranslationExport(
   options: {
     readonly format?: TranslationExportFormat;
     readonly outputPath?: string;
+    readonly force?: boolean;
   } = {},
 ): Promise<TranslationExportResult> {
   const format = options.format ?? "md";
   const manifest = await loadTranslationManifest(projectRoot, projectId);
+  if (!options.force) {
+    assertExportable(manifest);
+  }
   const outputPath = options.outputPath ?? join(translationProjectDir(projectRoot, projectId), "exports", `${safeFilename(manifest.title)}.${format}`);
   await mkdir(dirname(outputPath), { recursive: true });
 
@@ -64,6 +68,24 @@ async function renderTextExport(
     }
   }
   return lines.join("\n").trimEnd() + "\n";
+}
+
+function assertExportable(manifest: TranslationProjectManifest): void {
+  const blocked: string[] = [];
+  for (const chapter of manifest.chapters) {
+    const notRefined = chapter.status !== "refined" && chapter.status !== "reviewed";
+    const qaFailed = chapter.qa !== undefined && !chapter.qa.passed;
+    if (notRefined || qaFailed) {
+      const reasons = [
+        ...(notRefined ? [`status=${chapter.status}`] : []),
+        ...(qaFailed ? ["qa failed"] : []),
+      ];
+      blocked.push(`chapter ${chapter.number} (${reasons.join(", ")})`);
+    }
+  }
+  if (blocked.length > 0) {
+    throw new Error(`Export blocked: ${blocked.join("; ")}. Finish the refine pass and QA, or export with force.`);
+  }
 }
 
 function escapeHtml(text: string): string {
