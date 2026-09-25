@@ -146,4 +146,20 @@ describe("alignment-aware addressVariants", () => {
     expect(report.metrics.addressVariants).toBe(1);
     expect(report.passed).toBe(false);
   });
+
+  // Ngọc and đệ are polysemous nouns (ngọc linh = 灵玉's translation, sư đệ =
+  // a seniority title), not address pronouns — they must not be counted.
+  it("does not count đệ in sư đệ or ngọc in ngọc linh as address forms", () => {
+    const report = runChapterQa({
+      sourceLanguage: "zh",
+      targetLanguage: "vi",
+      segments: [
+        { source: "我和你一起守着这枚灵玉。", target: "Ta cùng ngươi giữ ngọc linh này, sư đệ bình tâm." },
+        { source: "你不要多想。", target: "Ngươi đừng suy nghĩ nhiều, ta tin ngươi." },
+      ],
+      glossary: [],
+    });
+    expect(report.metrics.addressVariants).toBe(0);
+    expect(report.passed).toBe(true);
+  });
 });

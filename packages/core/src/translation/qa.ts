@@ -23,8 +23,8 @@ const PRONOUN_GROUPS: ReadonlyArray<{ readonly sources: ReadonlyArray<string>; r
   { sources: ["它", "牠"], forms: ["nó"] },
   { sources: ["他"], forms: ["hắn", "y", "nó", "cậu", "chàng"] },
   { sources: ["她"], forms: ["nàng", "cô", "chị", "nó", "丫头", "mỹ nữ"] },
-  { sources: ["我"], forms: ["ta", "tôi", "thiếp", "đệ", "lão phu", "tại hạ"] },
-  { sources: ["你", "妳"], forms: ["ngươi", "cậu", "huynh", "tỷ", "cô", "ngọc"] },
+  { sources: ["我"], forms: ["ta", "tôi", "thiếp", "lão phu", "tại hạ"] },
+  { sources: ["你", "妳"], forms: ["ngươi", "cậu", "huynh", "tỷ", "cô"] },
 ];
 
 // Two-word compounds collapse onto their canonical single-word form so that
