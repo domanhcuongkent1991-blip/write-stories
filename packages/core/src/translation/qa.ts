@@ -5,6 +5,7 @@ export interface ChapterQaMetrics {
   readonly cjkResidue: number;
   readonly addressVariants: number;
   readonly variants: number;
+  readonly hallucination: number;
 }
 
 export interface ChapterQaReport {
@@ -65,15 +66,23 @@ export function runChapterQa(input: {
     issues.push(`variant-detection: glossary source term(s) resolve to more than one target: ${variantKeys.join(", ")}.`);
   }
 
+  const hallucinations = isVietnamese
+    ? findEntityHallucinations(input.segments, input.glossary)
+    : [];
+  if (hallucinations.length > 0) {
+    issues.push(`entity-hallucination: locked proper noun(s) appear in the output without their source form nearby: ${hallucinations.join("; ")}.`);
+  }
+
   const addressDrift = detectAddressDrift(input.segments, input.previousChapterForms);
 
   return {
-    passed: cjkResidue === 0 && addressVariants === 0 && variantKeys.length === 0,
+    passed: cjkResidue === 0 && addressVariants === 0 && variantKeys.length === 0 && hallucinations.length === 0,
     metrics: {
       adherence: measureAdherence(input.glossary, combinedSource, combinedTarget),
       cjkResidue,
       addressVariants,
       variants: variantKeys.length,
+      hallucination: hallucinations.length,
     },
     issues,
     ...(addressDrift ? { addressDrift: true } : {}),
@@ -199,6 +208,36 @@ function detectAddressDrift(
   return current.length === 1
     && previousChapterForms.length === 1
     && current[0] !== previousChapterForms[0];
+}
+
+// Only proper nouns hallucinate dangerously (the R3 "đối thủ là Lục Cửu
+// Xuyên" bug): a locked person/sect/place target appearing in the output
+// while its source form (or alias) is absent from the same or adjacent
+// source segment means an invented or swapped entity.
+const HALLUCINATION_CATEGORIES: ReadonlySet<string> = new Set(["person", "sect", "place"]);
+
+function findEntityHallucinations(
+  segments: ReadonlyArray<{ readonly source: string; readonly target: string }>,
+  glossary: ReadonlyArray<TranslationGlossaryTerm>,
+): ReadonlyArray<string> {
+  const flagged: string[] = [];
+  const eligible = glossary.filter(
+    (term) => term.category !== undefined && HALLUCINATION_CATEGORIES.has(term.category),
+  );
+  for (let index = 0; index < segments.length; index++) {
+    const targetLower = (segments[index]!.target ?? "").toLowerCase();
+    for (const term of eligible) {
+      const targetForm = term.target.trim().toLowerCase();
+      if (!targetForm || !targetLower.includes(targetForm)) continue;
+      const sourceForms = [term.source, ...(term.aliases ?? [])].map((form) => form.trim()).filter(Boolean);
+      const nearby = [-1, 0, 1].some((offset) => {
+        const neighbor = segments[index + offset];
+        return neighbor !== undefined && sourceForms.some((form) => neighbor.source.includes(form));
+      });
+      if (!nearby) flagged.push(`seg${index + 1} "${term.target}"`);
+    }
+  }
+  return flagged;
 }
 
 const ALL_ADDRESS_FORMS: ReadonlySet<string> = new Set(

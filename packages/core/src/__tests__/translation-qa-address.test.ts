@@ -163,3 +163,81 @@ describe("alignment-aware addressVariants", () => {
     expect(report.passed).toBe(true);
   });
 });
+
+// Entity-hallucination check: a locked proper-noun target (person/sect/place)
+// appearing in the Vietnamese output while its source form (or alias) is
+// absent from the same or adjacent source segments means the model invented
+// or swapped an entity — the R3 "đối thủ là Lục Cửu Xuyên" class of bug.
+describe("entity-hallucination check", () => {
+  const glossary = [
+    { source: "陆九川", target: "Lục Cửu Xuyên", category: "person" as const },
+    { source: "青云门", target: "Thanh Vân Môn", category: "sect" as const },
+    { source: "御剑诀", target: "Ngự Kiếm Quyết", category: "technique" as const },
+  ];
+
+  it("flags a person name in the output whose source form is absent nearby", () => {
+    const report = runChapterQa({
+      sourceLanguage: "zh",
+      targetLanguage: "vi",
+      segments: [
+        { source: "他练功一夜。", target: "Hắn luyện công một đêm." },
+        { source: "对手是入门两年的师兄。", target: "Đối thủ của hắn là Lục Cửu Xuyên, người đã nhập môn hai năm." },
+      ],
+      glossary,
+    });
+    expect(report.metrics.hallucination).toBe(1);
+    expect(report.passed).toBe(false);
+    expect(report.issues.join("\n")).toContain("Lục Cửu Xuyên");
+  });
+
+  it("does not flag when the source form appears in the same or an adjacent segment", () => {
+    const report = runChapterQa({
+      sourceLanguage: "zh",
+      targetLanguage: "vi",
+      segments: [
+        { source: "陆九川笑道。", target: "Lục Cửu Xuyên bật cười." },
+        { source: "他说完就走了。", target: "Hắn nói xong rời đi." },
+      ],
+      glossary,
+    });
+    expect(report.metrics.hallucination).toBe(0);
+  });
+
+  it("does not flag when an alias appears nearby", () => {
+    const report = runChapterQa({
+      sourceLanguage: "zh",
+      targetLanguage: "vi",
+      segments: [
+        { source: "九川点头。", target: "Cửu Xuyên gật đầu." },
+        { source: "他转身离开。", target: "Hắn quay người rời đi." },
+      ],
+      glossary: [{ source: "陆九川", target: "Lục Cửu Xuyên", category: "person", aliases: ["九川"] }],
+    });
+    expect(report.metrics.hallucination).toBe(0);
+  });
+
+  it("checks only person, sect, and place terms — techniques are exempt", () => {
+    const report = runChapterQa({
+      sourceLanguage: "zh",
+      targetLanguage: "vi",
+      segments: [
+        { source: "他参悟口诀。", target: "Hắn ngẫm ra bí quyết, luyện Ngự Kiếm Quyết thành công." },
+      ],
+      glossary,
+    });
+    expect(report.metrics.hallucination).toBe(0);
+  });
+
+  it("does not flag the proper noun when its own source segment uses it", () => {
+    const report = runChapterQa({
+      sourceLanguage: "zh",
+      targetLanguage: "vi",
+      segments: [
+        { source: "他进入青云门。", target: "Hắn gia nhập Thanh Vân Môn." },
+      ],
+      glossary,
+    });
+    expect(report.metrics.hallucination).toBe(0);
+    expect(report.passed).toBe(true);
+  });
+});

@@ -98,6 +98,7 @@ for (const chapterInfo of manifest.chapters ?? []) {
       cjkResidue: report.metrics.cjkResidue,
       addressVariants: report.metrics.addressVariants,
       variants: report.metrics.variants,
+      hallucination: report.metrics.hallucination,
     },
     passed: report.passed,
     ...(report.addressDrift ? { addressDrift: true } : {}),
@@ -124,11 +125,11 @@ await writeFile(outPath, `${JSON.stringify(records, null, 2)}\n`, "utf-8");
 
 console.log(`translation stage metrics: ${values.stage} (project ${values.project})`);
 console.log(
-  "chapter | adherence | cjkResidue | addressVariants | variants | passed | addressDrift",
+  "chapter | adherence | cjkResidue | addressVariants | variants | hallucination | passed | addressDrift",
 );
 for (const chapter of chapters) {
   console.log(
-    `${String(chapter.number).padStart(7)} | ${String(chapter.metrics.adherence).padStart(9)} | ${String(chapter.metrics.cjkResidue).padStart(10)} | ${String(chapter.metrics.addressVariants).padStart(15)} | ${String(chapter.metrics.variants).padStart(8)} | ${chapter.passed} | ${chapter.addressDrift ? "yes" : "-"}`,
+    `${String(chapter.number).padStart(7)} | ${String(chapter.metrics.adherence).padStart(9)} | ${String(chapter.metrics.cjkResidue).padStart(10)} | ${String(chapter.metrics.addressVariants).padStart(15)} | ${String(chapter.metrics.variants).padStart(8)} | ${String(chapter.metrics.hallucination).padStart(13)} | ${chapter.passed} | ${chapter.addressDrift ? "yes" : "-"}`,
   );
 }
 const meanAdherence = chapters.length > 0
