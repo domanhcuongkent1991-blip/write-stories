@@ -187,6 +187,9 @@ export function TranslationManager({ nav, theme, t }: { nav: Nav; theme: Theme; 
   const [sourceLanguage, setSourceLanguage] = useState(isZh ? "自动识别" : "Auto detect");
   const [targetLanguage, setTargetLanguage] = useState(isZh ? "中文（简体）" : "English");
   const [segmentMaxChars, setSegmentMaxChars] = useState(1200);
+  const [runModel, setRunModel] = useState("");
+  const [runBaseUrl, setRunBaseUrl] = useState("");
+  const [runBatchSize, setRunBatchSize] = useState(8);
   const [previewChapterNumber, setPreviewChapterNumber] = useState<number | null>(null);
   const [view, setView] = useState<"preview" | "glossary" | "qa">("preview");
   const [glossary, setGlossary] = useState<ReadonlyArray<GlossaryTerm>>([]);
@@ -277,7 +280,11 @@ export function TranslationManager({ nav, theme, t }: { nav: Nav; theme: Theme; 
       const res = await fetchJson<TranslationRunResponse>(`/translations/${encodeURIComponent(selected.projectId)}/run`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ batchSize: 8 }),
+        body: JSON.stringify({
+          batchSize: runBatchSize || 8,
+          model: runModel.trim() || undefined,
+          baseUrl: runBaseUrl.trim() || undefined,
+        }),
       });
       setStatus(isZh
         ? `翻译 ${res.translatedSegments} 段，审校 ${res.reviewedChapters} 章。${res.skillIds?.length ? `Skill：${res.skillIds.join(" · ")}。` : ""}报告：${res.reportPath}`
@@ -462,32 +469,28 @@ export function TranslationManager({ nav, theme, t }: { nav: Nav; theme: Theme; 
           <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
             <label className="space-y-1 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
               {t("translation.source")}
-              <input
-                list="translation-source-language-options"
+              <select
                 value={sourceLanguage}
                 onChange={(e) => setSourceLanguage(e.target.value)}
-                placeholder={t("translation.sourcePlaceholder")}
                 className="w-full rounded-lg border border-border bg-secondary/30 px-3 py-2 text-sm normal-case text-foreground"
-              />
+              >
+                {languagePresets.map((language) => (
+                  <option key={`source-${language}`} value={language}>{language}</option>
+                ))}
+              </select>
             </label>
             <label className="space-y-1 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
               {t("translation.target")}
-              <input
-                list="translation-target-language-options"
+              <select
                 value={targetLanguage}
                 onChange={(e) => setTargetLanguage(e.target.value)}
-                placeholder={t("translation.targetPlaceholder")}
                 className="w-full rounded-lg border border-border bg-secondary/30 px-3 py-2 text-sm normal-case text-foreground"
-              />
+              >
+                {languagePresets.filter((language) => language !== (isZh ? "自动识别" : "Auto detect")).map((language) => (
+                  <option key={`target-${language}`} value={language}>{language}</option>
+                ))}
+              </select>
             </label>
-            <datalist id="translation-source-language-options">
-              {languagePresets.map((language) => <option key={`source-${language}`} value={language} />)}
-            </datalist>
-            <datalist id="translation-target-language-options">
-              {languagePresets.filter((language) => language !== (isZh ? "自动识别" : "Auto detect")).map((language) => (
-                <option key={`target-${language}`} value={language} />
-              ))}
-            </datalist>
           </div>
           <label className="space-y-1 text-xs font-semibold uppercase tracking-wide text-muted-foreground block">
             {t("translation.projectTitle")}
@@ -558,6 +561,20 @@ export function TranslationManager({ nav, theme, t }: { nav: Nav; theme: Theme; 
                     </button>
                   ))}
                 </div>
+              </div>
+              <div className="grid gap-3 sm:grid-cols-3">
+                <label className="space-y-1 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+                  {t("translation.runModel")}
+                  <input value={runModel} onChange={(e) => setRunModel(e.target.value)} placeholder="gpt-5.6-luna" className="w-full rounded-lg border border-border bg-secondary/30 px-3 py-2 text-sm normal-case text-foreground" />
+                </label>
+                <label className="space-y-1 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+                  {t("translation.runBaseUrl")}
+                  <input value={runBaseUrl} onChange={(e) => setRunBaseUrl(e.target.value)} placeholder="https://api.example.com/v1" className="w-full rounded-lg border border-border bg-secondary/30 px-3 py-2 text-sm normal-case text-foreground" />
+                </label>
+                <label className="space-y-1 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+                  {t("translation.runBatchSize")}
+                  <input type="number" min={1} max={32} value={runBatchSize} onChange={(e) => setRunBatchSize(Number(e.target.value) || 8)} className="w-full rounded-lg border border-border bg-secondary/30 px-3 py-2 text-sm text-foreground" />
+                </label>
               </div>
               <div className="flex flex-wrap gap-2">
                 {([
