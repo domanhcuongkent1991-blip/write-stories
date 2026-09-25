@@ -44,6 +44,19 @@ describe("runChapterQa", () => {
     expect(report.metrics.adherence).toBe(1);
   });
 
+  it("matches locked targets case-insensitively (sentence-initial capitalization)", () => {
+    const report = runChapterQa({
+      sourceLanguage: "zh",
+      targetLanguage: "vi",
+      segments: [{ source: "他参悟御剑诀。", target: "Hắn ngẫm ra Ngự Kiếm Quyết, ngự khí tăng lên." }],
+      glossary: [
+        { source: "御剑诀", target: "Ngự Kiếm Quyết" },
+        { source: "御气", target: "ngự khí" },
+      ],
+    });
+    expect(report.metrics.adherence).toBe(1);
+  });
+
   it("reports partial adherence when a locked term is missing from the target", () => {
     const report = runChapterQa({
       sourceLanguage: "zh",

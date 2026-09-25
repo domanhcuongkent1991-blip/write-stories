@@ -102,12 +102,16 @@ function measureAdherence(
   combinedSource: string,
   combinedTarget: string,
 ): number {
+  // Case-insensitive: "Ngự khí" at sentence start must still match the
+  // locked form "ngự khí" — capitalization is not a terminology drift.
+  const haystackSource = combinedSource.toLowerCase();
+  const haystackTarget = combinedTarget.toLowerCase();
   const applicable = glossary.filter((term) =>
-    sourceForms(term).some((form) => combinedSource.includes(form)),
+    sourceForms(term).some((form) => haystackSource.includes(form.toLowerCase())),
   );
   if (applicable.length === 0) return 1;
   const hits = applicable.filter((term) =>
-    targetForms(term).some((form) => combinedTarget.includes(form)),
+    targetForms(term).some((form) => haystackTarget.includes(form.toLowerCase())),
   ).length;
   return hits / applicable.length;
 }
