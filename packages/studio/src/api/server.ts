@@ -6712,19 +6712,28 @@ export function createStudioServer(
     if (!isSafeBookId(id)) {
       return c.json({ error: { code: "INVALID_ID", message: `invalid translation id: ${id}` } }, 400);
     }
-    const body: { batchSize?: number; maxTokens?: number; model?: string; baseUrl?: string } = await c.req.json().catch(() => ({}));
+    const body: { batchSize?: number; maxTokens?: number; model?: string; service?: string } = await c.req.json().catch(() => ({}));
     try {
       const currentConfig = await loadCurrentProjectConfig();
       const configuredSkills = await loadAvailableAgentSkills({ projectRoot: root });
       const activatedSkills = resolveProductionSkillActivations(configuredSkills.skills, "translation");
-      const runLLMConfig: typeof currentConfig.llm = {
-        ...currentConfig.llm,
-        ...(body.model?.trim() ? { model: body.model.trim() } : {}),
-        ...(body.baseUrl?.trim() ? { baseUrl: body.baseUrl.trim() } : {}),
-      };
+      const serviceOverride = body.service?.trim();
+      const modelOverride = body.model?.trim();
+      const runConfig = serviceOverride || modelOverride
+        ? await loadProjectConfig(root, {
+            // studio mode ignores cli overrides by design; the cli-project resolution
+            // is the path that honors a requested service/model pair.
+            consumer: "cli",
+            requireApiKey: true,
+            cli: {
+              ...(serviceOverride ? { service: serviceOverride } : {}),
+              ...(modelOverride ? { model: modelOverride } : {}),
+            },
+          })
+        : currentConfig;
       const model = createLLMTranslationModel({
-        client: createLLMClient(runLLMConfig),
-        model: runLLMConfig.model,
+        client: createLLMClient(runConfig.llm),
+        model: runConfig.llm.model,
         maxTokens: body.maxTokens,
         activatedSkills,
         signal: c.req.raw.signal,

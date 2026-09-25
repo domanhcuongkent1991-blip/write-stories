@@ -14,10 +14,12 @@ describe("Studio translation run model override", () => {
   let llmServer: Server;
   let llmPort: number;
   let lastChatModel: string | undefined;
+  let lastChatPath: string | undefined;
 
   beforeEach(async () => {
     root = await mkdtemp(join(tmpdir(), "inkos-studio-run-"));
     lastChatModel = undefined;
+    lastChatPath = undefined;
 
     llmServer = http.createServer((req, res) => {
       let raw = "";
@@ -28,8 +30,10 @@ describe("Studio translation run model override", () => {
         try {
           const body = JSON.parse(raw) as { model?: string };
           lastChatModel = body.model;
+          lastChatPath = req.url;
         } catch {
           lastChatModel = undefined;
+          lastChatPath = req.url;
         }
         res.writeHead(402, { "Content-Type": "application/json" });
         res.end(JSON.stringify({ error: { message: "stub LLM stop" } }));
@@ -50,14 +54,22 @@ describe("Studio translation run model override", () => {
         language: "vi",
         llm: {
           defaultModel: "cfg-model",
-          services: [{ service: "custom", name: "Custom", baseUrl: `http://127.0.0.1:${llmPort}/v1` }],
+          services: [
+            { service: "custom", name: "Custom", baseUrl: `http://127.0.0.1:${llmPort}/v1` },
+            { service: "custom", name: "Extra", baseUrl: `http://127.0.0.1:${llmPort}/v2` },
+          ],
         },
       }),
       "utf-8",
     );
     await writeFile(
       join(root, ".inkos", "secrets.json"),
-      JSON.stringify({ services: { "custom:Custom": { apiKey: "test-key" } } }),
+      JSON.stringify({
+        services: {
+          "custom:Custom": { apiKey: "test-key" },
+          "custom:Extra": { apiKey: "extra-key" },
+        },
+      }),
       "utf-8",
     );
     await writeFile(
@@ -128,5 +140,17 @@ describe("Studio translation run model override", () => {
     });
     expect([500, 502]).toContain(res.status);
     expect(lastChatModel).toBe("cfg-model");
+  });
+
+  it("resolves body.service to that service entry's endpoint with the chosen model", async () => {
+    const app = createStudioServer({} as never, root);
+    const res = await app.request(`/api/v1/translations/${ID}/run`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ service: "custom:Extra", model: "override-model" }),
+    });
+    expect([500, 502]).toContain(res.status);
+    expect(lastChatPath).toBe("/v2/chat/completions");
+    expect(lastChatModel).toBe("override-model");
   });
 });
