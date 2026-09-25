@@ -121,6 +121,20 @@ export interface TranslationModelPort {
   }) => Promise<{
     readonly terms: ReadonlyArray<TranslationGlossaryTerm>;
   }>;
+  readonly refineSegments?: (input: {
+    readonly sourceLanguage: string;
+    readonly targetLanguage: string;
+    readonly chapterTitle: string;
+    readonly segments: ReadonlyArray<TranslationSegment>;
+    readonly glossary: ReadonlyArray<TranslationGlossaryTerm>;
+    readonly previousRefinedTail?: string;
+    readonly styleContract?: string;
+  }) => Promise<{
+    readonly segments: ReadonlyArray<{
+      readonly index: number;
+      readonly target: string;
+    }>;
+  }>;
 }
 
 export interface RunTranslationProjectResult {

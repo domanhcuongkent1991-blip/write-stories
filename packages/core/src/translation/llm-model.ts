@@ -2,7 +2,7 @@ import type { LLMClient } from "../llm/provider.js";
 import { runWorkerAgent } from "../agent/worker-agent.js";
 import { appendActivatedSkillGuidance } from "../agents/base.js";
 import type { ActivatedSkillGuidance } from "../agent/skill-tool.js";
-import { buildTranslationSystemPrompt, buildTranslationUserPayload } from "./prompt-builder.js";
+import { buildRefineSystemPrompt, buildRefineUserPayload, buildTranslationSystemPrompt, buildTranslationUserPayload } from "./prompt-builder.js";
 import { resolveStyleContract } from "./vi-contract.js";
 import type {
   TranslationGlossaryTerm,
@@ -116,6 +116,38 @@ export function createLLMTranslationModel(input: {
       ], input.activatedSkills), { temperature: 0.1, maxTokens: input.maxTokens ?? 8192, signal: input.signal });
       const parsed = parseJsonObject(response.content);
       return { terms: parseGlossary(parsed.terms) };
+    },
+    async refineSegments(request) {
+      const response = await runWorkerAgent(input.client, input.model, appendActivatedSkillGuidance([
+        {
+          role: "system",
+          content: buildRefineSystemPrompt({
+            sourceLanguage: request.sourceLanguage,
+            targetLanguage: request.targetLanguage,
+            glossary: request.glossary,
+            styleContract: request.styleContract,
+          }),
+        },
+        {
+          role: "user",
+          content: buildRefineUserPayload({
+            chapterTitle: request.chapterTitle,
+            segments: request.segments,
+            context: { previousTargetTail: request.previousRefinedTail },
+            glossaryFiltered: request.glossary,
+          }),
+        },
+      ], input.activatedSkills), { temperature: 0.3, maxTokens: input.maxTokens ?? 8192, signal: input.signal });
+      const parsed = parseJsonObject(response.content);
+      const refined = parseTranslatedSegments(parsed.segments, request.segments);
+      const refinedIndexes = new Set(refined.map((item) => item.index));
+      const missing = request.segments
+        .map((segment) => segment.index)
+        .filter((index) => !refinedIndexes.has(index));
+      if (missing.length > 0) {
+        throw new Error(`refineSegments did not return target(s) for segment index(es): ${missing.join(", ")}`);
+      }
+      return { segments: refined };
     },
   };
 }
