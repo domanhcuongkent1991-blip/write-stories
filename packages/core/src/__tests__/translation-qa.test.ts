@@ -57,7 +57,10 @@ describe("runChapterQa", () => {
     expect(report.metrics.adherence).toBe(0.5);
   });
 
-  it("flags address variants when one source pronoun maps to multiple Vietnamese forms in a 4-segment window", () => {
+  // Legacy window heuristic replaced by alignment-aware counting: 他 here
+  // maps to {hắn, y} from the alignment table ("gã" is not a locked form), so
+  // the group still counts as one variant.
+  it("flags address variants when 他 maps to multiple Vietnamese forms from the alignment table", () => {
     const report = runChapterQa({
       sourceLanguage: "zh",
       targetLanguage: "vi",

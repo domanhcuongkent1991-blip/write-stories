@@ -36,7 +36,7 @@ if (!existsSync(qaModulePath)) {
   console.error(`Missing ${qaModulePath} — run: pnpm --filter @actalk/inkos-core build`);
   process.exit(1);
 }
-const { runChapterQa } = await import(pathToFileURL(qaModulePath).href);
+const { runChapterQa, collectThirdPersonForms } = await import(pathToFileURL(qaModulePath).href);
 
 const projectRoot = values.root ? resolve(values.root) : repoRoot;
 const projectDir = join(projectRoot, "translations", values.project);
@@ -56,6 +56,7 @@ if (existsSync(glossaryPath)) {
 }
 
 const chapters = [];
+let previousChapterForms;
 for (const chapterInfo of manifest.chapters ?? []) {
   const chapterPath = join(projectRoot, chapterInfo.translatedPath);
   if (!existsSync(chapterPath)) {
@@ -74,7 +75,9 @@ for (const chapterInfo of manifest.chapters ?? []) {
     targetLanguage: manifest.targetLanguage,
     segments,
     glossary,
+    ...(previousChapterForms ? { previousChapterForms } : {}),
   });
+  previousChapterForms = collectThirdPersonForms(segments);
   chapters.push({
     number: chapterInfo.number,
     metrics: {
@@ -84,6 +87,7 @@ for (const chapterInfo of manifest.chapters ?? []) {
       variants: report.metrics.variants,
     },
     passed: report.passed,
+    ...(report.addressDrift ? { addressDrift: true } : {}),
   });
 }
 
@@ -107,11 +111,11 @@ await writeFile(outPath, `${JSON.stringify(records, null, 2)}\n`, "utf-8");
 
 console.log(`translation stage metrics: ${values.stage} (project ${values.project})`);
 console.log(
-  "chapter | adherence | cjkResidue | addressVariants | variants | passed",
+  "chapter | adherence | cjkResidue | addressVariants | variants | passed | addressDrift",
 );
 for (const chapter of chapters) {
   console.log(
-    `${String(chapter.number).padStart(7)} | ${String(chapter.metrics.adherence).padStart(9)} | ${String(chapter.metrics.cjkResidue).padStart(10)} | ${String(chapter.metrics.addressVariants).padStart(15)} | ${String(chapter.metrics.variants).padStart(8)} | ${chapter.passed}`,
+    `${String(chapter.number).padStart(7)} | ${String(chapter.metrics.adherence).padStart(9)} | ${String(chapter.metrics.cjkResidue).padStart(10)} | ${String(chapter.metrics.addressVariants).padStart(15)} | ${String(chapter.metrics.variants).padStart(8)} | ${chapter.passed} | ${chapter.addressDrift ? "yes" : "-"}`,
   );
 }
 const meanAdherence = chapters.length > 0
