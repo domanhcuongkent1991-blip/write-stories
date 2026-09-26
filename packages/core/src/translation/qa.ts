@@ -58,7 +58,10 @@ export function runChapterQa(input: {
 
   const addressVariants = isVietnamese ? findAddressVariants(input.segments) : 0;
   if (addressVariants > 0) {
-    issues.push(`address-variants: ${addressVariants} source pronoun group(s) map to multiple Vietnamese address forms from the alignment table.`);
+    // P5: the alignment table counts one SOURCE pronoun per chapter, but multi-character
+    // novels legitimately map 他/她 of different characters to different Vietnamese forms —
+    // informational warning only, never a gate failure (cross-chapter addressDrift still detects real shifts).
+    issues.push(`address-variants-warning: ${addressVariants} source pronoun group(s) map to multiple Vietnamese address forms from the alignment table.`);
   }
 
   const variantKeys = findGlossaryVariantKeys(input.glossary);
@@ -76,7 +79,7 @@ export function runChapterQa(input: {
   const addressDrift = detectAddressDrift(input.segments, input.previousChapterForms);
 
   return {
-    passed: cjkResidue === 0 && addressVariants === 0 && variantKeys.length === 0 && hallucinations.length === 0,
+    passed: cjkResidue === 0 && variantKeys.length === 0 && hallucinations.length === 0,
     metrics: {
       adherence: measureAdherence(input.glossary, combinedSource, combinedTarget),
       cjkResidue,
