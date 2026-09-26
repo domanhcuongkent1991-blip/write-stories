@@ -1,0 +1,43 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`buildTranslationSystemPrompt > orders blocks ROLE -> GLOSSARY -> CAST -> STYLE 1`] = `
+"You are InkOS Translation Agent.
+Translate faithfully from zh to vi.
+Preserve paragraph order, scene meaning, tone, and terminology.
+Do not summarize. Do not add commentary outside JSON.
+
+# GLOSSARY - REQUIRED TRANSLATIONS
+These source terms have locked target translations. Always use them.
+- 李明 -> Lý Minh (aliases: 小明) [note: protagonist]
+- 青云门 -> Thanh Vân Môn
+
+# CAST
+Address forms and aliases for these characters are locked.
+- 李明 -> Lý Minh (aliases: 小明) [note: protagonist]
+
+# STYLE INSTRUCTIONS
+Giữ xưng hô nhất quán. Tên riêng Hán-Việt có chọn lọc. Dịch sát nghĩa nhưng không dịch từng chữ."
+`;
+
+exports[`buildTranslationUserPayload > places CHAPTER SUMMARY before CONTEXT before PREVIOUS TAIL before TASK 1`] = `
+"Chapter: 入门
+
+# CHAPTER SUMMARY (do NOT translate)
+Trước đó Lý Minh nhập môn.
+
+# CONTEXT (do NOT translate)
+For understanding only. Do NOT translate or copy this text into the output.
+Before: đoạn trước đó
+After: đoạn sau đó
+
+# PREVIOUS TRANSLATION TAIL (do NOT translate)
+For continuity only. Do NOT translate or copy this text into the output.
+bản dịch trước đó
+
+# TASK
+Translate the following segments to the target language. Use the glossary and CAST verbatim where they apply.
+Return JSON only: {"segments":[{"index":1,"target":"...","notes":"optional"}]}.
+{"segments":[{"index":1,"source":"李明走进落霞城。"},{"index":2,"source":"他说要买灵石。"}]}
+
+Glossary terms relevant to this batch: 2."
+`;

@@ -144,6 +144,35 @@ describe("translation ingestion", () => {
     expect(chapter.segments.map((segment) => segment.source)).toContain("第二段仍然需要作为翻译段落保留。");
   });
 
+  it("splits Vietnamese chapter headings like 'Chương N' and 'CHƯƠNG N'", async () => {
+    await writeFile(
+      join(root, "inputs", "source-vi.txt"),
+      [
+        "Chương 1: Khởi đầu",
+        "",
+        "Lý Minh bước vào tông môn.",
+        "",
+        "CHƯƠNG 2",
+        "",
+        "Hắn luyện công suốt đêm.",
+      ].join("\n"),
+    );
+
+    const created = await createTranslationProjectFromFile(root, {
+      filePath: "inputs/source-vi.txt",
+      sourceLanguage: "zh",
+      targetLanguage: "vi",
+    });
+
+    expect(created.manifest.chapters).toHaveLength(2);
+    expect(created.manifest.chapters.map((chapter) => chapter.title)).toEqual(["Khởi đầu", "Chương 2"]);
+
+    const second = await readJson<{ segments: Array<{ source: string }> }>(
+      join(root, created.manifest.chapters[1]!.sourcePath),
+    );
+    expect(second.segments.map((segment) => segment.source)).toContain("Hắn luyện công suốt đêm.");
+  });
+
   it("extracts PDF text and records page count", async () => {
     await writeFile(join(root, "inputs", "scan.pdf"), Buffer.from("%PDF fake"));
 

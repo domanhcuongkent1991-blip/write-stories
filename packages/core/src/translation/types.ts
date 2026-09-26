@@ -23,7 +23,11 @@ export interface TranslationChapterManifest {
   readonly translatedPath: string;
   readonly segmentCount: number;
   readonly charCount: number;
-  readonly status: "pending" | "translated" | "reviewed";
+  readonly status: "pending" | "drafted" | "refined" | "reviewed" | "translated";
+  readonly qa?: {
+    readonly passed: boolean;
+    readonly reportPath: string;
+  };
 }
 
 export interface TranslationProjectManifest {
@@ -42,6 +46,8 @@ export interface TranslationSegment {
   readonly source: string;
   readonly target?: string;
   readonly notes?: string;
+  readonly draft?: string;
+  readonly stage?: "draft" | "refined";
 }
 
 export interface TranslationChapterFile {
@@ -58,10 +64,24 @@ export interface TranslationProjectCreateResult {
   readonly manifest: TranslationProjectManifest;
 }
 
+export type TranslationTermCategory =
+  | "person"
+  | "place"
+  | "organization"
+  | "sect"
+  | "technique"
+  | "item"
+  | "other";
+export type TranslationTermOrigin = "seed" | "auto" | "approved";
+
 export interface TranslationGlossaryTerm {
   readonly source: string;
   readonly target: string;
   readonly note?: string;
+  readonly category?: TranslationTermCategory;
+  readonly aliases?: ReadonlyArray<string>;
+  readonly origin?: TranslationTermOrigin;
+  readonly pinned?: boolean;
 }
 
 export interface TranslationModelPort {
@@ -71,6 +91,11 @@ export interface TranslationModelPort {
     readonly chapterTitle: string;
     readonly segments: ReadonlyArray<TranslationSegment>;
     readonly glossary: ReadonlyArray<TranslationGlossaryTerm>;
+    readonly contextBefore?: string;
+    readonly contextAfter?: string;
+    readonly previousTargetTail?: string;
+    readonly chapterSummary?: string;
+    readonly previousAddressForms?: ReadonlyArray<string>;
   }) => Promise<{
     readonly segments: ReadonlyArray<{
       readonly index: number;
@@ -89,6 +114,37 @@ export interface TranslationModelPort {
     readonly passed: boolean;
     readonly summary: string;
     readonly issues: ReadonlyArray<string>;
+  }>;
+  readonly extractGlossary?: (input: {
+    readonly sourceLanguage: string;
+    readonly targetLanguage: string;
+    readonly namingPolicy: string;
+    readonly samples: ReadonlyArray<{ readonly chapterNumber: number; readonly text: string }>;
+  }) => Promise<{
+    readonly terms: ReadonlyArray<TranslationGlossaryTerm>;
+  }>;
+  readonly refineSegments?: (input: {
+    readonly sourceLanguage: string;
+    readonly targetLanguage: string;
+    readonly chapterTitle: string;
+    readonly segments: ReadonlyArray<TranslationSegment>;
+    readonly glossary: ReadonlyArray<TranslationGlossaryTerm>;
+    readonly previousRefinedTail?: string;
+    readonly styleContract?: string;
+    readonly instructions?: string;
+  }) => Promise<{
+    readonly segments: ReadonlyArray<{
+      readonly index: number;
+      readonly target: string;
+    }>;
+  }>;
+  readonly summarizeChapter?: (input: {
+    readonly sourceLanguage: string;
+    readonly targetLanguage: string;
+    readonly chapterTitle: string;
+    readonly segments: ReadonlyArray<TranslationSegment>;
+  }) => Promise<{
+    readonly summary: string;
   }>;
 }
 

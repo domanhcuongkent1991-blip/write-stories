@@ -3,7 +3,9 @@ import type { Theme } from "../hooks/use-theme";
 import type { TFunction } from "../hooks/use-i18n";
 import { useColors } from "../hooks/use-colors";
 import { fetchJson, useApi } from "../hooks/use-api";
-import { Download, FileText, Languages, Loader2, Play, Upload } from "lucide-react";
+import { Check, ChevronDown, Download, FileText, Languages, Loader2, Play, Upload, BookA, Trash2 } from "lucide-react";
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "../components/ui/dropdown-menu";
+import { filterModelGroups } from "./chat-page-state";
 
 interface Nav { toDashboard: () => void }
 
@@ -61,9 +63,65 @@ interface TranslationRunResponse {
   readonly skillIds?: ReadonlyArray<string>;
 }
 
+interface ModelGroup {
+  readonly service: string;
+  readonly label: string;
+  readonly models: ReadonlyArray<{ readonly id: string; readonly name?: string }>;
+}
+
 interface TranslationExportResponse {
   readonly outputPath: string;
   readonly format: string;
+}
+
+interface GlossaryTerm {
+  readonly source: string;
+  readonly target: string;
+  readonly note?: string;
+  readonly category?: string;
+  readonly aliases?: ReadonlyArray<string>;
+  readonly origin?: string;
+  readonly pinned?: boolean;
+}
+
+interface GlossaryResponse {
+  readonly version: number;
+  readonly terms: ReadonlyArray<GlossaryTerm>;
+}
+
+interface TranslationPrepResponse {
+  readonly terms: ReadonlyArray<unknown>;
+  readonly conflicts: ReadonlyArray<unknown>;
+  readonly sampleCount: number;
+}
+
+interface TranslationQaReport {
+  readonly number: number;
+  readonly passed: boolean;
+  readonly metrics: {
+    readonly adherence: number;
+    readonly cjkResidue: number;
+    readonly addressVariants: number;
+    readonly variants: number;
+  };
+}
+
+interface TranslationQaResponse {
+  readonly reports: ReadonlyArray<TranslationQaReport>;
+}
+
+const GLOSSARY_CATEGORIES = [
+  "person",
+  "place",
+  "organization",
+  "sect",
+  "technique",
+  "item",
+  "other",
+] as const;
+
+function termKey(term: GlossaryTerm): string {
+  return term.source.trim().toLowerCase();
 }
 
 function fileToDataUrl(file: File): Promise<string> {
@@ -130,14 +188,53 @@ export function TranslationManager({ nav, theme, t }: { nav: Nav; theme: Theme; 
   const [detail, setDetail] = useState<TranslationDetailResponse | null>(null);
   const [detailLoading, setDetailLoading] = useState(false);
   const [status, setStatus] = useState("");
-  const [busy, setBusy] = useState<"upload" | "create" | "run" | "export" | "">("");
+  const [busy, setBusy] = useState<"upload" | "create" | "run" | "export" | "prep" | "glossarySave" | "">("");
   const [file, setFile] = useState<File | null>(null);
   const [uploaded, setUploaded] = useState<TranslationUploadResponse | null>(null);
   const [title, setTitle] = useState("");
   const [sourceLanguage, setSourceLanguage] = useState(isZh ? "自动识别" : "Auto detect");
   const [targetLanguage, setTargetLanguage] = useState(isZh ? "中文（简体）" : "English");
   const [segmentMaxChars, setSegmentMaxChars] = useState(1200);
+  const [runModel, setRunModel] = useState("");
+  const [runService, setRunService] = useState("");
+  const [runBatchSize, setRunBatchSize] = useState(8);
+  const [modelGroups, setModelGroups] = useState<ReadonlyArray<ModelGroup>>([]);
+  const [modelSearch, setModelSearch] = useState("");
   const [previewChapterNumber, setPreviewChapterNumber] = useState<number | null>(null);
+  const [view, setView] = useState<"preview" | "glossary" | "qa">("preview");
+  const [glossary, setGlossary] = useState<ReadonlyArray<GlossaryTerm>>([]);
+  const [glossaryLoading, setGlossaryLoading] = useState(false);
+  const [newTerm, setNewTerm] = useState({ source: "", target: "", category: "other" });
+  const [qaReports, setQaReports] = useState<ReadonlyArray<TranslationQaReport>>([]);
+  const [qaLoading, setQaLoading] = useState(false);
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const services = await fetchJson<{ services: ReadonlyArray<{ service: string; connected: boolean }> }>("/services");
+        const bank = await fetchJson<{ groups: ReadonlyArray<ModelGroup> }>("/services/models").catch(() => ({ groups: [] }));
+        const custom = await fetchJson<{ groups: ReadonlyArray<ModelGroup> }>("/services/models/custom").catch(() => ({ groups: [] }));
+        if (cancelled) return;
+        const connected = new Set(services.services.filter((s) => s.connected).map((s) => s.service));
+        setModelGroups(
+          [...bank.groups, ...custom.groups].filter((g) => connected.has(g.service) && g.models.length > 0),
+        );
+      } catch {
+        if (!cancelled) setModelGroups([]);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, []);
+
+  const filteredModelGroups = useMemo(() => filterModelGroups(modelGroups, modelSearch), [modelGroups, modelSearch]);
+
+  const runSelectionLabel = useMemo(() => {
+    if (!runModel) return t("translation.modelDefault");
+    const group = modelGroups.find((g) => g.service === runService);
+    const model = group?.models.find((m) => m.id === runModel);
+    return group ? `${group.label} · ${model?.name ?? runModel}` : runModel;
+  }, [runModel, runService, modelGroups, t]);
 
   const translations = data?.translations ?? [];
   const selected = useMemo(
@@ -221,7 +318,11 @@ export function TranslationManager({ nav, theme, t }: { nav: Nav; theme: Theme; 
       const res = await fetchJson<TranslationRunResponse>(`/translations/${encodeURIComponent(selected.projectId)}/run`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ batchSize: 8 }),
+        body: JSON.stringify({
+          batchSize: runBatchSize || 8,
+          model: runModel || undefined,
+          service: runService || undefined,
+        }),
       });
       setStatus(isZh
         ? `翻译 ${res.translatedSegments} 段，审校 ${res.reviewedChapters} 章。${res.skillIds?.length ? `Skill：${res.skillIds.join(" · ")}。` : ""}报告：${res.reportPath}`
@@ -253,6 +354,101 @@ export function TranslationManager({ nav, theme, t }: { nav: Nav; theme: Theme; 
     } finally {
       setBusy("");
     }
+  };
+
+  const loadGlossary = async (projectId: string) => {
+    setGlossaryLoading(true);
+    try {
+      const res = await fetchJson<GlossaryResponse>(`/translations/${encodeURIComponent(projectId)}/glossary`);
+      setGlossary([...res.terms]);
+    } catch (err) {
+      setStatus(`Error: ${err instanceof Error ? err.message : String(err)}`);
+    } finally {
+      setGlossaryLoading(false);
+    }
+  };
+
+  const loadQaReports = async (projectId: string) => {
+    setQaLoading(true);
+    try {
+      const res = await fetchJson<TranslationQaResponse>(`/translations/${encodeURIComponent(projectId)}/qa`);
+      setQaReports([...res.reports].sort((a, b) => a.number - b.number));
+    } catch (err) {
+      setStatus(`Error: ${err instanceof Error ? err.message : String(err)}`);
+    } finally {
+      setQaLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    if (!selected?.projectId) return;
+    if (view === "glossary") void loadGlossary(selected.projectId);
+    if (view === "qa") void loadQaReports(selected.projectId);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [view, selected?.projectId]);
+
+  const switchView = (next: "preview" | "glossary" | "qa") => {
+    setView(next);
+    if (next === "glossary" && selected?.projectId) void loadGlossary(selected.projectId);
+    if (next === "qa" && selected?.projectId) void loadQaReports(selected.projectId);
+  };
+
+  const saveGlossary = async () => {
+    if (!selected?.projectId) return;
+    setBusy("glossarySave");
+    setStatus("");
+    try {
+      const res = await fetchJson<GlossaryResponse>(`/translations/${encodeURIComponent(selected.projectId)}/glossary`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ terms: glossary }),
+      });
+      setGlossary([...res.terms]);
+      setStatus(isZh ? `已保存术语表：${res.terms.length} 条` : `Saved glossary: ${res.terms.length} terms`);
+    } catch (err) {
+      setStatus(`Error: ${err instanceof Error ? err.message : String(err)}`);
+    } finally {
+      setBusy("");
+    }
+  };
+
+  const prepGlossary = async () => {
+    if (!selected?.projectId) return;
+    setBusy("prep");
+    setStatus("");
+    try {
+      const res = await fetchJson<TranslationPrepResponse>(`/translations/${encodeURIComponent(selected.projectId)}/prep`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({}),
+      });
+      await loadGlossary(selected.projectId);
+      setStatus(isZh
+        ? `术语表准备完成：${res.terms.length} 条，冲突 ${res.conflicts.length} 个。`
+        : `Glossary prep finished: ${res.terms.length} terms, ${res.conflicts.length} conflict(s).`);
+    } catch (err) {
+      setStatus(`Error: ${err instanceof Error ? err.message : String(err)}`);
+    } finally {
+      setBusy("");
+    }
+  };
+
+  const addGlossaryTerm = () => {
+    if (!newTerm.source.trim() || !newTerm.target.trim()) return;
+    setGlossary((current) => [
+      ...current.filter((term) => termKey(term) !== newTerm.source.trim().toLowerCase()),
+      {
+        source: newTerm.source.trim(),
+        target: newTerm.target.trim(),
+        category: newTerm.category,
+        origin: "approved",
+      },
+    ]);
+    setNewTerm({ source: "", target: "", category: "other" });
+  };
+
+  const updateGlossaryTerm = (key: string, patch: Partial<GlossaryTerm>) => {
+    setGlossary((current) => current.map((term) => (termKey(term) === key ? { ...term, ...patch } : term)));
   };
 
   return (
@@ -311,32 +507,28 @@ export function TranslationManager({ nav, theme, t }: { nav: Nav; theme: Theme; 
           <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
             <label className="space-y-1 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
               {t("translation.source")}
-              <input
-                list="translation-source-language-options"
+              <select
                 value={sourceLanguage}
                 onChange={(e) => setSourceLanguage(e.target.value)}
-                placeholder={t("translation.sourcePlaceholder")}
                 className="w-full rounded-lg border border-border bg-secondary/30 px-3 py-2 text-sm normal-case text-foreground"
-              />
+              >
+                {languagePresets.map((language) => (
+                  <option key={`source-${language}`} value={language}>{language}</option>
+                ))}
+              </select>
             </label>
             <label className="space-y-1 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
               {t("translation.target")}
-              <input
-                list="translation-target-language-options"
+              <select
                 value={targetLanguage}
                 onChange={(e) => setTargetLanguage(e.target.value)}
-                placeholder={t("translation.targetPlaceholder")}
                 className="w-full rounded-lg border border-border bg-secondary/30 px-3 py-2 text-sm normal-case text-foreground"
-              />
+              >
+                {languagePresets.filter((language) => language !== (isZh ? "自动识别" : "Auto detect")).map((language) => (
+                  <option key={`target-${language}`} value={language}>{language}</option>
+                ))}
+              </select>
             </label>
-            <datalist id="translation-source-language-options">
-              {languagePresets.map((language) => <option key={`source-${language}`} value={language} />)}
-            </datalist>
-            <datalist id="translation-target-language-options">
-              {languagePresets.filter((language) => language !== (isZh ? "自动识别" : "Auto detect")).map((language) => (
-                <option key={`target-${language}`} value={language} />
-              ))}
-            </datalist>
           </div>
           <label className="space-y-1 text-xs font-semibold uppercase tracking-wide text-muted-foreground block">
             {t("translation.projectTitle")}
@@ -408,8 +600,84 @@ export function TranslationManager({ nav, theme, t }: { nav: Nav; theme: Theme; 
                   ))}
                 </div>
               </div>
+              <div className="grid gap-3 sm:grid-cols-2">
+                <label className="space-y-1 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+                  {t("translation.runModel")}
+                  <DropdownMenu>
+                    <DropdownMenuTrigger className="flex w-full items-center justify-between gap-2 rounded-lg border border-border bg-secondary/30 px-3 py-2 text-sm normal-case text-foreground">
+                      <span className="truncate">{runSelectionLabel}</span>
+                      <ChevronDown size={14} className="shrink-0 text-muted-foreground" />
+                    </DropdownMenuTrigger>
+                    <DropdownMenuContent side="bottom" align="start" className="flex max-h-80 w-64 flex-col">
+                      <div className="border-b border-border/30 px-2 py-1.5">
+                        <input
+                          type="text"
+                          value={modelSearch}
+                          onChange={(e) => setModelSearch(e.target.value)}
+                          placeholder={isZh ? "搜索模型..." : "Search models..."}
+                          className="w-full bg-transparent text-sm outline-none placeholder:text-muted-foreground/40"
+                          onClick={(e) => e.stopPropagation()}
+                          onKeyDown={(e) => e.stopPropagation()}
+                        />
+                      </div>
+                      <div className="flex-1 overflow-y-auto">
+                        <DropdownMenuItem
+                          onClick={() => { setRunService(""); setRunModel(""); }}
+                          className={!runModel ? "bg-muted/50" : ""}
+                        >
+                          <div className="flex flex-1 items-center justify-between">
+                            <span className="text-sm">{t("translation.modelDefault")}</span>
+                            {!runModel && <Check size={14} className="shrink-0 text-primary" />}
+                          </div>
+                        </DropdownMenuItem>
+                        {filteredModelGroups.map((group) => (
+                          <div key={group.service}>
+                            <div className="px-2 py-1.5 text-[10px] font-medium uppercase tracking-wider text-muted-foreground">{group.label}</div>
+                            {group.models.map((m) => (
+                              <DropdownMenuItem
+                                key={`${group.service}:${m.id}`}
+                                onClick={() => { setRunService(group.service); setRunModel(m.id); }}
+                                className={runModel === m.id && runService === group.service ? "bg-muted/50" : ""}
+                              >
+                                <div className="flex flex-1 items-center justify-between">
+                                  <span className="text-sm">{m.name ?? m.id}</span>
+                                  {runModel === m.id && runService === group.service && <Check size={14} className="shrink-0 text-primary" />}
+                                </div>
+                              </DropdownMenuItem>
+                            ))}
+                          </div>
+                        ))}
+                        {filteredModelGroups.length === 0 && (
+                          <div className="px-3 py-4 text-center text-xs italic text-muted-foreground/50">
+                            {isZh ? "无匹配模型" : "No matching models"}
+                          </div>
+                        )}
+                      </div>
+                    </DropdownMenuContent>
+                  </DropdownMenu>
+                </label>
+                <label className="space-y-1 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+                  {t("translation.runBatchSize")}
+                  <input type="number" min={1} max={32} value={runBatchSize} onChange={(e) => setRunBatchSize(Number(e.target.value) || 8)} className="w-full rounded-lg border border-border bg-secondary/30 px-3 py-2 text-sm text-foreground" />
+                </label>
+              </div>
+              <div className="flex flex-wrap gap-2">
+                {([
+                  ["preview", "translation.tabPreview"],
+                  ["glossary", "translation.tabGlossary"],
+                  ["qa", "translation.tabQa"],
+                ] as const).map(([value, labelKey]) => (
+                  <button
+                    key={value}
+                    onClick={() => switchView(value)}
+                    className={`rounded-lg px-3 py-1.5 text-xs font-semibold transition-colors ${view === value ? "bg-primary/10 text-primary ring-1 ring-primary/40" : "bg-secondary/30 text-muted-foreground hover:bg-secondary/50"}`}
+                  >
+                    {t(labelKey)}
+                  </button>
+                ))}
+              </div>
               {detailLoading && <div className="text-sm text-muted-foreground">{t("common.loading")}</div>}
-              {detail?.manifest && (
+              {view === "preview" && detail?.manifest && (
                 <div className="grid gap-2 md:grid-cols-2">
                   {detail.manifest.chapters.map((chapter) => (
                     <button
@@ -424,7 +692,7 @@ export function TranslationManager({ nav, theme, t }: { nav: Nav; theme: Theme; 
                   ))}
                 </div>
               )}
-              {previewChapter && (
+              {view === "preview" && previewChapter && (
                 <div className="space-y-3">
                   <div className="flex flex-wrap items-center justify-between gap-2">
                     <div>
@@ -452,12 +720,146 @@ export function TranslationManager({ nav, theme, t }: { nav: Nav; theme: Theme; 
                   </div>
                 </div>
               )}
-              <div>
-                <div className="mb-2 text-xs font-bold uppercase tracking-wide text-muted-foreground">{t("translation.report")}</div>
-                <pre className="max-h-80 overflow-auto rounded-xl bg-secondary/30 p-4 text-xs leading-6 whitespace-pre-wrap">
-                  {detail?.report?.trim() || t("translation.noReport")}
-                </pre>
-              </div>
+              {view === "preview" && (
+                <div>
+                  <div className="mb-2 text-xs font-bold uppercase tracking-wide text-muted-foreground">{t("translation.report")}</div>
+                  <pre className="max-h-80 overflow-auto rounded-xl bg-secondary/30 p-4 text-xs leading-6 whitespace-pre-wrap">
+                    {detail?.report?.trim() || t("translation.noReport")}
+                  </pre>
+                </div>
+              )}
+              {view === "glossary" && (
+                <div className="space-y-4">
+                  <div className="flex flex-wrap items-center justify-between gap-3">
+                    <div className="text-xs font-bold uppercase tracking-wide text-muted-foreground">{t("translation.glossary")}</div>
+                    <div className="flex flex-wrap gap-2">
+                      <button onClick={prepGlossary} disabled={busy === "prep"} className={`rounded-lg px-3 py-2 text-xs font-semibold ${c.btnSecondary} disabled:opacity-40`}>
+                        {busy === "prep" ? <Loader2 size={12} className="inline animate-spin mr-2" /> : <BookA size={12} className="inline mr-2" />}
+                        {t("translation.prep")}
+                      </button>
+                      <button onClick={saveGlossary} disabled={busy === "glossarySave"} className={`rounded-lg px-3 py-2 text-xs font-semibold ${c.btnPrimary} disabled:opacity-40`}>
+                        {busy === "glossarySave" ? <Loader2 size={12} className="inline animate-spin mr-2" /> : null}
+                        {t("translation.glossarySave")}
+                      </button>
+                    </div>
+                  </div>
+                  {glossaryLoading && <div className="text-sm text-muted-foreground">{t("common.loading")}</div>}
+                  <div className="flex flex-wrap items-end gap-2">
+                    <label className="space-y-1 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+                      {t("translation.glossarySource")}
+                      <input
+                        value={newTerm.source}
+                        onChange={(e) => setNewTerm((current) => ({ ...current, source: e.target.value }))}
+                        className="w-36 rounded-lg border border-border bg-secondary/30 px-3 py-2 text-sm normal-case text-foreground"
+                      />
+                    </label>
+                    <label className="space-y-1 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+                      {t("translation.glossaryTarget")}
+                      <input
+                        value={newTerm.target}
+                        onChange={(e) => setNewTerm((current) => ({ ...current, target: e.target.value }))}
+                        className="w-36 rounded-lg border border-border bg-secondary/30 px-3 py-2 text-sm normal-case text-foreground"
+                      />
+                    </label>
+                    <label className="space-y-1 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+                      {t("translation.glossaryCategory")}
+                      <select
+                        value={newTerm.category}
+                        onChange={(e) => setNewTerm((current) => ({ ...current, category: e.target.value }))}
+                        className="w-32 rounded-lg border border-border bg-secondary/30 px-3 py-2 text-sm normal-case text-foreground"
+                      >
+                        {GLOSSARY_CATEGORIES.map((category) => <option key={category} value={category}>{category}</option>)}
+                      </select>
+                    </label>
+                    <button onClick={addGlossaryTerm} className={`rounded-lg px-3 py-2 text-xs font-semibold ${c.btnSecondary}`}>{t("translation.glossaryAdd")}</button>
+                  </div>
+                  {glossary.length === 0 && !glossaryLoading ? (
+                    <div className="rounded-lg border border-dashed border-border p-4 text-center text-xs text-muted-foreground">{t("translation.glossaryEmpty")}</div>
+                  ) : (
+                    <div className="max-h-[420px] overflow-auto rounded-xl border border-border">
+                      {glossary.map((term) => (
+                        <div key={termKey(term)} className="grid items-center gap-2 border-b border-border/70 p-3 last:border-b-0 md:grid-cols-[1fr_1fr_150px_90px_40px]">
+                          <input
+                            value={term.source}
+                            onChange={(e) => updateGlossaryTerm(termKey(term), { source: e.target.value })}
+                            className="w-full rounded-lg border border-border bg-secondary/30 px-2 py-1.5 text-sm text-foreground"
+                          />
+                          <input
+                            value={term.target}
+                            onChange={(e) => updateGlossaryTerm(termKey(term), { target: e.target.value })}
+                            className="w-full rounded-lg border border-border bg-secondary/30 px-2 py-1.5 text-sm text-foreground"
+                          />
+                          <select
+                            value={term.category ?? "other"}
+                            onChange={(e) => updateGlossaryTerm(termKey(term), { category: e.target.value })}
+                            className="w-full rounded-lg border border-border bg-secondary/30 px-2 py-1.5 text-sm text-foreground"
+                          >
+                            {GLOSSARY_CATEGORIES.map((category) => <option key={category} value={category}>{category}</option>)}
+                          </select>
+                          <label className="flex items-center gap-2 text-xs text-muted-foreground">
+                            <input
+                              type="checkbox"
+                              checked={term.pinned === true}
+                              onChange={(e) => updateGlossaryTerm(termKey(term), { pinned: e.target.checked })}
+                            />
+                            {t("translation.glossaryPinned")}
+                          </label>
+                          <button
+                            onClick={() => setGlossary((current) => current.filter((candidate) => termKey(candidate) !== termKey(term)))}
+                            className="rounded-lg px-2 py-1.5 text-xs text-destructive hover:bg-destructive/10"
+                          >
+                            <Trash2 size={14} className="inline" />
+                          </button>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              )}
+              {view === "qa" && (
+                <div className="space-y-3">
+                  <div className="flex flex-wrap items-center justify-between gap-3">
+                    <div className="text-xs font-bold uppercase tracking-wide text-muted-foreground">{t("translation.qa")}</div>
+                    <button onClick={() => selected?.projectId && void loadQaReports(selected.projectId)} className={`rounded-lg px-3 py-1.5 text-xs ${c.btnSecondary}`}>
+                      {qaLoading ? <Loader2 size={12} className="inline animate-spin mr-2" /> : null}
+                      {t("translation.refresh")}
+                    </button>
+                  </div>
+                  {qaReports.length === 0 && !qaLoading && (
+                    <div className="rounded-lg border border-dashed border-border p-4 text-center text-xs text-muted-foreground">{t("translation.qaEmpty")}</div>
+                  )}
+                  {qaReports.length > 0 && (
+                    <div className="overflow-auto rounded-xl border border-border">
+                      <table className="w-full text-left text-sm">
+                        <thead>
+                          <tr className="bg-secondary/30 text-xs uppercase tracking-wide text-muted-foreground">
+                            <th className="px-3 py-2">{t("translation.qaChapter")}</th>
+                            <th className="px-3 py-2">{t("translation.qaPassed")}</th>
+                            <th className="px-3 py-2">{t("translation.qaAdherence")}</th>
+                            <th className="px-3 py-2">{t("translation.qaCjk")}</th>
+                            <th className="px-3 py-2">{t("translation.qaAddress")}</th>
+                            <th className="px-3 py-2">{t("translation.qaVariants")}</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {qaReports.map((report) => (
+                            <tr key={report.number} className="border-t border-border/70">
+                              <td className="px-3 py-2">{report.number}</td>
+                              <td className={`px-3 py-2 font-semibold ${report.passed ? "text-emerald-600" : "text-destructive"}`}>
+                                {report.passed ? t("translation.qaYes") : t("translation.qaNo")}
+                              </td>
+                              <td className="px-3 py-2">{Math.round(report.metrics.adherence * 1000) / 10}%</td>
+                              <td className="px-3 py-2">{report.metrics.cjkResidue}</td>
+                              <td className="px-3 py-2">{report.metrics.addressVariants}</td>
+                              <td className="px-3 py-2">{report.metrics.variants}</td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  )}
+                </div>
+              )}
             </div>
           )}
         </section>
