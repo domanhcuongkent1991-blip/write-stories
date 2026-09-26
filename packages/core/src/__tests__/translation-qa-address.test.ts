@@ -29,7 +29,8 @@ describe("alignment-aware addressVariants", () => {
       glossary: [],
     });
     expect(report.metrics.addressVariants).toBe(1);
-    expect(report.passed).toBe(false);
+    // P5: informational warning — does not fail the gate.
+    expect(report.passed).toBe(true);
   });
 
   it("keeps 0 across chapters with one form each but records address drift", () => {
@@ -144,7 +145,8 @@ describe("alignment-aware addressVariants", () => {
       glossary: [],
     });
     expect(report.metrics.addressVariants).toBe(1);
-    expect(report.passed).toBe(false);
+    // P5: informational warning — does not fail the gate.
+    expect(report.passed).toBe(true);
   });
 
   // Ngọc and đệ are polysemous nouns (ngọc linh = 灵玉's translation, sư đệ =

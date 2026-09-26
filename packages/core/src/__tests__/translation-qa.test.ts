@@ -86,7 +86,8 @@ describe("runChapterQa", () => {
       glossary: [],
     });
     expect(report.metrics.addressVariants).toBe(1);
-    expect(report.passed).toBe(false);
+    // P5: addressVariants is informational on multi-character novels — it no longer fails the gate.
+    expect(report.passed).toBe(true);
   });
 
   it("keeps address consistency when one source pronoun keeps one Vietnamese form", () => {
