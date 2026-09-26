@@ -9,7 +9,9 @@ import { StateManager } from "@actalk/inkos-core";
 const testDir = dirname(fileURLToPath(import.meta.url));
 const cliDir = resolve(testDir, "..", "..");
 const cliEntry = resolve(cliDir, "dist", "index.js");
-const CLI_PROCESS_TIMEOUT_MS = 10_000;
+// Node startup on this machine measures ~6s wall-clock (disk I/O bound, user time ≈ 0),
+// so 10s leaves no headroom under load — flaky spawnSync ETIMEDOUT when the disk is busy.
+const CLI_PROCESS_TIMEOUT_MS = 30_000;
 const DOUBLE_CLI_INVOCATION_TEST_TIMEOUT_MS = CLI_PROCESS_TIMEOUT_MS * 2;
 
 let projectDir: string;
