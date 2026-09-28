@@ -119,13 +119,17 @@ export class StateManager {
     const styleGuidePath = join(storyDir, "style_guide.md");
     try {
       const existing = await readFile(styleGuidePath, "utf-8");
-      if (!existing.includes("写作方法论") && !existing.includes("Writing Methodology")) {
+      if (
+        !existing.includes("写作方法论")
+        && !existing.includes("Writing Methodology")
+        && !existing.includes("Phương pháp viết")
+      ) {
         const { buildWritingMethodologySection } = await import("../utils/writing-methodology.js");
-        await writeFile(styleGuidePath, `${existing}\n\n${buildWritingMethodologySection(scaffoldLanguage)}`, "utf-8");
+        await writeFile(styleGuidePath, `${existing}\n\n${buildWritingMethodologySection(language)}`, "utf-8");
       }
     } catch {
       const { buildWritingMethodologySection } = await import("../utils/writing-methodology.js");
-      await writeFile(styleGuidePath, buildWritingMethodologySection(scaffoldLanguage), "utf-8");
+      await writeFile(styleGuidePath, buildWritingMethodologySection(language), "utf-8");
     }
   }
 

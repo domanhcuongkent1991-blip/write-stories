@@ -1488,7 +1488,7 @@ describe("StateManager", () => {
       expect(currentFocus).not.toContain("# Current Focus");
     });
 
-    it("uses English control-document scaffolds for Vietnamese books", async () => {
+    it("uses English control-document scaffolds but Vietnamese methodology for Vietnamese books", async () => {
       const bookDir = manager.bookDir("vi-book");
       await manager.ensureControlDocumentsAt(bookDir, "vi");
 
@@ -1501,7 +1501,8 @@ describe("StateManager", () => {
 
       expect(authorIntent).toContain("# Author Intent");
       expect(currentFocus).toContain("# Current Focus");
-      expect(styleGuide).toContain("Writing Methodology");
+      expect(styleGuide).toContain("Phương pháp viết");
+      expect(styleGuide).not.toContain("Writing Methodology Reference");
     });
 
     it("rejects an explicit unsupported book language before creating control documents", async () => {
