@@ -4,6 +4,7 @@
  */
 
 import type { StyleProfile } from "../models/style-profile.js";
+import { viWordlikeTokenCount } from "../utils/length-metrics.js";
 
 // Common rhetorical patterns in Chinese fiction
 const RHETORICAL_PATTERNS: ReadonlyArray<{ readonly name: string; readonly regex: RegExp }> = [
@@ -23,6 +24,14 @@ const EN_RHETORICAL_PATTERNS: ReadonlyArray<{ readonly name: string; readonly re
   { name: "short punchy rhythm", regex: /[.!?]\s+[A-Z][^.!?]{1,24}[.!?]/g },
 ];
 
+// Common rhetorical patterns in Vietnamese fiction. Word boundaries use
+// lookarounds because JS \b is ASCII-only and Vietnamese letters are not.
+const VI_RHETORICAL_PATTERNS: ReadonlyArray<{ readonly name: string; readonly regex: RegExp }> = [
+  { name: "so sánh (như/như thể)", regex: /(?:chẳng khác nào|tựa như|y hệt như|(?<![\p{L}\p{N}])như(?![\p{L}\p{N}]))/giu },
+  { name: "câu hỏi tu từ", regex: /[^\n?]{4,80}\?/giu },
+  { name: "nhịp câu ngắn", regex: /[.!?]\s+[A-ZÀ-ỸĐ][^.!?]{1,24}[.!?]/gu },
+];
+
 /**
  * Analyze a reference text and extract its style profile.
  * The returned profile can be serialized to style_profile.json.
@@ -30,12 +39,13 @@ const EN_RHETORICAL_PATTERNS: ReadonlyArray<{ readonly name: string; readonly re
 export function analyzeStyle(
   text: string,
   sourceName?: string,
-  language: "zh" | "en" = "zh",
+  language: "zh" | "en" | "vi" = "zh",
 ): StyleProfile {
   const isEn = language === "en";
+  const isVi = language === "vi";
 
   const sentences = text
-    .split(isEn ? /[.!?\n]+/ : /[。！？\n]/)
+    .split(isEn ? /[.!?\n]+/ : isVi ? /[.!?…\n]+/ : /[。！？\n]/)
     .map((s) => s.trim())
     .filter((s) => s.length > 0);
 
@@ -44,9 +54,14 @@ export function analyzeStyle(
     .map((p) => p.trim())
     .filter((p) => p.length > 0);
 
-  // Measure length in the language's native unit: words for English, characters for Chinese.
+  // Measure length in the language's native unit: words for English and
+  // Vietnamese (vi_wordlike_tokens_v1 tokens), characters for Chinese.
   const measure = (s: string): number =>
-    isEn ? (s.match(/[A-Za-z0-9]+(?:'[A-Za-z0-9]+)?/g)?.length ?? 0) : s.replace(/\s+/g, "").length;
+    isEn
+      ? (s.match(/[A-Za-z0-9]+(?:'[A-Za-z0-9]+)?/g)?.length ?? 0)
+      : isVi
+        ? viWordlikeTokenCount(s)
+        : s.replace(/\s+/g, "").length;
 
   // Sentence length stats
   const sentenceLengths = sentences.map(measure);
@@ -68,37 +83,50 @@ export function analyzeStyle(
   const minParagraph = paragraphLengths.length > 0 ? Math.min(...paragraphLengths) : 0;
   const maxParagraph = paragraphLengths.length > 0 ? Math.max(...paragraphLengths) : 0;
 
-  // Vocabulary diversity (TTR — Type-Token Ratio): word-level for English, character-level for Chinese.
+  // Vocabulary diversity (TTR — Type-Token Ratio): word-level for English
+  // and Vietnamese, character-level for Chinese.
   let vocabularyDiversity: number;
   if (isEn) {
     const words = text.toLowerCase().match(/[a-z0-9]+(?:'[a-z0-9]+)?/g) ?? [];
+    vocabularyDiversity = words.length > 0 ? new Set(words).size / words.length : 0;
+  } else if (isVi) {
+    const words = text.normalize("NFC").toLowerCase().match(
+      /[\p{L}\p{M}\p{N}]+(?:['’\-][\p{L}\p{M}\p{N}]+)*/gu,
+    ) ?? [];
     vocabularyDiversity = words.length > 0 ? new Set(words).size / words.length : 0;
   } else {
     const chars = text.replace(/[\s\n\r，。！？、：；""''（）【】《》\d]/g, "");
     vocabularyDiversity = chars.length > 0 ? new Set(chars).size / chars.length : 0;
   }
 
-  // Top sentence opening patterns: first word for English, first 2 chars for Chinese.
+  // Top sentence opening patterns: first word for English and Vietnamese,
+  // first 2 chars for Chinese.
   const openingCounts: Record<string, number> = {};
   for (const s of sentences) {
     const key = isEn
       ? (s.match(/[A-Za-z']+/)?.[0]?.toLowerCase() ?? "")
-      : (s.length >= 2 ? s.slice(0, 2) : "");
+      : isVi
+        ? (s.normalize("NFC").match(/[\p{L}\p{M}\p{N}]+(?:['’\-][\p{L}\p{M}\p{N}]+)*/u)?.[0]?.toLowerCase() ?? "")
+        : (s.length >= 2 ? s.slice(0, 2) : "");
     if (key) openingCounts[key] = (openingCounts[key] ?? 0) + 1;
   }
   const topPatterns = Object.entries(openingCounts)
     .sort((a, b) => b[1] - a[1])
     .slice(0, 5)
     .filter(([, count]) => count >= 3)
-    .map(([pattern, count]) => (isEn ? `${pattern}… (${count})` : `${pattern}...(${count}次)`));
+    .map(([pattern, count]) => (isEn || isVi ? `${pattern}… (${count})` : `${pattern}...(${count}次)`));
 
   // Rhetorical features
-  const rhetoricalPatterns = isEn ? EN_RHETORICAL_PATTERNS : RHETORICAL_PATTERNS;
+  const rhetoricalPatterns = isEn
+    ? EN_RHETORICAL_PATTERNS
+    : isVi
+      ? VI_RHETORICAL_PATTERNS
+      : RHETORICAL_PATTERNS;
   const rhetoricalFeatures: string[] = [];
   for (const { name, regex } of rhetoricalPatterns) {
     const matches = text.match(regex);
     if (matches && matches.length >= 2) {
-      rhetoricalFeatures.push(isEn ? `${name} (${matches.length})` : `${name}(${matches.length}处)`);
+      rhetoricalFeatures.push(isEn || isVi ? `${name} (${matches.length})` : `${name}(${matches.length}处)`);
     }
   }
 

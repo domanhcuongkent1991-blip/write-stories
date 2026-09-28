@@ -6204,6 +6204,27 @@ describe("PipelineRunner", () => {
     }
   });
 
+  it("generates a Vietnamese style guide for Vietnamese books", async () => {
+    const { root, runner, state, bookId } = await createRunnerFixture();
+    const chatSpy = vi.spyOn(llmProvider, "chatCompletion").mockRejectedValue(new Error("should not call llm for short samples"));
+    const book = await state.loadBookConfig(bookId);
+    await state.saveBookConfig(bookId, { ...book, language: "vi" });
+    const sample = "Chạng vạng, mưa rơi đầy hiên. Nàng không quay đầu, chỉ gấp lá thư giấu vào ngăn kéo. Dưới đường, ánh đèn xe loé lên như một kẻ đã tìm thấy nơi này. Cánh cửa gỗ rít lên, khe hở phả hơi lạnh tràn vào nền nhà, và chiếc đèn dầu run rẩy cháy tới sáng.";
+
+    try {
+      const guide = await runner.generateStyleGuide(bookId, sample, "vi-snippet");
+
+      expect(chatSpy).not.toHaveBeenCalled();
+      expect(guide).toContain("Mẫu văn ngắn");
+      expect(guide).toContain("Phương pháp viết");
+      expect(guide).not.toContain("去AI味");
+      await expect(readFile(join(state.bookDir(bookId), "story", "style_profile.json"), "utf-8")).resolves.toContain("vi-snippet");
+      await expect(readFile(join(state.bookDir(bookId), "story", "style_guide.md"), "utf-8")).resolves.toContain("Phương pháp viết");
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
   it("keeps canon import running when style guide extraction fails", async () => {
     const { root, runner, state, bookId } = await createRunnerFixture();
     const parentBookId = "parent-book";
