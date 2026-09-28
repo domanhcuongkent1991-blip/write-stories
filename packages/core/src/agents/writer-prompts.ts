@@ -57,7 +57,7 @@ export function buildWriterSystemPrompt(
         buildProtagonistRules(bookRules),
         buildNarrativePersonRule(bookRules, isEnglish ? "en" : "zh"),
         buildBookRulesBody(bookRulesBody),
-        buildStyleGuide(styleGuide),
+        buildStyleGuide(styleGuide, promptLanguage),
         buildStyleFingerprint(styleFingerprint),
         fanficContext ? buildFanficCanonSection(fanficContext.fanficCanon, fanficContext.fanficMode) : "",
         fanficContext ? buildCharacterVoiceProfiles(fanficContext.fanficCanon) : "",
@@ -76,7 +76,7 @@ export function buildWriterSystemPrompt(
         buildProtagonistRules(bookRules),
         buildNarrativePersonRule(bookRules, isEnglish ? "en" : "zh"),
         buildBookRulesBody(bookRulesBody),
-        buildStyleGuide(styleGuide),
+        buildStyleGuide(styleGuide, promptLanguage),
         buildStyleFingerprint(styleFingerprint),
         fanficContext ? buildFanficCanonSection(fanficContext.fanficCanon, fanficContext.fanficMode) : "",
         fanficContext ? buildCharacterVoiceProfiles(fanficContext.fanficCanon) : "",
@@ -328,9 +328,14 @@ function buildBookRulesBody(body: string): string {
 // Style guide
 // ---------------------------------------------------------------------------
 
-function buildStyleGuide(styleGuide: string): string {
+function buildStyleGuide(styleGuide: string, language: WritingLanguage): string {
   if (!styleGuide || styleGuide === "(文件尚未创建)") return "";
-  return `## 文风指南\n\n${styleGuide}`;
+  const header = language === "zh"
+    ? "## 文风指南"
+    : language === "vi"
+      ? "## Phong cách viết"
+      : "## Style Guide";
+  return `${header}\n\n${styleGuide}`;
 }
 
 // ---------------------------------------------------------------------------

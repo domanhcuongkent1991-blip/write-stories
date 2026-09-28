@@ -261,3 +261,41 @@ describe("buildWriterSystemPrompt", () => {
     expect(prompt).toContain("resistance-bearing exchange");
   });
 });
+
+describe("buildWriterSystemPrompt style-guide header", () => {
+  const STYLE_BODY = "# Style guide body\n\nKeep the prose restrained.";
+
+  it("labels the style guide section in the book language", () => {
+    const viPrompt = buildWriterSystemPrompt(
+      { ...BOOK, language: "vi" },
+      GENRE,
+      null,
+      "",
+      "",
+      STYLE_BODY,
+      undefined,
+      1,
+      "full",
+      undefined,
+      "vi",
+    );
+    expect(viPrompt).toContain("## Phong cách viết");
+    expect(viPrompt).not.toContain("## 文风指南");
+
+    const zhPrompt = buildWriterSystemPrompt(
+      BOOK,
+      GENRE,
+      null,
+      "",
+      "",
+      STYLE_BODY,
+      undefined,
+      1,
+      "full",
+      undefined,
+      "zh",
+    );
+    expect(zhPrompt).toContain("## 文风指南");
+    expect(zhPrompt).not.toContain("## Phong cách viết");
+  });
+});
