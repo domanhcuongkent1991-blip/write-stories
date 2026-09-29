@@ -244,6 +244,15 @@ export class WriterAgent extends BaseAgent {
         })
       : null;
 
+    let worldGlossaryBody = "";
+    if (writingLanguage === "vi") {
+      try {
+        worldGlossaryBody = await readFile(join(bookDir, "story", "world_glossary.md"), "utf-8");
+      } catch {
+        worldGlossaryBody = "";
+      }
+    }
+
     // Build fanfic context if fanfic_canon.md exists
     const fanficContext: FanficContext | undefined = hasFanficCanon && bookRules?.fanficMode
       ? {
@@ -259,6 +268,7 @@ export class WriterAgent extends BaseAgent {
       chapterNumber, "creative", fanficContext, writingLanguage,
       "governed",
       resolvedLengthSpec,
+      worldGlossaryBody,
     ), "longform.writer");
 
     const creativeUserPrompt = this.buildGovernedUserPrompt({

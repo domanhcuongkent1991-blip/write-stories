@@ -299,3 +299,46 @@ describe("buildWriterSystemPrompt style-guide header", () => {
     expect(zhPrompt).not.toContain("## Phong cách viết");
   });
 });
+
+describe("buildWriterSystemPrompt — world glossary notebook", () => {
+  it("embeds the world glossary section when provided", () => {
+    const prompt = buildWriterSystemPrompt(
+      { ...BOOK, language: "vi" },
+      GENRE,
+      null,
+      "",
+      "",
+      "# Style guide body",
+      undefined,
+      1,
+      "full",
+      undefined,
+      "vi",
+      undefined,
+      undefined,
+      "# Sổ tay tên thế giới\n\n| Tên nguyên bản | Cách viết tiếng Việt chuẩn | Loại | Ghi chú |\n|---|---|---|---|\n| Harvest Bureau | Cục Thu Hoạch | tổ chức | |",
+    );
+
+    expect(prompt).toContain("## Sổ tay tên thế giới");
+    expect(prompt).toContain("Cục Thu Hoạch");
+    expect(prompt).toContain("không tự đặt cách viết mới");
+  });
+
+  it("omits the world glossary section when absent", () => {
+    const prompt = buildWriterSystemPrompt(
+      { ...BOOK, language: "vi" },
+      GENRE,
+      null,
+      "",
+      "",
+      "# Style guide body",
+      undefined,
+      1,
+      "full",
+      undefined,
+      "vi",
+    );
+
+    expect(prompt).not.toContain("## Sổ tay tên thế giới");
+  });
+});

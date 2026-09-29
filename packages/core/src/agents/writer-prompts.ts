@@ -32,6 +32,7 @@ export function buildWriterSystemPrompt(
   languageOverride?: WritingLanguage,
   inputProfile: "legacy" | "governed" = "legacy",
   lengthSpec?: LengthSpec,
+  worldGlossaryBody?: string,
 ): string {
   const promptLanguage = languageOverride ?? genreProfile.language;
   const isEnglish = resolveWritingLanguageProfile(promptLanguage).scaffoldLanguage === "en";
@@ -59,6 +60,7 @@ export function buildWriterSystemPrompt(
         buildBookRulesBody(bookRulesBody),
         buildStyleGuide(styleGuide, promptLanguage),
         buildStyleFingerprint(styleFingerprint),
+        buildWorldGlossarySection(worldGlossaryBody ?? ""),
         fanficContext ? buildFanficCanonSection(fanficContext.fanficCanon, fanficContext.fanficMode) : "",
         fanficContext ? buildCharacterVoiceProfiles(fanficContext.fanficCanon) : "",
         fanficContext ? buildFanficModeInstructions(fanficContext.fanficMode, fanficContext.allowedDeviations) : "",
@@ -78,6 +80,7 @@ export function buildWriterSystemPrompt(
         buildBookRulesBody(bookRulesBody),
         buildStyleGuide(styleGuide, promptLanguage),
         buildStyleFingerprint(styleFingerprint),
+        buildWorldGlossarySection(worldGlossaryBody ?? ""),
         fanficContext ? buildFanficCanonSection(fanficContext.fanficCanon, fanficContext.fanficMode) : "",
         fanficContext ? buildCharacterVoiceProfiles(fanficContext.fanficCanon) : "",
         fanficContext ? buildFanficModeInstructions(fanficContext.fanficMode, fanficContext.allowedDeviations) : "",
@@ -327,6 +330,19 @@ function buildBookRulesBody(body: string): string {
 // ---------------------------------------------------------------------------
 // Style guide
 // ---------------------------------------------------------------------------
+
+function buildWorldGlossarySection(worldGlossaryBody: string): string {
+  if (!worldGlossaryBody.trim()) {
+    return "";
+  }
+  return [
+    "## Sổ tay tên thế giới",
+    "",
+    worldGlossaryBody.trim(),
+    "",
+    "Khi viết, dùng đúng cách viết tên trong sổ tay trên. Gặp tên riêng chưa có trong sổ thì không tự đặt cách viết mới — ghi tên đó vào phần cuối chương để bổ sung sau.",
+  ].join("\n");
+}
 
 function buildStyleGuide(styleGuide: string, language: WritingLanguage): string {
   if (!styleGuide || styleGuide === "(文件尚未创建)") return "";
