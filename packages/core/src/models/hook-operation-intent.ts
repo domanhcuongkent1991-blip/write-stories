@@ -71,9 +71,11 @@ export function assertHookContractCurrent(
   for (const operation of parsed.operations) {
     const previousAction = seen.get(operation.hookId);
     if (previousAction !== undefined) {
-      const kind = previousAction === operation.action ? "duplicate" : "contradictory";
+      // Models occasionally repeat the same op verbatim. A verbatim repeat is
+      // idempotent, so skip it; only a genuinely contradictory action fails.
+      if (previousAction === operation.action) continue;
       throw new HookOperationContractError(
-        `${kind} hook operation for ${operation.hookId}: ${previousAction} and ${operation.action}`,
+        `contradictory hook operation for ${operation.hookId}: ${previousAction} and ${operation.action}`,
       );
     }
     seen.set(operation.hookId, operation.action);

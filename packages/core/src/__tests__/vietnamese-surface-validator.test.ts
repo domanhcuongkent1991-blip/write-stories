@@ -31,4 +31,18 @@ describe("validateVietnameseSurface — world glossary + machine prose", () => {
     const findings = validateVietnameseSurface(text);
     expect(findings.find((f) => f.rule === "vi-prose-machine-phrase")).toBeUndefined();
   });
+
+  it("flags long chapters written in a non-Vietnamese language", () => {
+    const text = `The slope behind Frostwall fell into a white ravine. ${"He counted the marks on the ledger and wrote the entry before the ink dried. ".repeat(9)}`;
+    const findings = validateVietnameseSurface(text);
+    const mismatch = findings.find((f) => f.rule === "vi-output-language-mismatch");
+    expect(mismatch?.severity).toBe("error");
+    expect(mismatch?.suggestion).toMatch(/tiếng Việt/);
+  });
+
+  it("does not flag Vietnamese prose as a language mismatch", () => {
+    const text = "Sườn núi sau Frostwall đổ xuống một khe trắng. Hắn đếm các vạch trên sổ và ghi dòng mới trước khi mực khô. Ký ức trong tủy vẫn còn nguyên, nhưng giá của nó đã đổi chủ.";
+    const findings = validateVietnameseSurface(text);
+    expect(findings.find((f) => f.rule === "vi-output-language-mismatch")).toBeUndefined();
+  });
 });

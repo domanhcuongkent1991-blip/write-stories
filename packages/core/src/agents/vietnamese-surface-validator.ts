@@ -7,6 +7,9 @@ const CJK_RE = /[\u3400-\u4DBF\u4E00-\u9FFF\uF900-\uFAFF]/u;
 const AGENT_NOTE_RE = /^\s*\[(?:writer|polisher|reviser|reviewer|写作|润色|修订|审稿)-note\]\s*/imu;
 const REPEATED_WHITESPACE_RE = /[ \t]{2,}/u;
 const REPEATED_PUNCTUATION_RE = /([!?;,。：；！？])\1+/u;
+const LATIN_LETTER_RE = /[A-Za-z\u00C0-\u1EF9]/g;
+const VI_MARKED_CHAR_RE =
+  /[ăâêôơưđáàảãạấầẩẫậắằẳẵặéèẻẽẹếềểễệíìỉĩịóòỏõọốồổỗộớờởỡợúùủũụứừửữựýỳỷỹỵ]/gi;
 
 const DELIMITER_PAIRS = [
   { open: "“", close: "”", label: "dấu ngoặc kép cong" },
@@ -60,6 +63,23 @@ export function validateVietnameseSurface(
       description: "Nội dung tiếng Việt chứa ký tự CJK ngoài ý muốn.",
       suggestion: "Thay ký tự CJK bằng nội dung tiếng Việt tương ứng.",
     });
+  }
+
+  // Output-language guard: a Vietnamese book whose prose is almost entirely
+  // unmarked Latin (e.g. English) must not pass the surface gate.
+  {
+    const latinChars = countMatches(content, LATIN_LETTER_RE);
+    const markedChars = countMatches(content, VI_MARKED_CHAR_RE);
+    if (latinChars >= 400 && markedChars / latinChars < 0.02) {
+      violations.push({
+        rule: "vi-output-language-mismatch",
+        severity: "error",
+        description:
+          "Chương gần như không chứa ký tự tiếng Việt có dấu — nghi ngờ văn bản bị viết bằng ngôn ngữ khác (ví dụ tiếng Anh) thay vì tiếng Việt.",
+        suggestion:
+          "Viết lại toàn bộ nội dung bằng tiếng Việt theo hợp đồng ngôn ngữ xuất (writingLanguage = vi) trước khi chốt chương.",
+      });
+    }
   }
 
   if (AGENT_NOTE_RE.test(content)) {

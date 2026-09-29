@@ -146,13 +146,14 @@ describe("canonical hook-operation intent V2", () => {
       .toThrow(/write exactly "- none"/i);
   });
 
-  it("rejects duplicate and contradictory operations instead of deduplicating them", () => {
+  it("deduplicates identical operations but rejects contradictory ones", () => {
     const duplicate = governedMemoBody.replace(
       "- H006 \"signal manipulation device\" -> the inspection confirms the physical device",
       "- H006 \"signal manipulation device\" -> the inspection confirms the physical device\n- H006 \"signal manipulation device\" -> the inspection confirms the physical device",
     );
-    expect(() => bindExpectedHookOperationsV2(duplicate, { activeHooks, chapterNumber: 2 }))
-      .toThrow(/duplicate.*H006/i);
+    const bound = bindExpectedHookOperationsV2(duplicate, { activeHooks, chapterNumber: 2 });
+    const h006Ops = bound.operations.filter((operation) => operation.hookId === "H006");
+    expect(h006Ops).toHaveLength(1);
 
     const contradictory = governedMemoBody.replace(
       "- sabotage-sau-can-thi-thu \"remote administrator lock\" -> actor still unknown",

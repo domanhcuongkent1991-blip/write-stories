@@ -8153,15 +8153,18 @@ describe("PipelineRunner", () => {
     suggestion: "压缩一行解释。",
   };
 
-  it("keeps chapter and truth files unchanged when revised-body settlement cannot validate", async () => {
+  it("applies the revised chapter with a state-degraded baseline when settlement cannot validate", async () => {
     const { root, runner, state, bookId, chaptersDir, revisedBody } = await createRevisionGateFixture("always");
     const storyDir = join(state.bookDir(bookId), "story");
-    const originalChapter = await readFile(join(chaptersDir, "0001_Test_Chapter.md"), "utf-8");
     const originalState = await readFile(join(storyDir, "current_state.md"), "utf-8");
     const originalHooks = await readFile(join(storyDir, "pending_hooks.md"), "utf-8");
-    vi.spyOn(ContinuityAuditor.prototype, "auditChapter").mockResolvedValueOnce(
-      createAuditResult({ passed: false, issues: [CRITICAL_ISSUE], summary: "needs revision" }),
-    );
+    vi.spyOn(ContinuityAuditor.prototype, "auditChapter")
+      .mockResolvedValueOnce(
+        createAuditResult({ passed: false, issues: [CRITICAL_ISSUE], summary: "needs revision" }),
+      )
+      .mockResolvedValue(
+        createAuditResult({ passed: true, summary: "revised body passes" }),
+      );
     vi.spyOn(StateValidatorAgent.prototype, "validate").mockResolvedValue({
       passed: false,
       repairRequired: true,
@@ -8174,28 +8177,23 @@ describe("PipelineRunner", () => {
     try {
       const result = await runner.reviseDraft(bookId, 1, "rework", "Rewrite the chapter and sync state.");
 
-      expect(result.applied).toBe(false);
-      expect(result.skippedReason).toContain("state settlement did not validate");
+      expect(result.applied).toBe(true);
+      const savedChapter = await readFile(join(chaptersDir, "0001_Test_Chapter.md"), "utf-8");
+      expect(savedChapter).toContain(revisedBody);
+      // The prose is applied; its unrepairable state delta is dropped back
+      // to the pre-revision baseline instead of polluting truth files.
+      const savedState = await readFile(join(storyDir, "current_state.md"), "utf-8");
+      expect(savedState.replace(/\s+$/u, "")).toBe(originalState.replace(/\s+$/u, ""));
+      const savedHooks = await readFile(join(storyDir, "pending_hooks.md"), "utf-8");
+      expect(savedHooks.replace(/\s+$/u, "")).toBe(originalHooks.replace(/\s+$/u, ""));
       expect(result.auditIssues).toEqual([
         expect.objectContaining({ category: "state-validation" }),
+        expect.objectContaining({
+          category: "state-validation",
+          severity: "warning",
+          description: expect.stringContaining("state-degraded"),
+        }),
       ]);
-      await expect(readFile(join(chaptersDir, "0001_Test_Chapter.md"), "utf-8")).resolves.toBe(originalChapter);
-      await expect(readFile(join(storyDir, "current_state.md"), "utf-8")).resolves.toBe(originalState);
-      await expect(readFile(join(storyDir, "pending_hooks.md"), "utf-8")).resolves.toBe(originalHooks);
-      expect(originalChapter).not.toContain(revisedBody);
-      await expect(listChapterVersions(state.bookDir(bookId), 1)).resolves.toEqual([]);
-      const auditRunDir = join(state.bookDir(bookId), "story", "audit", "runs", "chapter-0001");
-      const auditRunFiles = await readdir(auditRunDir);
-      expect(auditRunFiles).toHaveLength(1);
-      expect(auditRunFiles[0]).toContain(".initial.audit-run-v1.json");
-      const rejectionRun = JSON.parse(await readFile(join(auditRunDir, auditRunFiles[0]!), "utf-8"));
-      expect(rejectionRun.revision).toMatchObject({
-        attempted: true,
-        candidateProduced: true,
-        accepted: false,
-        rejectionReason: expect.stringContaining("state settlement did not validate"),
-      });
-      expect(rejectionRun.canonicalCommitOutcome).toBe("unchanged");
     } finally {
       await rm(root, { recursive: true, force: true });
     }

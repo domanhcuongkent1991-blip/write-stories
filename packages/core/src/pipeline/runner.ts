@@ -86,6 +86,7 @@ import { rewriteStructuredStateFromMarkdown } from "../state/state-bootstrap.js"
 import { readFile, readdir, writeFile, mkdir, rename, rm, stat } from "node:fs/promises";
 import { join } from "node:path";
 import {
+  buildStateDegradedPersistenceOutput,
   parseStateDegradedReviewNote,
   resolveStateDegradedBaseStatus,
   retrySettlementAfterValidationFailure,
@@ -2489,6 +2490,7 @@ export class PipelineRunner {
       const stateValidator = new StateValidatorAgent(this.agentCtxFor("stateValidator", bookId));
       let settledRevision: WriteChapterOutput;
       let stateValidation: ValidationResult;
+      let stateDegradedIssues: AuditIssue[] = [];
       try {
         settledRevision = await writer.settleChapterState({
           book,
@@ -2578,16 +2580,38 @@ export class PipelineRunner {
           }]);
         }
         if (recovery.kind === "degraded") {
-          const rejectedReason = "state settlement did not validate after retry";
-          await persistManualRevisionRejection(rejectedReason, {
-            content: revisedContent,
-            count: revisedCount,
-            produced: true,
+          // The revised prose itself passed the audit gate; only its state
+          // settlement could not be repaired. Keep the prose with a
+          // state-degraded baseline (same policy as the write path) instead
+          // of discarding the candidate, so a later settlement repair run
+          // can rebuild state from the persisted body.
+          const baselineLedger = await readFile(
+            join(baselineStoryDir, "ledger.md"),
+            "utf-8",
+          ).catch(() => "");
+          settledRevision = buildStateDegradedPersistenceOutput({
+            output: settledRevision,
+            oldState: baselineState,
+            oldHooks: baselineHooks,
+            oldLedger: baselineLedger,
           });
-          return manualRevisionUnchanged(rejectedReason, recovery.issues);
+          stateValidation = { passed: true, warnings: [] };
+          stateDegradedIssues = [
+            ...recovery.issues,
+            {
+              severity: "warning",
+              category: "state-validation",
+              description: "State settlement could not be repaired after retries; the revised chapter was applied with the pre-revision state/hook baseline (state-degraded).",
+              suggestion: "Run chapter state settlement repair, then verify hooks and tracked questions for this chapter.",
+            },
+          ];
+          this.config.logger?.warn(
+            `[runner] revise ch${targetChapter}: state settlement not repaired; applying with state-degraded baseline`,
+          );
+        } else {
+          settledRevision = recovery.output;
+          stateValidation = recovery.validation;
         }
-        settledRevision = recovery.output;
-        stateValidation = recovery.validation;
       }
       const postRevision = await this.evaluateMergedAudit({
         auditor,
@@ -2880,7 +2904,7 @@ export class PipelineRunner {
         applied: true,
         status: effectivePostRevision.auditResult.passed ? "ready-for-review" : "audit-failed",
         auditPassed: effectivePostRevision.auditResult.passed,
-        auditIssues: remainingIssues,
+        auditIssues: [...stateDegradedIssues, ...remainingIssues],
         revisionDiagnostics,
         lengthWarnings,
         lengthTelemetry,
