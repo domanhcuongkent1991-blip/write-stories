@@ -1503,6 +1503,21 @@ describe("StateManager", () => {
       expect(currentFocus).toContain("# Current Focus");
       expect(styleGuide).toContain("Phương pháp viết");
       expect(styleGuide).not.toContain("Writing Methodology Reference");
+
+      const worldGlossary = await readFile(
+        join(storyDir, "world_glossary.md"),
+        "utf-8",
+      );
+      expect(worldGlossary).toContain("# Sổ tay tên thế giới");
+    });
+
+    it("does not seed a world glossary for Chinese books", async () => {
+      const bookDir = manager.bookDir("zh-glossary-book");
+      await manager.ensureControlDocumentsAt(bookDir, "zh");
+
+      await expect(
+        stat(join(bookDir, "story", "world_glossary.md")),
+      ).rejects.toThrow();
     });
 
     it("rejects an explicit unsupported book language before creating control documents", async () => {
