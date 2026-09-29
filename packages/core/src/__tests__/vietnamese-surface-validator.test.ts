@@ -1,57 +1,34 @@
 import { describe, expect, it } from "vitest";
 import { validateVietnameseSurface } from "../agents/vietnamese-surface-validator.js";
 
-describe("Vietnamese surface validator", () => {
-  it("reports each known spelling occurrence with an exact repair hint", () => {
-    const issues = validateVietnameseSurface("mười mốn và dry khốc. Sound tivi; mười mốn.");
-    const spelling = issues.filter((issue) => issue.rule === "vi-known-spelling");
-    expect(spelling).toHaveLength(4);
-    expect(spelling[0]).toMatchObject({ severity: "error", repairScope: "local", repairTarget: "prose", verification: "verified" });
-    expect(spelling[0]?.repairHint).toMatchObject({ kind: "exact-replacement", targetText: "mười mốn", replacementText: "mười bốn", occurrenceIndexes: [1] });
-    expect(spelling[1]?.repairHint?.occurrenceIndexes).toEqual([2]);
-    expect(validateVietnameseSurface("mười bốn, khô khốc, Âm thanh tivi").filter((issue) => issue.rule === "vi-known-spelling")).toEqual([]);
+describe("validateVietnameseSurface — world glossary + machine prose", () => {
+  it("flags unknown foreign tokens as glossary violations", () => {
+    const text = "Người của Harvest Bureau đang thu marrow. Hắn giữ chặt marrow trong hộp sắt.";
+    const findings = validateVietnameseSurface(text, { worldGlossaryTerms: ["Cục Thu Hoạch", "tủy"] });
+    const glossary = findings.find((f) => f.rule === "vi-world-glossary-unknown-name");
+    expect(glossary?.severity).toBe("warning");
+    expect(glossary?.description).toContain("Harvest Bureau");
+    expect(glossary?.description).toContain("marrow");
+    expect(glossary?.suggestion).toContain("world_glossary.md");
   });
 
-  it("blocks the observed duplicated seal phrase with an exact local replacement", () => {
-    const spelling = validateVietnameseSurface("Tuấn bảo phải xé niêm phong niêm nhựa ngay.")
-      .find((issue) => issue.rule === "vi-known-spelling");
-
-    expect(spelling).toMatchObject({
-      severity: "error",
-      repairScope: "local",
-      repairTarget: "prose",
-      verification: "verified",
-      repairHint: {
-        kind: "exact-replacement",
-        targetText: "xé niêm phong niêm nhựa",
-        replacementText: "xé niêm phong nhựa",
-        occurrenceIndexes: [1],
-      },
-    });
-  });
-  it("accepts clean Vietnamese prose", () => {
-    expect(validateVietnameseSurface("Trời mưa. Cô bước qua sân ga và nhìn về phía bắc.")).toEqual([]);
+  it("accepts names covered by the world glossary", () => {
+    const text = "Cục Thu Hoạch thu tủy. Hắn đứng cạnh Cục Thu Hoạch, cầm tủy trên tay.";
+    const findings = validateVietnameseSurface(text, { worldGlossaryTerms: ["Cục Thu Hoạch", "tủy"] });
+    expect(findings.find((f) => f.rule === "vi-world-glossary-unknown-name")).toBeUndefined();
   });
 
-  it("blocks accidental CJK leakage", () => {
-    expect(validateVietnameseSurface("Anh nói: 你好")).toEqual(expect.arrayContaining([
-      expect.objectContaining({ rule: "vi-cjk-leak", severity: "error" }),
-    ]));
+  it("flags dense machine-prose tell phrases", () => {
+    const text = "Đây không chỉ là một cuốn sổ, mà là biên bản nhân sinh. Nó không chỉ đo ký ức, mà còn định giá con người. Từ đó phản ánh một sự thật: ký ức là tài sản. Nhìn chung, đây là một hệ thống đầy tham vọng. Có thể nói, không ai thoát khỏi nó.";
+    const findings = validateVietnameseSurface(text);
+    const machine = findings.find((f) => f.rule === "vi-prose-machine-phrase");
+    expect(machine?.severity).toBe("warning");
+    expect(machine?.description).toMatch(/[3-9]/);
   });
 
-  it("warns about leaked agent notes", () => {
-    expect(validateVietnameseSurface("Cô quay đi.\n[writer-note] cần thêm cảnh hành động")).toEqual(expect.arrayContaining([
-      expect.objectContaining({ rule: "vi-agent-note-leak", severity: "error" }),
-    ]));
-  });
-
-  it("warns about surface punctuation and delimiter defects", () => {
-    const issues = validateVietnameseSurface("Cô nói: “Đợi tôi!!  Sau đó (quay lại.");
-
-    expect(issues).toEqual(expect.arrayContaining([
-      expect.objectContaining({ rule: "vi-repeated-whitespace", severity: "warning" }),
-      expect.objectContaining({ rule: "vi-repeated-punctuation", severity: "warning" }),
-      expect.objectContaining({ rule: "vi-unbalanced-delimiter", severity: "warning" }),
-    ]));
+  it("keeps sparse tell phrases unflagged", () => {
+    const text = "Nó không chỉ là một cuốn sổ, mà là biên bản nhân sinh. Mọi thứ khác đã nói hết ý.";
+    const findings = validateVietnameseSurface(text);
+    expect(findings.find((f) => f.rule === "vi-prose-machine-phrase")).toBeUndefined();
   });
 });

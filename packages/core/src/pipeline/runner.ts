@@ -30,7 +30,7 @@ import type { RadarSource } from "../agents/radar-source.js";
 import { readGenreProfile } from "../agents/rules-reader.js";
 import { analyzeAITells } from "../agents/ai-tells.js";
 import { analyzeSensitiveWords } from "../agents/sensitive-words.js";
-import { validateVietnameseSurface } from "../agents/vietnamese-surface-validator.js";
+import { readWorldGlossaryTerms, validateVietnameseSurface } from "../agents/vietnamese-surface-validator.js";
 import { StateManager, type CanonicalChapterProjection } from "../state/manager.js";
 import { archiveChapterVersion, readChapterUserBrief } from "../state/chapter-workspace.js";
 import { MemoryDB, type Fact } from "../state/memory-db.js";
@@ -3029,7 +3029,9 @@ export class PipelineRunner {
       const contentHash = computeChapterContentHash(output.content);
       const writerCount = countChapterLength(output.content, lengthSpec.countingMode);
       const surfaceIssues = profile.language === "vi"
-        ? validateVietnameseSurface(output.content)
+        ? validateVietnameseSurface(output.content, {
+          worldGlossaryTerms: await readWorldGlossaryTerms(bookDir),
+        })
         : [];
       const hardBlockers = [
         ...(isOutsideHardRange(writerCount, lengthSpec) ? ["HARD_RANGE_FAIL"] : []),
@@ -3688,6 +3690,9 @@ export class PipelineRunner {
 
     {
       const manualReview = (this.config.chapterReviewMode ?? "auto") === "manual";
+      const worldGlossaryTerms = writingLanguage === "vi"
+        ? await readWorldGlossaryTerms(bookDir)
+        : [];
       const auditor = new ContinuityAuditor(this.agentCtxFor("auditor", bookId));
       const reviewResult = await runChapterReviewCycle({
         book: { genre: book.genre },
@@ -3724,7 +3729,7 @@ export class PipelineRunner {
             ? validateHookLedger(memoBody, content)
             : [];
           const viIssues = writingLanguage === "vi"
-            ? validateVietnameseSurface(content).map((v) => ({
+            ? validateVietnameseSurface(content, { worldGlossaryTerms }).map((v) => ({
                 severity: v.severity === "error" ? "critical" as const : "warning" as const,
                 category: v.rule,
                 description: v.description,
