@@ -17,7 +17,12 @@ describe("buildWritingMethodologySection", () => {
   it("returns the Vietnamese methodology for vi", () => {
     const section = buildWritingMethodologySection("vi");
     expect(section).toContain("Phương pháp viết");
-    expect(section).toContain("Bỏ giọng máy");
+    expect(section).toContain("giọng máy");
+    const lower = section.toLocaleLowerCase();
+    expect(lower).toContain("câu hỏi tu từ");
+    expect(lower).toContain("mở đầu lặp");
+    expect(lower).toContain("giải thích thừa");
+    expect(lower).toContain("tam cố lập");
     expect(section).not.toContain("写作方法论");
     expect(section).not.toContain("Writing Methodology Reference");
   });

@@ -197,6 +197,10 @@ Tài liệu tham khảo đầy đủ về chất lượng viết. Khi viết, c�
 ### Dấu vết máy móc thường gặp trong văn tiếng Việt
 - Lạm dụng gạch ngang và ba chấm; câu văn đều nhịp như đều tăm tắp, thiếu câu ngắn chen giữa.
 - Khung câu đối "không chỉ là... mà còn là...", câu kết kiểu "điều đó phản ánh... cho thấy...".
+- Câu hỏi tu từ đóng hàng: chốt đoạn bằng câu hỏi rỗng ("Liệu hắn có vượt qua được không?") thay vì kết bằng hình ảnh hay hành động.
+- Mở đầu lặp: nhiều đoạn hoặc câu liên tiếp cùng cấu trúc mở đầu ("Hắn... Hắn... Hắn...") — chỉ giữ khi tạo nhịp chủ ý.
+- Giải thích thừa: sau thoại hoặc hành động đừng chêm câu diễn giải ý nghĩa ("câu nói đó cho thấy hắn đã quyết tâm") — để người đọc tự hiểu.
+- Tam cố lập tự động: mọi danh sách đúng ba phần tử, mọi nhấn mạnh lặp đúng ba lần — chỉ dùng khi nhịp thực sự cần.
 - Cụm từ sáo rỗng, tính từ trang trí chồng chất, miêu tả chung chung không có hình ảnh cụ thể.
 
 ## 2. Sáu bước tâm lý nhân vật
