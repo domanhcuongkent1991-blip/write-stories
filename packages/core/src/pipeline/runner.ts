@@ -2674,9 +2674,26 @@ export class PipelineRunner {
 
       const beforeEvaluation = toChapterAuditEvaluation(preRevision.auditResult, content);
       const afterEvaluation = toChapterAuditEvaluation(effectivePostRevision.auditResult, revisedContent);
+      // VI output-language gate: the LLM language contract is advisory only,
+      // so the deterministic surface check must also gate revised candidates,
+      // mirroring the write path's runPostWriteChecks.
+      let mergedFindings = afterEvaluation.findings;
+      if (book.language === "vi") {
+        const viSurfaceIssues = validateVietnameseSurface(revisedContent, {
+          worldGlossaryTerms: await readWorldGlossaryTerms(bookDir),
+        }).map((v) => ({
+          severity: v.severity === "error" ? "critical" as const : "warning" as const,
+          category: v.rule,
+          description: v.description,
+          suggestion: v.suggestion,
+        }));
+        if (viSurfaceIssues.length > 0) {
+          mergedFindings = [...mergedFindings, ...viSurfaceIssues];
+        }
+      }
       const candidateAcceptance = evaluateRevisionCandidate({
         before: beforeEvaluation,
-        after: afterEvaluation,
+        after: { ...afterEvaluation, findings: mergedFindings },
         beforeContentHash: computeChapterContentHash(content),
         afterContentHash: computeChapterContentHash(revisedContent),
         stateSettlementValid: stateValidation.passed && !stateValidation.repairRequired,
