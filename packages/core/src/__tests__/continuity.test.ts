@@ -305,6 +305,33 @@ describe("ContinuityAuditor", () => {
     }
   });
 
+  it("adds the Vietnamese prose style contract to the audit prompt", async () => {
+    const { root, bookDir } = await createVietnameseTransitionFixture();
+    const auditor = createTestAuditor(root);
+    const chatSpy = vi.spyOn(ContinuityAuditor.prototype as never, "chat" as never).mockResolvedValue({
+      content: JSON.stringify({ passed: true, overall_score: 95, issues: [], summary: "clean" }),
+      usage: ZERO_USAGE,
+    });
+
+    try {
+      await auditor.auditChapter(bookDir, "Hắn nhìn sổ thu hoạch. Nàng không chẳng chào.", 2, "other");
+      expect(chatSpy.mock.calls.length, "auditor should call chat").toBeGreaterThan(0);
+      const messages = ((chatSpy.mock.calls[0] as unknown as Array<unknown>)?.[0] ?? []) as Array<{ content?: string }>;
+      const systemPrompt = messages.map((m) => m?.content ?? "").join(String.fromCharCode(10) + "---MSG---" + String.fromCharCode(10));
+
+      expect(systemPrompt).toContain("Vietnamese prose style contract");
+      expect(systemPrompt).toContain("không chỉ");
+      expect(systemPrompt).toContain("từ đó phản ánh");
+      expect(systemPrompt).toContain("nhìn chung / có thể nói");
+      expect(systemPrompt).toContain("câu hỏi tu từ");
+      expect(systemPrompt).toContain("giải thích thừa");
+      expect(systemPrompt).toContain("tam cố lập");
+      expect(systemPrompt).toContain('severity "info"');
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
   it("binds Vietnamese transition evidence after whitespace and dash-glyph normalization", async () => {
     const { root, bookDir } = await createVietnameseTransitionFixture();
     const currentBody = "Trong đêm, mặt nước thực tế cuồn cuộn ở mốc 1,34m \u2014 mà không có trận mưa mới.";

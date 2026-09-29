@@ -820,6 +820,22 @@ Each excerpt must be at least 20 characters long. Never paraphrase these excerpt
   },
 `
       : "";
+    const vietnameseStyleContract = isVietnamese
+      ? `
+
+## Vietnamese prose style contract
+
+For dimension 8 (Style Check) on this Vietnamese book, machine-voice prose is flagged as severity "info" (repair_scope "polish") so the Polisher pass can rework it — never "critical", never blocking passed. Flag these patterns when they repeat (3+ occurrences in the chapter), quoting exact excerpts:
+
+- Cụm khung "không chỉ…mà còn/mà là" — not-only-X-but-Y framing between sentences.
+- Cụm "từ đó phản ánh/cho thấy" — essay-style moralizing connector.
+- "nhìn chung / có thể nói" — summarizing filler openers.
+- câu hỏi tu từ đóng hàng cuối đoạn — stacked rhetorical question beats.
+- giải thích thừa sau thoại hoặc hành động — over-explaining a beat the reader already got.
+- tam cố lập trừu tượng và mở đầu lặp cấu trúc giữa các đoạn liên tiếp — abstract rule-of-three and repeated opening structure.
+
+Do not flag a single deliberate one-line beat or one purposeful rhetorical device; flag repetition and machine-cadence only.`
+      : "";
 
     const protagonistBlock = bookRules?.protagonist
       ? isEnglish
@@ -838,7 +854,7 @@ Each excerpt must be at least 20 characters long. Never paraphrase these excerpt
 
 ## Reviewer Scope (hard constraints)
 
-You audit completion and structure only. Your job is to decide whether the chapter delivers the plan, keeps characters and timelines intact, and moves the book forward. Wording, sentence rhythm, paragraph shape, punctuation, imagery, and other prose-surface choices are NOT yours — those belong to the Polisher pass that runs after you. If you notice prose-surface issues, you may flag them with severity "info" so the Polisher can see them, but they do not count toward passed / overall_score and they must never be critical.${vietnameseSpellingContract}${vietnameseTransitionContract}
+You audit completion and structure only. Your job is to decide whether the chapter delivers the plan, keeps characters and timelines intact, and moves the book forward. Wording, sentence rhythm, paragraph shape, punctuation, imagery, and other prose-surface choices are NOT yours — those belong to the Polisher pass that runs after you. If you notice prose-surface issues, you may flag them with severity "info" so the Polisher can see them, but they do not count toward passed / overall_score and they must never be critical.${vietnameseSpellingContract}${vietnameseTransitionContract}${vietnameseStyleContract}
 
 You audit twelve structural reader-pain patterns: dragging / flat openings, blurry worldbuilding disconnected from reality, contradictory character setup, tangled POV, mainline drift or stagnation, weak conflict with missing payoff, pacing loss of control and abrupt transitions, character inconsistency across the arc, thin/one-note characters without contrast, stiff emotion expression and abrupt relationship jumps, imbalanced cheats/power gifts, and settings that never land in concrete action. Alongside these, keep the engineering dimensions listed below (OOC, timeline coherence, information boundary, hook debt, cross-chapter repetition, lexical fatigue, length band, title fatigue, paragraph shape).
 
