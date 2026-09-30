@@ -833,9 +833,14 @@ export class WriterAgent extends BaseAgent {
     output: WriteChapterOutput,
     numericalSystem: boolean,
     writingLanguage: WritingLanguage,
+    stateDegraded: boolean = false,
   ): Promise<PreparedChapterFileSet> {
+    // A state-degraded vi chapter persists with the previous baseline
+    // (updatedState/updatedHooks/updatedLedger); its missing delta is
+    // expected there and gated downstream by assertNoPendingStateRepair.
     if (
       writingLanguage === "vi"
+      && !stateDegraded
       && (!output.runtimeStateDelta || !output.runtimeStateSnapshot)
     ) {
       throw new WritingLanguagePreflightError(

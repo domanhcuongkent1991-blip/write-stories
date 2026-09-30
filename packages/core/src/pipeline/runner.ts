@@ -4288,6 +4288,7 @@ export class PipelineRunner {
         persistenceOutput,
         gp.numericalSystem,
         writingLanguage,
+        resolvedStatus === "state-degraded",
       ),
       commitCanonicalFiles: (fileSet, updatedIndex) =>
         this.commitCanonicalChapterFileSet(bookDir, fileSet, updatedIndex),
