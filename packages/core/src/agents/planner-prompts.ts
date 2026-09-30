@@ -107,7 +107,7 @@ defer:
 - 当某条线索的 pays_off_in 指向**本章**（线索列表里可见 pays_off_in=...）：该 hook **必须**放入 resolve，且证据必须是**实质证明场景**——说明正确性如何被证明（独立复测、带照片/时间戳的物证档案、第三方确认、可复核对照）。只是重述已知数字或"盖章确认"**不算兑现**，审稿会判 fail
 
 ## 不要做
-<2-4 条硬约束>
+<2-4 条硬约束。其中至少 1 条必须是「物证与状态连续性」：依据"上一章最后一屏"节选和 pending_hooks，写出上一章结束时关键物证的位置/状态与事件线终态（例如：某物收在何处、某物被封存待查、某人手中握着什么）；写手不得与之冲突，除非本章场景明确写出该物证的转移动作>
 
 ## 输出要求
 
@@ -227,7 +227,7 @@ defer:
 - When deferring a hook marked promoted/core — especially at a volume or arc boundary — the defer evidence MUST name the explicit carry-over promise: quote the hook's "pays_off_in" arc verbatim (e.g. "carried over to Volume 2 — payoff at Volume 2 Chapter 5") plus what evidence is preserved. A defer of a promoted/core hook without that note fails review.
 
 ## Do not
-<2-4 hard prohibitions>
+<2-4 hard prohibitions. At least one must be "evidence and state continuity": based on the previous-chapter ending excerpt and pending_hooks, state where key pieces of evidence were and how events ended at the close of the previous chapter (e.g. an item stored somewhere, a package sealed pending inspection, who holds what); the writer must not contradict them unless a scene explicitly shows the object being moved>
 
 ## Output requirements
 
