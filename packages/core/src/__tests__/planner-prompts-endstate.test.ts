@@ -13,4 +13,14 @@ describe("planner memo end-state continuity", () => {
     expect(PLANNER_MEMO_SYSTEM_PROMPT_EN).toContain("close of the previous chapter");
     expect(PLANNER_MEMO_SYSTEM_PROMPT_EN).toContain("the object being moved");
   });
+
+  it("forbids relocating or altering evidence states in advance/resolve without an explicit move scene (zh)", () => {
+    expect(PLANNER_MEMO_SYSTEM_PROMPT).toContain("自行改变物证的位置或状态");
+    expect(PLANNER_MEMO_SYSTEM_PROMPT).toContain("明确的转移场景");
+  });
+
+  it("forbids relocating or altering evidence states in advance/resolve without an explicit move scene (en)", () => {
+    expect(PLANNER_MEMO_SYSTEM_PROMPT_EN).toContain("must not relocate or alter");
+    expect(PLANNER_MEMO_SYSTEM_PROMPT_EN).toContain("explicit on-screen move scene");
+  });
 });
