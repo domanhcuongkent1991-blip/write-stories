@@ -1021,7 +1021,7 @@ describe("runChapterReviewCycle v9", () => {
     });
   });
 
-  it("runs at most one repair and rejects a candidate that does not pass acceptance", async () => {
+  it("runs the configured two repair iterations and rejects non-passing candidates", async () => {
     const auditChapter = vi.fn()
       .mockResolvedValueOnce(createAuditResult({
         passed: false,
@@ -1068,11 +1068,13 @@ describe("runChapterReviewCycle v9", () => {
       runPostWriteChecks: (content) => content.startsWith("c") ? [DETERMINISTIC_REPAIR] : [],
     });
 
-    // Quality revisions are bounded to one and a non-passing candidate is rejected.
-    expect(reviseChapter).toHaveBeenCalledTimes(1);
+    // A non-passing candidate never replaces the canonical chapter; with a
+    // configured budget of 2 it becomes the base for the next repair attempt.
+    expect(reviseChapter).toHaveBeenCalledTimes(2);
     expect(reviseChapter.mock.calls[0]?.[4]).toBe("auto");
 
-    expect(result.auditResult.overallScore).toBe(70);
+    expect(auditChapter).toHaveBeenCalledTimes(3);
+    expect(result.auditResult.overallScore).toBe(80);
     expect(result.finalContent).toBe("c".repeat(200));
     expect(result.revised).toBe(false);
   });
