@@ -83,6 +83,12 @@ export async function bootstrapStructuredStateFromMarkdown(params: {
     warnings,
     bootstrapState: markdownState.hooksState,
   });
+  const existingCurrentState = await loadJsonIfValid(
+    currentStatePath,
+    CurrentStateStateSchema,
+    warnings,
+    "current_state.json",
+  );
   const currentState = await loadOrBootstrapCurrentState({
     storyDir,
     statePath: currentStatePath,
@@ -90,22 +96,31 @@ export async function bootstrapStructuredStateFromMarkdown(params: {
     createdFiles,
     warnings,
     bootstrapState: markdownState.currentState,
+    existingState: existingCurrentState,
   });
   // Only trust durable artifact progress (chapter files + index).
   // currentState.chapter comes from markdown which can contain
   // hallucinated numbers (e.g. year 1988 parsed as chapter 1988).
   const derivedProgress = markdownState.durableStoryProgress;
-  if ((existingManifest?.lastAppliedChapter ?? 0) > derivedProgress) {
+  // A persisted current_state.json records a delta that was already applied
+  // (e.g. a vi chapter written but not yet approved); dragging the manifest
+  // below it leaves currentState.chapter > lastAppliedChapter, which the
+  // validator reports and memory sync then refuses. Retry rollback is the
+  // restoreState path's job, not the bootstrap's.
+  const manifestProgress = existingCurrentState
+    ? Math.max(derivedProgress, existingCurrentState.chapter)
+    : derivedProgress;
+  if ((existingManifest?.lastAppliedChapter ?? 0) > manifestProgress) {
     appendWarning(
       warnings,
-      `manifest lastAppliedChapter normalized from ${existingManifest?.lastAppliedChapter ?? 0} to ${derivedProgress}`,
+      `manifest lastAppliedChapter normalized from ${existingManifest?.lastAppliedChapter ?? 0} to ${manifestProgress}`,
     );
   }
 
   const manifest = StateManifestSchema.parse({
     schemaVersion: 2,
     language,
-    lastAppliedChapter: derivedProgress,
+    lastAppliedChapter: manifestProgress,
     projectionVersion: existingManifest?.projectionVersion ?? 1,
     migrationWarnings: uniqueStrings([
       ...(existingManifest?.migrationWarnings ?? []),
@@ -183,8 +198,13 @@ async function loadOrBootstrapCurrentState(params: {
   readonly createdFiles: string[];
   readonly warnings: string[];
   readonly bootstrapState?: CurrentStateState;
+  readonly existingState?: CurrentStateState | null;
   readonly forceBootstrapFromMarkdown?: boolean;
 }): Promise<CurrentStateState> {
+  if (!params.forceBootstrapFromMarkdown && params.existingState) {
+    return params.existingState;
+  }
+
   if (!params.forceBootstrapFromMarkdown) {
     const existing = await loadJsonIfValid(
       params.statePath,

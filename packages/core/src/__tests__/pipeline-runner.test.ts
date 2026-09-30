@@ -4801,6 +4801,76 @@ describe("PipelineRunner", () => {
     }
   });
 
+  it("runs two automatic repair iterations when writingReviewRetries is 2", async () => {
+    const { root, runner, bookId } = await createRunnerFixture({
+      writingReviewRetries: 2,
+    });
+    const draftBody = "甲".repeat(300);
+    const revisedBody1 = "乙".repeat(300);
+    const revisedBody2 = "丙".repeat(300);
+
+    vi.spyOn(WriterAgent.prototype, "writeChapter").mockResolvedValue(
+      createWriterOutput({
+        content: draftBody,
+        wordCount: draftBody.length,
+      }),
+    );
+    const auditChapter = vi.spyOn(ContinuityAuditor.prototype, "auditChapter")
+      .mockResolvedValueOnce(createAuditResult({
+        passed: false,
+        overallScore: 40,
+        issues: [CRITICAL_ISSUE],
+        summary: "needs repair",
+      }))
+      .mockResolvedValueOnce(createAuditResult({
+        passed: false,
+        overallScore: 50,
+        issues: [CRITICAL_ISSUE],
+        summary: "still weak",
+      }))
+      .mockResolvedValueOnce(createAuditResult({
+        passed: false,
+        overallScore: 60,
+        issues: [CRITICAL_ISSUE],
+        summary: "better but weak",
+      }))
+      .mockResolvedValueOnce(createAuditResult({
+        passed: false,
+        overallScore: 70,
+        issues: [CRITICAL_ISSUE],
+        summary: "should not be reached",
+      }));
+    const reviseChapter = vi.spyOn(ReviserAgent.prototype, "reviseChapter")
+      .mockResolvedValueOnce(
+        createReviseOutput({
+          revisedContent: revisedBody1,
+          wordCount: revisedBody1.length,
+        }),
+      )
+      .mockResolvedValueOnce(
+        createReviseOutput({
+          revisedContent: revisedBody2,
+          wordCount: revisedBody2.length,
+        }),
+      );
+    vi.spyOn(ChapterAnalyzerAgent.prototype, "analyzeChapter").mockResolvedValue(
+      createAnalyzedOutput({
+        content: revisedBody2,
+        wordCount: revisedBody2.length,
+      }),
+    );
+
+    try {
+      const result = await runner.writeNextChapter(bookId, 220);
+
+      expect(result.status).toBe("audit-failed");
+      expect(auditChapter).toHaveBeenCalledTimes(3);
+      expect(reviseChapter).toHaveBeenCalledTimes(2);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
   it("rejects an auto-revision when candidate state validation fails and records the attempt", async () => {
     const { root, runner, state, bookId } = await createRunnerFixture();
     const originalDraft = "原".repeat(80);

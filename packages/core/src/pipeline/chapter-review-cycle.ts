@@ -50,6 +50,9 @@ export interface ChapterReviewCycleResult {
 }
 
 const DEFAULT_MAX_REVIEW_ITERATIONS = 1;
+// Hard ceiling so a configured retry budget can never run away; must be >=
+// the default CLI writing.reviewRetries (2) for the configured budget to apply.
+const MAX_REVIEW_ITERATIONS_CAP = 2;
 const PASS_SCORE_THRESHOLD = 85;
 const VIETNAMESE_SPELLING_SIGNAL_RE = /(?:vietnamese spelling|spelling|typo|orthograph|chính tả|lỗi\s+(?:lặp từ\s+)?đánh máy|đánh máy)/iu;
 
@@ -237,6 +240,11 @@ export async function runChapterReviewCycle(params: {
   let finalContent = params.normalizePostWriteSurface?.(params.initialOutput.content)
     ?? params.initialOutput.content;
   let finalWordCount = countChapterLength(finalContent, params.lengthSpec.countingMode);
+  // The working draft each repair iteration edits. It diverges from
+  // finalContent (the durable canonical chapter) until a candidate passes the
+  // shared acceptance gate; rejected interim results roll forward as the base
+  // for the next iteration while the canonical chapter stays untouched.
+  let workingContent = finalContent;
   const preAuditWordCount = finalWordCount;
   let assessmentCount = 0;
   const auditRunOperationId = params.operationId ?? randomUUID();
@@ -427,12 +435,12 @@ export async function runChapterReviewCycle(params: {
     && assessment.lengthInRange;
 
   // ---------------------------------------------------------------------------
-  // Scoring loop: assess → revise → assess. Quality repair is hard-bounded to
-  // one automatic attempt; legacy retry configuration is parse-only input.
+  // Scoring loop: assess → revise → assess. Quality repair is hard-bounded by
+  // MAX_REVIEW_ITERATIONS_CAP; legacy retry configuration is parse-only input.
   // ---------------------------------------------------------------------------
   const maxReviewIterations = params.autoRevisionAllowed === false
     ? 0
-    : Math.min(DEFAULT_MAX_REVIEW_ITERATIONS, Math.max(0, Math.floor(params.maxReviewIterations ?? DEFAULT_MAX_REVIEW_ITERATIONS)));
+    : Math.min(MAX_REVIEW_ITERATIONS_CAP, Math.max(0, Math.floor(params.maxReviewIterations ?? DEFAULT_MAX_REVIEW_ITERATIONS)));
   params.logStage({ zh: "审计草稿", en: "auditing draft" });
   const initial = await assess(finalContent, {
     stateFindings: params.initialStateFindings,
@@ -573,7 +581,7 @@ export async function runChapterReviewCycle(params: {
 
       const repairIssues = filterRepairIssues(currentAudit.auditResult.issues);
       const localRepairResult = params.lengthSpec.countingMode === "vi_wordlike_tokens_v1"
-        ? applyVietnameseLocalRepair(finalContent, repairIssues)
+        ? applyVietnameseLocalRepair(workingContent, repairIssues)
         : undefined;
       if (localRepairResult?.kind === "rejected") {
         localRepair = localRepairResult.telemetry;
@@ -587,7 +595,7 @@ export async function runChapterReviewCycle(params: {
 
       const localBaseContent = localRepairResult?.kind === "applied"
         ? localRepairResult.content
-        : finalContent;
+        : workingContent;
       if (localRepairResult?.kind === "applied") {
         localRepair = localRepairResult.telemetry;
       }
@@ -612,7 +620,7 @@ export async function runChapterReviewCycle(params: {
         };
       } else if (structuralIssues.length > 0) {
         const reviser = params.createReviser();
-        revisionAttempts = 1;
+        revisionAttempts += 1;
         const structuralOutput = await runWithProviderCallStage(
           "structural-revision",
           () => reviser.reviseChapter(
@@ -644,7 +652,7 @@ export async function runChapterReviewCycle(params: {
 
       let revisedContent = params.normalizePostWriteSurface?.(reviseOutput.revisedContent)
         ?? reviseOutput.revisedContent;
-      revisionCandidateProduced = revisedContent.length > 0 && revisedContent !== finalContent;
+      revisionCandidateProduced = revisedContent.length > 0 && revisedContent !== workingContent;
       if (!revisionCandidateProduced) {
         revisionRejectionReason = revisedContent.length === 0
           ? "revision candidate was empty"
@@ -663,7 +671,7 @@ export async function runChapterReviewCycle(params: {
 
       params.assertChapterContentNotEmpty(revisedContent, `repair iteration ${iteration + 1}`);
       let candidateWordCount = revisionCandidateIdentity.candidateWordCount;
-      const canonicalWordCount = countChapterLength(finalContent, params.lengthSpec.countingMode);
+      const canonicalWordCount = countChapterLength(workingContent, params.lengthSpec.countingMode);
       let candidateInHardRange = !isOutsideHardRange(candidateWordCount, params.lengthSpec);
       // An overlong canonical draft must move back into the hard range before
       // we spend state-settlement and re-audit budget on it. Rejecting a
@@ -694,7 +702,11 @@ export async function runChapterReviewCycle(params: {
           }),
         });
 
-        break;
+        if (iteration + 1 >= maxReviewIterations) break;
+        // Roll the partially-reduced candidate forward so the next iteration
+        // keeps trimming from it instead of restarting from the overlong draft.
+        workingContent = revisedContent;
+        continue;
       }
       let candidateSettlement: RevisionCandidateSettlement = { valid: true };
       if (params.settleRevisionCandidate) {
@@ -745,9 +757,9 @@ export async function runChapterReviewCycle(params: {
       });
 
       const revisionAcceptance = evaluateRevisionCandidate({
-        before: asEvaluation(currentAudit.auditResult, finalContent),
+        before: asEvaluation(currentAudit.auditResult, workingContent),
         after: asEvaluation(nextAssessment.auditResult, revisedContent),
-        beforeContentHash: computeChapterContentHash(finalContent),
+        beforeContentHash: computeChapterContentHash(workingContent),
         afterContentHash: computeChapterContentHash(revisedContent),
         stateSettlementValid: true,
       });
@@ -783,7 +795,16 @@ export async function runChapterReviewCycle(params: {
           fallbackDescription: revisionRejectionReason,
         }),
       });
-      break;
+
+      // result.auditResult must keep describing the canonical chapter, so
+      // currentAudit only moves forward together with the working draft.
+      if (iteration + 1 >= maxReviewIterations) break;
+      // Keep the improved (though not yet passing) candidate as the base for
+      // the next iteration; the canonical chapter stays unchanged until the
+      // shared acceptance gate passes.
+      workingContent = revisedContent;
+      currentAudit = nextAssessment;
+      continue;
     }
   }
 

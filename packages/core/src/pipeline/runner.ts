@@ -2684,6 +2684,8 @@ export class PipelineRunner {
         }).map((v) => ({
           severity: v.severity === "error" ? "critical" as const : "warning" as const,
           category: v.rule,
+          ruleId: v.rule,
+          verification: "verified" as const,
           description: v.description,
           suggestion: v.suggestion,
         }));
@@ -4286,6 +4288,7 @@ export class PipelineRunner {
         persistenceOutput,
         gp.numericalSystem,
         writingLanguage,
+        resolvedStatus === "state-degraded",
       ),
       commitCanonicalFiles: (fileSet, updatedIndex) =>
         this.commitCanonicalChapterFileSet(bookDir, fileSet, updatedIndex),

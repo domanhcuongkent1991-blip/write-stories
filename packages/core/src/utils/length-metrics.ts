@@ -105,7 +105,6 @@ export function formatWriterPromptLengthGuidance(
 ): string | undefined {
   if (
     language !== "vi" ||
-    spec.target !== 1150 ||
     spec.countingMode !== "vi_wordlike_tokens_v1"
   ) {
     return undefined;

@@ -9,6 +9,7 @@ import {
 } from "../agents/writer.js";
 import type { AuditIssue, AuditResult } from "../agents/continuity.js";
 import type { ChapterMeta } from "../models/chapter.js";
+import { WritingLanguagePreflightError } from "../state/writing-language-preflight.js";
 import { persistChapterArtifacts } from "../pipeline/chapter-persistence.js";
 
 const ZERO_USAGE = {
@@ -97,6 +98,54 @@ const EMPTY_FILE_SET: PreparedChapterFileSet = {
 };
 
 describe("WriterAgent.prepareChapterFileSet", () => {
+  it("allows a state-degraded vi chapter without delta/snapshot, persisting the old baseline with no runtime state writes", async () => {
+    const root = await mkdtemp(join(tmpdir(), "inkos-chapter-degraded-"));
+    roots.push(root);
+    const bookDir = join(root, "book");
+    await mkdir(join(bookDir, "chapters"), { recursive: true });
+    const degraded: WriteChapterOutput = {
+      ...createVietnameseOutput(),
+      runtimeStateDelta: undefined,
+      runtimeStateSnapshot: undefined,
+    };
+
+    const fileSet = await createWriter(root).prepareChapterFileSet(
+      bookDir,
+      degraded,
+      true,
+      "vi",
+      true,
+    );
+
+    expect(fileSet.chapterFileName.startsWith("0003_")).toBe(true);
+    const paths = fileSet.writes.map((write) => write.relativePath);
+    expect(paths).toContain(join("chapters", fileSet.chapterFileName));
+    expect(paths).toContain(join("story", "current_state.md"));
+    expect(paths).toContain(join("story", "pending_hooks.md"));
+    expect(paths).not.toContain(join("story", "state", "current_state.json"));
+    expect(paths).not.toContain(join("story", "state", "manifest.json"));
+    const stateWrite = fileSet.writes.find(
+      (write) => write.relativePath === join("story", "current_state.md"),
+    );
+    expect(stateWrite?.content).toBe("# Trạng thái hiện tại\n");
+  });
+
+  it("still rejects a vi chapter without delta/snapshot when not state-degraded", async () => {
+    const root = await mkdtemp(join(tmpdir(), "inkos-chapter-degraded-"));
+    roots.push(root);
+    const bookDir = join(root, "book");
+    await mkdir(join(bookDir, "chapters"), { recursive: true });
+    const degraded: WriteChapterOutput = {
+      ...createVietnameseOutput(),
+      runtimeStateDelta: undefined,
+      runtimeStateSnapshot: undefined,
+    };
+
+    await expect(
+      createWriter(root).prepareChapterFileSet(bookDir, degraded, true, "vi"),
+    ).rejects.toThrow(WritingLanguagePreflightError);
+  });
+
   it("prepares chapter, truth, runtime writes and old chapter deletes without writing the filesystem", async () => {
     const root = await mkdtemp(join(tmpdir(), "inkos-chapter-prepare-"));
     roots.push(root);

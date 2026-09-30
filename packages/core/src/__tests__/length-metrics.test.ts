@@ -116,6 +116,26 @@ describe("length metrics", () => {
     });
   });
 
+  it("builds the Vietnamese long-form spec for a 2600-word book target", () => {
+    expect(buildLengthSpec(2600, "vi")).toEqual({
+      target: 2600,
+      softMin: 2246,
+      softMax: 2954,
+      hardMin: 1891,
+      hardMax: 3309,
+      countingMode: "vi_wordlike_tokens_v1",
+    });
+  });
+
+  it("formats the Vietnamese writer guidance for long-form targets", () => {
+    const guidance = formatWriterPromptLengthGuidance(buildLengthSpec(2600, "vi"), "vi");
+    expect(guidance).toBeDefined();
+    expect(guidance).toContain("2246-2954");
+    expect(guidance).toContain("2600");
+    expect(guidance).toContain("1891-3309");
+    expect(guidance).toContain("vi_wordlike_tokens_v1");
+  });
+
   it("formats Vietnamese length counts in words", () => {
     expect(formatLengthCount(7, "vi_wordlike_tokens_v1")).toBe("7 từ");
   });

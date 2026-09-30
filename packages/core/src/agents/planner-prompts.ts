@@ -105,9 +105,10 @@ defer:
 - 如果这章是纯高压/战斗章节没有伏笔兑现空间，至少也要有 1 条 advance 或 defer 声明
 - 本章"## 当前任务"如果天然对应某个 hook 的兑现动作，必须在 resolve 里显式声明对应 hook_id
 - 当某条线索的 pays_off_in 指向**本章**（线索列表里可见 pays_off_in=...）：该 hook **必须**放入 resolve，且证据必须是**实质证明场景**——说明正确性如何被证明（独立复测、带照片/时间戳的物证档案、第三方确认、可复核对照）。只是重述已知数字或"盖章确认"**不算兑现**，审稿会判 fail
+- advance/resolve 对物证的处理必须沿用 pending_hooks 里该 hook 记录的位置/状态，**不得**自行改变物证的位置或状态（例如 hook 记录"某物在鞋里"，memo 就不能写成"藏在衬衣夹层"）；确需移动物证，必须在本 memo 的场景里写一个明确的转移场景（谁、何时、如何移动、有无旁证），并把新位置写进该 hook 的 advance/resolve 状态描述
 
 ## 不要做
-<2-4 条硬约束>
+<2-4 条硬约束。其中至少 1 条必须是「物证与状态连续性」：依据"上一章最后一屏"节选和 pending_hooks，写出上一章结束时关键物证的位置/状态与事件线终态（例如：某物收在何处、某物被封存待查、某人手中握着什么）；写手不得与之冲突，除非本章场景明确写出该物证的转移动作>
 
 ## 输出要求
 
@@ -225,9 +226,10 @@ defer:
 - If "## Current task" naturally corresponds to paying off a hook, it must appear under resolve with the hook_id.
 - When a thread's pays_off_in names **this chapter** (visible as pays_off_in=... in the thread rows): that hook **must** go under resolve, and its evidence must be a **material proof scene** — describe HOW correctness is demonstrated (independent re-measurement, a physical dossier with photos/timestamps, third-party confirmation, a reproducible cross-check). Merely restating known numbers or "stamping the comparison" is **NOT a payoff**; review will fail it.
 - When deferring a hook marked promoted/core — especially at a volume or arc boundary — the defer evidence MUST name the explicit carry-over promise: quote the hook's "pays_off_in" arc verbatim (e.g. "carried over to Volume 2 — payoff at Volume 2 Chapter 5") plus what evidence is preserved. A defer of a promoted/core hook without that note fails review.
+- advance/resolve handling of physical evidence must follow the location/state already recorded on that hook in pending_hooks; **must not relocate or alter evidence states on your own** (e.g. if the hook says "the fragment is in his boot", the memo cannot quietly move it to "a hidden coat seam"). If the evidence genuinely must move, the memo must stage an explicit on-screen move scene (who, when, how, witnessed by whom) and record the new location in that hook's advance/resolve status.
 
 ## Do not
-<2-4 hard prohibitions>
+<2-4 hard prohibitions. At least one must be "evidence and state continuity": based on the previous-chapter ending excerpt and pending_hooks, state where key pieces of evidence were and how events ended at the close of the previous chapter (e.g. an item stored somewhere, a package sealed pending inspection, who holds what); the writer must not contradict them unless a scene explicitly shows the object being moved>
 
 ## Output requirements
 
