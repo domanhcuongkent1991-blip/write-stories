@@ -2684,6 +2684,8 @@ export class PipelineRunner {
         }).map((v) => ({
           severity: v.severity === "error" ? "critical" as const : "warning" as const,
           category: v.rule,
+          ruleId: v.rule,
+          verification: "verified" as const,
           description: v.description,
           suggestion: v.suggestion,
         }));
