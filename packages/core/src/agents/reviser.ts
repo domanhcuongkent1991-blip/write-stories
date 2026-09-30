@@ -251,7 +251,7 @@ export class ReviserAgent extends BaseAgent {
     const autoOutputMode = mode === "auto" ? resolveAutoOutputMode(issues) : "allow-full";
     const systemPromptBase = mode === "auto"
       ? this.buildAutoSystemPrompt({ langPrefix, gp, protagonistBlock, numericalRule, lengthGuardrail, resolvedLanguage, writingLanguage, lengthSpec: options?.lengthSpec, autoOutputMode })
-      : this.buildLegacySystemPrompt({ langPrefix, gp, protagonistBlock, numericalRule, lengthGuardrail, mode, resolvedLanguage });
+      : this.buildLegacySystemPrompt({ langPrefix, gp, protagonistBlock, numericalRule, lengthGuardrail, mode, resolvedLanguage, writingLanguage });
     const systemPrompt = await this.withPromptPackGuidance(systemPromptBase, "longform.reviser");
 
     const ledgerBlock = gp.numericalSystem
@@ -575,9 +575,13 @@ OCCURRENCE_INDEX:
     lengthGuardrail: string;
     mode: ReviseMode;
     resolvedLanguage: ScaffoldLanguage;
+    writingLanguage?: WritingLanguage;
   }): string {
     const { langPrefix, gp, protagonistBlock, numericalRule, lengthGuardrail, mode } = params;
     const modeDesc = MODE_DESCRIPTIONS[mode];
+    const writingLanguageRule = params.writingLanguage && params.writingLanguage !== "en"
+      ? `\n\n## 输出语言（强制）\nWrite the revised body in ${params.writingLanguage === "vi" ? "Vietnamese (tiếng Việt)" : params.writingLanguage} — the book's writingLanguage. This overrides the source chapter's language: if the source chapter or any context material is written in another language, still produce Vietnamese prose, not a translation trace. Structural section headers keep their standard English labels.`
+      : "";
     const outputFormat = mode === "spot-fix"
       ? `=== FIXED_ISSUES ===
 (逐条说明修正了什么，一行一条；如果无法安全定点修复，也在这里说明)
@@ -606,6 +610,7 @@ REPLACEMENT_TEXT:
 5. 不改变剧情走向和核心冲突
 6. 保持原文的语言风格和节奏
 ${lengthGuardrail}
+${writingLanguageRule}
 ${mode === "spot-fix" ? "\n9. spot-fix 只能输出局部补丁，禁止输出整章改写；TARGET_TEXT 必须能在原文中唯一命中\n10. 如果需要大面积改写，说明无法安全 spot-fix，并让 PATCHES 留空" : ""}
 
 输出格式：
