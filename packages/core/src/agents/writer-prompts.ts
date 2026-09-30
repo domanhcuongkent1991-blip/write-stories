@@ -32,6 +32,7 @@ export function buildWriterSystemPrompt(
   languageOverride?: WritingLanguage,
   inputProfile: "legacy" | "governed" = "legacy",
   lengthSpec?: LengthSpec,
+  worldGlossaryBody?: string,
 ): string {
   const promptLanguage = languageOverride ?? genreProfile.language;
   const isEnglish = resolveWritingLanguageProfile(promptLanguage).scaffoldLanguage === "en";
@@ -57,8 +58,9 @@ export function buildWriterSystemPrompt(
         buildProtagonistRules(bookRules),
         buildNarrativePersonRule(bookRules, isEnglish ? "en" : "zh"),
         buildBookRulesBody(bookRulesBody),
-        buildStyleGuide(styleGuide),
+        buildStyleGuide(styleGuide, promptLanguage),
         buildStyleFingerprint(styleFingerprint),
+        buildWorldGlossarySection(worldGlossaryBody ?? ""),
         fanficContext ? buildFanficCanonSection(fanficContext.fanficCanon, fanficContext.fanficMode) : "",
         fanficContext ? buildCharacterVoiceProfiles(fanficContext.fanficCanon) : "",
         fanficContext ? buildFanficModeInstructions(fanficContext.fanficMode, fanficContext.allowedDeviations) : "",
@@ -76,8 +78,9 @@ export function buildWriterSystemPrompt(
         buildProtagonistRules(bookRules),
         buildNarrativePersonRule(bookRules, isEnglish ? "en" : "zh"),
         buildBookRulesBody(bookRulesBody),
-        buildStyleGuide(styleGuide),
+        buildStyleGuide(styleGuide, promptLanguage),
         buildStyleFingerprint(styleFingerprint),
+        buildWorldGlossarySection(worldGlossaryBody ?? ""),
         fanficContext ? buildFanficCanonSection(fanficContext.fanficCanon, fanficContext.fanficMode) : "",
         fanficContext ? buildCharacterVoiceProfiles(fanficContext.fanficCanon) : "",
         fanficContext ? buildFanficModeInstructions(fanficContext.fanficMode, fanficContext.allowedDeviations) : "",
@@ -328,9 +331,27 @@ function buildBookRulesBody(body: string): string {
 // Style guide
 // ---------------------------------------------------------------------------
 
-function buildStyleGuide(styleGuide: string): string {
+function buildWorldGlossarySection(worldGlossaryBody: string): string {
+  if (!worldGlossaryBody.trim()) {
+    return "";
+  }
+  return [
+    "## Sổ tay tên thế giới",
+    "",
+    worldGlossaryBody.trim(),
+    "",
+    "Khi viết, dùng đúng cách viết tên trong sổ tay trên. Gặp tên riêng chưa có trong sổ thì không tự đặt cách viết mới — ghi tên đó vào phần cuối chương để bổ sung sau.",
+  ].join("\n");
+}
+
+function buildStyleGuide(styleGuide: string, language: WritingLanguage): string {
   if (!styleGuide || styleGuide === "(文件尚未创建)") return "";
-  return `## 文风指南\n\n${styleGuide}`;
+  const header = language === "zh"
+    ? "## 文风指南"
+    : language === "vi"
+      ? "## Phong cách viết"
+      : "## Style Guide";
+  return `${header}\n\n${styleGuide}`;
 }
 
 // ---------------------------------------------------------------------------

@@ -6,9 +6,12 @@
  * Injected once during initBook/generateStyleGuide, then read by
  * writer on every chapter as part of the style_guide context.
  */
-export function buildWritingMethodologySection(language: "zh" | "en"): string {
+export function buildWritingMethodologySection(language: "zh" | "en" | "vi"): string {
   if (language === "en") {
     return buildEnglishMethodology();
+  }
+  if (language === "vi") {
+    return buildVietnameseMethodology();
   }
   return buildChineseMethodology();
 }
@@ -161,4 +164,91 @@ Fix boring daily scenes by adding fuel:
 6. Does the chapter end with a hook?
 7. Any flowchart passages? If so, add causality or strong emotion.
 8. Does this chapter advance the main plotline?`;
+}
+
+// Vietnamese methodology assembled from: the zh/en craft cards above,
+// blader/humanizer (MIT) patterns that transfer to Vietnamese prose,
+// community-observed Vietnamese AI tells (dash/ellipsis abuse, filler
+// phrases, metronomic rhythm), and translation-UAT error patterns
+// (honorific address, loanword slips). See BIEN-BAN-UAT docs 2026-09.
+function buildVietnameseMethodology(): string {
+  return `---
+
+# Phương pháp viết tham khảo (bản đầy đủ)
+
+Tài liệu tham khảo đầy đủ về chất lượng viết. Khi viết, cần thấm các nguyên tắc này.
+
+## 1. Bỏ giọng máy (de-AI)
+
+### Cảm xúc
+| Sai (giọng máy) | Đúng (giọng người) | Chìa khóa |
+|---|---|---|
+| Hắn rất tức giận. | Hắn bóp nát chén trà trong tay, nước nóng bỏng chảy qua kẽ ngón, mà hắn chẳng buồn nhíu mày. | Ngoại hóa cảm xúc bằng hành động |
+| Nàng buồn bã, nước mắt lăn dài. | Nàng siết chiếc điện thoại đến trắng ngón, màn tin nhắn nhòe dần trong nước mắt. | Chi tiết cơ thể thay cho nhãn cảm xúc |
+| Hắn nghe lòng rợn sợ. | Từng cọng lông tơ trên lưng hắn dựng ngược, lòng bàn chân tự nhiên lạnh toát. | Truyền sợ hãi qua ngũ cảm |
+
+### Chuyển tiếp
+| Sai | Đúng | Chìa khóa |
+|---|---|---|
+| Tuy hắn rất mạnh, nhưng hắn vẫn thua. | Hắn mạnh đấy. Nhưng lão già bên kia còn ranh hơn. | Khẩu ngữ hóa câu chuyển |
+| Tuy nhiên, sự việc không đơn giản như vậy. | Đâu có dễ như vậy. | Suy nghĩ nhân vật thay cho "tuy nhiên" |
+| Vì vậy, hắn quyết định hành động. | Hắn đứng phắt dậy, đạp chiếc ghế sang một bên. | Cắt từ nối nguyên nhân, đi thẳng vào hành động |
+
+### Dấu vết máy móc thường gặp trong văn tiếng Việt
+- Lạm dụng gạch ngang và ba chấm; câu văn đều nhịp như đều tăm tắp, thiếu câu ngắn chen giữa.
+- Khung câu đối "không chỉ là... mà còn là...", câu kết kiểu "điều đó phản ánh... cho thấy...".
+- Câu hỏi tu từ đóng hàng: chốt đoạn bằng câu hỏi rỗng ("Liệu hắn có vượt qua được không?") thay vì kết bằng hình ảnh hay hành động.
+- Mở đầu lặp: nhiều đoạn hoặc câu liên tiếp cùng cấu trúc mở đầu ("Hắn... Hắn... Hắn...") — chỉ giữ khi tạo nhịp chủ ý.
+- Giải thích thừa: sau thoại hoặc hành động đừng chêm câu diễn giải ý nghĩa ("câu nói đó cho thấy hắn đã quyết tâm") — để người đọc tự hiểu.
+- Tam cố lập tự động: mọi danh sách đúng ba phần tử, mọi nhấn mạnh lặp đúng ba lần — chỉ dùng khi nhịp thực sự cần.
+- Cụm từ sáo rỗng, tính từ trang trí chồng chất, miêu tả chung chung không có hình ảnh cụ thể.
+
+## 2. Sáu bước tâm lý nhân vật
+
+Mọi hành động quan trọng của nhân vật đều phải qua sáu bước suy luận:
+1. **Hoàn cảnh hiện tại**: nhân vật đang đứng trước thế cục nào? Tay đang cầm quân gì?
+2. **Động lực cốt lõi**: nhân vật muốn nhất điều gì? Sợ nhất điều gì?
+3. **Ranh giới thông tin**: nhân vật biết gì, không biết gì, đang lầm tưởng gì?
+4. **Lọc theo tính cách**: cùng một thế cục, NHÂN VẬT NÀY sẽ phản ứng thế nào?
+5. **Lựa chọn hành vi**: dựa trên bốn điểm trên, nhân vật chọn làm gì?
+6. **Ngoại hóa cảm xúc**: lựa chọn đó đi kèm cảm xúc gì? Diện mạo, ánh mắt, giọng điệu ra sao?
+
+Nghiêm cấm viết hành động mà bỏ qua các bước suy luận.
+
+## 3. Phương pháp xây dựng vai phụ
+
+- Vai phụ phải có phản công, có toan tính riêng. Sức mạnh nhân vật chính nằm ở việc chế phục người thông minh, không phải dẫm đạp kẻ yếu.
+- Động cơ hành động của mỗi vai phụ phải dính với trục chính.
+- Nhãn cốt lõi + chi tiết tương phản = người sống (bề ngoài lạnh lùng nhưng lén cho mèo lai rai ăn).
+- Xây nhân vật qua sự việc, nghiêm cấm chất đống tính từ ngoại hình.
+- Lời thoại của từng nhân vật phải có nét riêng để nhận diện.
+- Trong cảnh đông người, không viết "mọi người đồng loạt kinh ngạc" — chọn 1-2 nhân vật viết phản ứng cụ thể.
+
+## 4. Sáu trụ cột của cảm giác chìm đắm
+
+1. **Cung cấp thông tin nền**: một câu thoại xác lập được thân phận, tính cách, địa vị.
+2. **Cụ thể hóa, hiện lên hình**: miêu tả phải cụ thể đến mức người đọc hình dung được ngay.
+3. **Sự thân thuộc**: bối cảnh đời thường gần gũi tự mang cảm giác chìm đắm.
+4. **Cộng cảm**: khó khăn của nhân vật chính phải phổ quát — bị ức hiếp, bị đối xử bất công, bị coi thường.
+5. **Động lực khát vọng**: tạo khoảng trống cảm xúc → người đọc chờ thả → thả vượt cả kỳ vọng.
+6. **Miêu tả ngũ cảm**: thị giác, thính giác, khứu giác, xúc giác, vị giác — lấy chi tiết cơ thể làm mấu chốt.
+
+## 5. Kỹ thuật đẩy cảm xúc lên cao (tránh viết kiểu ghi chép)
+
+Cách chữa văn ghi chép không phải là xóa bỏ đời thường, mà là "thêm mắm thêm muối" cho đời thường:
+
+1. **Thêm tiền nhân quả**: trở về nhà → cài thêm "vừa bị gọi điện đòi nợ" → đời thường lập tức có cảm giác gấp gáp.
+2. **Cảm xúc chồng tầng**: việc xấu chồng lên việc xấu, tầng sau nặng hơn tầng trước, từng lớp đè lên nhau.
+3. **Đời thường phải phục vụ trục chính**: mỗi đoạn đời thường hoặc gài bẫy, hoặc đẩy quan hệ, hoặc dựng tương phản.
+
+## 6. Checklist trước khi viết
+
+1. Chương này ứng với nốt nào trong cốt truyện phân quyển? Có đẩy được nốt đó không?
+2. Lựa chọn nào lúc này mang lại lợi ích tối đa cho nhân vật chính?
+3. Mâu thuẫn do ai nổ ra trước, vì sao nhất thiết phải nổ ra?
+4. Vai phụ / phản diện có lập trường rõ ràng và phương thức phản chế không?
+5. Phản diện hiện đang nắm thông tin nào? Có vượt qua ranh giới thông tin không?
+6. Kết chương có để lại lưỡi câu không?
+7. Có đoạn ghi chép thô nào không? Nếu có, thêm tiền nhân quả hoặc cảm xúc mạnh.
+8. Chương này có đẩy tiến mục tiêu trục chính không?`;
 }

@@ -30,7 +30,7 @@ import type { RadarSource } from "../agents/radar-source.js";
 import { readGenreProfile } from "../agents/rules-reader.js";
 import { analyzeAITells } from "../agents/ai-tells.js";
 import { analyzeSensitiveWords } from "../agents/sensitive-words.js";
-import { validateVietnameseSurface } from "../agents/vietnamese-surface-validator.js";
+import { readWorldGlossaryTerms, validateVietnameseSurface } from "../agents/vietnamese-surface-validator.js";
 import { StateManager, type CanonicalChapterProjection } from "../state/manager.js";
 import { archiveChapterVersion, readChapterUserBrief } from "../state/chapter-workspace.js";
 import { MemoryDB, type Fact } from "../state/memory-db.js";
@@ -86,6 +86,7 @@ import { rewriteStructuredStateFromMarkdown } from "../state/state-bootstrap.js"
 import { readFile, readdir, writeFile, mkdir, rename, rm, stat } from "node:fs/promises";
 import { join } from "node:path";
 import {
+  buildStateDegradedPersistenceOutput,
   parseStateDegradedReviewNote,
   resolveStateDegradedBaseStatus,
   retrySettlementAfterValidationFailure,
@@ -2489,6 +2490,7 @@ export class PipelineRunner {
       const stateValidator = new StateValidatorAgent(this.agentCtxFor("stateValidator", bookId));
       let settledRevision: WriteChapterOutput;
       let stateValidation: ValidationResult;
+      let stateDegradedIssues: AuditIssue[] = [];
       try {
         settledRevision = await writer.settleChapterState({
           book,
@@ -2578,16 +2580,38 @@ export class PipelineRunner {
           }]);
         }
         if (recovery.kind === "degraded") {
-          const rejectedReason = "state settlement did not validate after retry";
-          await persistManualRevisionRejection(rejectedReason, {
-            content: revisedContent,
-            count: revisedCount,
-            produced: true,
+          // The revised prose itself passed the audit gate; only its state
+          // settlement could not be repaired. Keep the prose with a
+          // state-degraded baseline (same policy as the write path) instead
+          // of discarding the candidate, so a later settlement repair run
+          // can rebuild state from the persisted body.
+          const baselineLedger = await readFile(
+            join(baselineStoryDir, "ledger.md"),
+            "utf-8",
+          ).catch(() => "");
+          settledRevision = buildStateDegradedPersistenceOutput({
+            output: settledRevision,
+            oldState: baselineState,
+            oldHooks: baselineHooks,
+            oldLedger: baselineLedger,
           });
-          return manualRevisionUnchanged(rejectedReason, recovery.issues);
+          stateValidation = { passed: true, warnings: [] };
+          stateDegradedIssues = [
+            ...recovery.issues,
+            {
+              severity: "warning",
+              category: "state-validation",
+              description: "State settlement could not be repaired after retries; the revised chapter was applied with the pre-revision state/hook baseline (state-degraded).",
+              suggestion: "Run chapter state settlement repair, then verify hooks and tracked questions for this chapter.",
+            },
+          ];
+          this.config.logger?.warn(
+            `[runner] revise ch${targetChapter}: state settlement not repaired; applying with state-degraded baseline`,
+          );
+        } else {
+          settledRevision = recovery.output;
+          stateValidation = recovery.validation;
         }
-        settledRevision = recovery.output;
-        stateValidation = recovery.validation;
       }
       const postRevision = await this.evaluateMergedAudit({
         auditor,
@@ -2650,9 +2674,26 @@ export class PipelineRunner {
 
       const beforeEvaluation = toChapterAuditEvaluation(preRevision.auditResult, content);
       const afterEvaluation = toChapterAuditEvaluation(effectivePostRevision.auditResult, revisedContent);
+      // VI output-language gate: the LLM language contract is advisory only,
+      // so the deterministic surface check must also gate revised candidates,
+      // mirroring the write path's runPostWriteChecks.
+      let mergedFindings = afterEvaluation.findings;
+      if (book.language === "vi") {
+        const viSurfaceIssues = validateVietnameseSurface(revisedContent, {
+          worldGlossaryTerms: await readWorldGlossaryTerms(bookDir),
+        }).map((v) => ({
+          severity: v.severity === "error" ? "critical" as const : "warning" as const,
+          category: v.rule,
+          description: v.description,
+          suggestion: v.suggestion,
+        }));
+        if (viSurfaceIssues.length > 0) {
+          mergedFindings = [...mergedFindings, ...viSurfaceIssues];
+        }
+      }
       const candidateAcceptance = evaluateRevisionCandidate({
         before: beforeEvaluation,
-        after: afterEvaluation,
+        after: { ...afterEvaluation, findings: mergedFindings },
         beforeContentHash: computeChapterContentHash(content),
         afterContentHash: computeChapterContentHash(revisedContent),
         stateSettlementValid: stateValidation.passed && !stateValidation.repairRequired,
@@ -2880,7 +2921,7 @@ export class PipelineRunner {
         applied: true,
         status: effectivePostRevision.auditResult.passed ? "ready-for-review" : "audit-failed",
         auditPassed: effectivePostRevision.auditResult.passed,
-        auditIssues: remainingIssues,
+        auditIssues: [...stateDegradedIssues, ...remainingIssues],
         revisionDiagnostics,
         lengthWarnings,
         lengthTelemetry,
@@ -3029,7 +3070,9 @@ export class PipelineRunner {
       const contentHash = computeChapterContentHash(output.content);
       const writerCount = countChapterLength(output.content, lengthSpec.countingMode);
       const surfaceIssues = profile.language === "vi"
-        ? validateVietnameseSurface(output.content)
+        ? validateVietnameseSurface(output.content, {
+          worldGlossaryTerms: await readWorldGlossaryTerms(bookDir),
+        })
         : [];
       const hardBlockers = [
         ...(isOutsideHardRange(writerCount, lengthSpec) ? ["HARD_RANGE_FAIL"] : []),
@@ -3688,6 +3731,9 @@ export class PipelineRunner {
 
     {
       const manualReview = (this.config.chapterReviewMode ?? "auto") === "manual";
+      const worldGlossaryTerms = writingLanguage === "vi"
+        ? await readWorldGlossaryTerms(bookDir)
+        : [];
       const auditor = new ContinuityAuditor(this.agentCtxFor("auditor", bookId));
       const reviewResult = await runChapterReviewCycle({
         book: { genre: book.genre },
@@ -3724,7 +3770,7 @@ export class PipelineRunner {
             ? validateHookLedger(memoBody, content)
             : [];
           const viIssues = writingLanguage === "vi"
-            ? validateVietnameseSurface(content).map((v) => ({
+            ? validateVietnameseSurface(content, { worldGlossaryTerms }).map((v) => ({
                 severity: v.severity === "error" ? "critical" as const : "warning" as const,
                 category: v.rule,
                 description: v.description,
@@ -4760,15 +4806,13 @@ export class PipelineRunner {
     }
     const book = await this.state.loadBookConfig(bookId);
     const writingLanguage = await this.resolveExplicitBookLanguage(book);
-    this.assertLegacyOnlyLanguage(writingLanguage, "style-guide generation");
 
     const { analyzeStyle } = await import("../agents/style-analyzer.js");
     const bookDir = this.state.bookDir(bookId);
     const storyDir = join(bookDir, "story");
     await mkdir(storyDir, { recursive: true });
 
-    const { profile: gp } = await this.loadGenreProfile(book.genre);
-    const lang = (book.language ?? gp.language) === "en" ? "en" as const : "zh" as const;
+    const lang = writingLanguage;
 
     // Statistical fingerprint (language-aware: words for en, characters for zh)
     const profile = analyzeStyle(sample, sourceName, lang);
@@ -4776,11 +4820,14 @@ export class PipelineRunner {
 
     let qualitativeGuide: string;
     if (sample.length < 500) {
+      const shortReason = lang === "en"
+        ? `The sample is short (${sample.length} chars), so this guide uses the statistical fingerprint instead of LLM qualitative extraction.`
+        : lang === "vi"
+          ? `Mẫu văn ngắn (${sample.length} ký tự), lần này dùng dấu vân tay thống kê để tạo hướng dẫn phong cách, không ép gọi LLM phân tích định tính.`
+          : `样本文本较短（${sample.length}字），本次先使用统计指纹生成文风指南，不强行调用 LLM 做定性拆解。`;
       qualitativeGuide = this.buildDeterministicStyleGuide(profile, {
         language: lang,
-        reason: lang === "en"
-          ? `The sample is short (${sample.length} chars), so this guide uses the statistical fingerprint instead of LLM qualitative extraction.`
-          : `样本文本较短（${sample.length}字），本次先使用统计指纹生成文风指南，不强行调用 LLM 做定性拆解。`,
+        reason: shortReason,
       });
     } else {
       try {
@@ -4814,7 +4861,36 @@ Output format (Markdown):
 (any personal writing habits worth imitating)
 
 Base the analysis on the text's actual features, not generalities. Support each section with 1-2 quoted lines from the original.`
-          : `你是一位文学风格分析专家。分析参考文本的写作风格，提取可供模仿的定性特征。
+          : lang === "vi"
+            ? `Bạn là chuyên gia phân tích phong cách văn học. Phân tích phong cách viết của đoạn văn tham khảo và rút ra các đặc điểm định tính có thể bắt chước.
+
+Định dạng đầu ra (Markdown):
+## Giọng kể và tông văn
+(băng giá / cháy bỏng / mỉa mai / ấm áp / ..., kèm 1-2 câu trích từ văn bản)
+
+## Phong cách thoại
+(đặc điểm chung trong cách nhân vật nói: độ dài câu, thói quen ngôn từ, dấu ấn phương ngữ, nhịp thoại)
+
+## Miêu tả bối cảnh
+(sở thích giác quan, lựa chọn hình ảnh, mật độ miêu tả, cách bối cảnh gắn với cảm xúc)
+
+## Chuyển cảnh và kỹ thuật nối đoạn
+(cách chuyển cảnh, cách xử lý bước thời gian, đặc điểm chuyển đoạn)
+
+## Nhịp truyện
+(độ dài câu dài-ngắn phân bố, sở thích độ dài đoạn, cách cao trào và lắng xen kẽ)
+
+## Sở thích dùng từ
+(từ ngữ đặc trưng tần suất cao, xu hướng so sánh/tu từ, mức độ khẩu ngữ)
+
+## Cách thể hiện cảm xúc
+(trực tiếp tuôn trào vs ngoại hóa bằng hành động, tần suất và phong cách độc thoại nội tâm)
+
+## Thói quen riêng
+(mọi thói quen viết cá nhân đáng bắt chước)
+
+Phân tích phải dựa trên đặc điểm thật của văn bản, không nói chung chung. Mỗi mục dùng 1-2 câu trích từ văn gốc làm dẫn chứng.`
+            : `你是一位文学风格分析专家。分析参考文本的写作风格，提取可供模仿的定性特征。
 
 输出格式（Markdown）：
 ## 叙事声音与语气
@@ -4844,7 +4920,9 @@ Base the analysis on the text's actual features, not generalities. Support each 
 分析必须基于原文实际特征，不要泛泛而谈。每个部分用1-2个原文例句佐证。`;
         const styleUserPrompt = lang === "en"
           ? `Analyze the writing style of the following reference text:\n\n${sample}`
-          : `分析以下参考文本的写作风格：\n\n${sample}`;
+          : lang === "vi"
+            ? `Phân tích phong cách viết của đoạn văn tham khảo sau:\n\n${sample}`
+            : `分析以下参考文本的写作风格：\n\n${sample}`;
         const response = await runWorkerAgent(this.config.client, this.config.model, appendActivatedSkillGuidance([
           { role: "system", content: styleSystemPrompt },
           { role: "user", content: styleUserPrompt },
@@ -4855,14 +4933,18 @@ Base the analysis on the text's actual features, not generalities. Support each 
               language: lang,
               reason: lang === "en"
                 ? "The LLM returned empty style analysis; using the statistical fingerprint fallback."
-                : "LLM 未返回有效文风分析，本次使用统计指纹兜底生成文风指南。",
+                : lang === "vi"
+                  ? "LLM trả về kết quả phân tích phong cách rỗng; lần này dùng dấu vân tay thống kê làm phương án dự phòng."
+                  : "LLM 未返回有效文风分析，本次使用统计指纹兜底生成文风指南。",
             });
       } catch (error) {
         qualitativeGuide = this.buildDeterministicStyleGuide(profile, {
           language: lang,
           reason: lang === "en"
             ? `LLM qualitative extraction failed: ${error instanceof Error ? error.message : String(error)}. Using the statistical fingerprint fallback.`
-            : `LLM 定性拆解失败：${error instanceof Error ? error.message : String(error)}。本次使用统计指纹兜底生成文风指南。`,
+            : lang === "vi"
+              ? `LLM phân tích định tính lỗi: ${error instanceof Error ? error.message : String(error)}. Lần này dùng dấu vân tay thống kê làm phương án dự phòng.`
+              : `LLM 定性拆解失败：${error instanceof Error ? error.message : String(error)}。本次使用统计指纹兜底生成文风指南。`,
         });
       }
     }
@@ -4883,7 +4965,7 @@ Base the analysis on the text's actual features, not generalities. Support each 
       readonly rhetoricalFeatures: ReadonlyArray<string>;
       readonly sourceName?: string;
     },
-    options: { readonly language: "zh" | "en"; readonly reason: string },
+    options: { readonly language: "zh" | "en" | "vi"; readonly reason: string },
   ): string {
     if (options.language === "en") {
       return [
@@ -4904,6 +4986,28 @@ Base the analysis on the text's actual features, not generalities. Support each 
         "- Treat this as a lightweight style fingerprint, not a full imitation bible.",
         "- Keep sentence and paragraph rhythm close to the sample when drafting.",
         "- If this guide feels too thin, import a longer excerpt later; the file will be replaced.",
+      ].join("\n");
+    }
+
+    if (options.language === "vi") {
+      return [
+        "# Hướng dẫn phong cách",
+        "",
+        `> ${options.reason}`,
+        "",
+        "## Dấu vân tay thống kê",
+        `- Nguồn: ${profile.sourceName ?? "unknown"}`,
+        `- Độ dài câu trung bình: ${profile.avgSentenceLength}`,
+        `- Biến động độ dài câu: ${profile.sentenceLengthStdDev}`,
+        `- Độ dài đoạn trung bình: ${profile.avgParagraphLength}`,
+        `- Đa dạng từ vựng: ${Math.round(profile.vocabularyDiversity * 100)}%`,
+        profile.topPatterns.length > 0 ? `- Mẫu câu mở đầu lặp lại: ${profile.topPatterns.join(", ")}` : "- Mẫu câu mở đầu lặp lại: không rõ ràng trong mẫu này",
+        profile.rhetoricalFeatures.length > 0 ? `- Đặc điểm tu từ: ${profile.rhetoricalFeatures.join(", ")}` : "- Đặc điểm tu từ: không rõ ràng trong mẫu này",
+        "",
+        "## Cách sử dụng",
+        "- Đây là dấu vân tay phong cách gọn nhẹ, không phải cẩm nang bắt chước hoàn chỉnh.",
+        "- Khi viết, ưu tiên giữ nhịp câu, độ dài đoạn, biến động nhịp và tu từ có thể thấy trong mẫu.",
+        "- Nếu bản hướng dẫn còn mỏng, nhập đoạn văn dài hơn sau; tệp này sẽ được thay thế.",
       ].join("\n");
     }
 

@@ -6,6 +6,7 @@ import {
   HookOperationIntentV2Schema,
   assertHookContractCurrent,
   hashCanonicalHookPayoff,
+  type ExpectedHookOperationV2,
   type ExpectedHookOperationAction,
   type HookOperationIntentV2,
 } from "../models/hook-operation-intent.js";
@@ -394,12 +395,17 @@ export function bindExpectedHookOperationsV2(
   ];
   const seen = new Map<string, ExpectedHookOperationAction>();
 
-  const operations = entries.map(({ action, entry }) => {
+  const operations = entries.flatMap(({ action, entry }): ExpectedHookOperationV2[] => {
     const previousAction = seen.get(entry.id);
     if (previousAction !== undefined) {
-      const kind = previousAction === action ? "duplicate" : "contradictory";
+      if (previousAction === action) {
+        // Models repeat identical hook lines; identical duplicates are
+        // idempotent, so drop the later line instead of discarding the whole
+        // candidate. Contradictory actions still fail closed below.
+        return [];
+      }
       throw new HookOperationContractError(
-        `${kind} hook operation for ${entry.id}: ${previousAction} and ${action}`,
+        `contradictory hook operation for ${entry.id}: ${previousAction} and ${action}`,
       );
     }
     seen.set(entry.id, action);
@@ -417,13 +423,13 @@ export function bindExpectedHookOperationsV2(
       );
     }
 
-    return {
+    return [{
       hookId: entry.id,
       action,
       canonicalPayoffHash: hashCanonicalHookPayoff(entry.id, hook.expectedPayoff ?? ""),
       canonicalExpectedPayoff: hook.expectedPayoff ?? "",
       plannedEvidence: entry.descriptor,
-    };
+    }];
   });
 
   const contract = HookOperationIntentV2Schema.parse({ schemaVersion: 2, operations });

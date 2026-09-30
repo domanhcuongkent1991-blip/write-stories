@@ -290,4 +290,37 @@ describe("parseSettlerDeltaOutput", () => {
       }),
     ]);
   });
+
+  it("coerces common model-shaped deltas before schema validation", () => {
+    const result = parseSettlerDeltaOutput([
+      "=== RUNTIME_STATE_DELTA ===",
+      "```json",
+      JSON.stringify({
+        chapter: "23",
+        hookOps: {
+          upsert: [],
+          mention: [],
+          resolve: [],
+          defer: [
+            { hookId: "mentor-oath", reason: "chưa lộ tín hiệu" },
+            "ledger-open",
+          ],
+        },
+        newHookCandidates: [
+          "source-risk",
+          {
+            type: "source-risk",
+            expectedPayoff: "Reveal what the anonymous source already knew",
+            notes: "Fresh unresolved question.",
+          },
+        ],
+        notes: [],
+      }),
+      "```",
+    ].join("\n"));
+
+    expect(result.runtimeStateDelta.chapter).toBe(23);
+    expect(result.runtimeStateDelta.hookOps.defer).toEqual(["mentor-oath", "ledger-open"]);
+    expect(result.runtimeStateDelta.newHookCandidates).toHaveLength(2);
+  });
 });

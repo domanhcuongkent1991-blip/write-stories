@@ -1,3 +1,5 @@
+import { readFile } from "node:fs/promises";
+import { join } from "node:path";
 import type { PostWriteViolation } from "./post-write-validator.js";
 import { VIETNAMESE_SPELLING_CATALOG } from "./vietnamese-spelling-catalog.js";
 
@@ -5,6 +7,9 @@ const CJK_RE = /[\u3400-\u4DBF\u4E00-\u9FFF\uF900-\uFAFF]/u;
 const AGENT_NOTE_RE = /^\s*\[(?:writer|polisher|reviser|reviewer|写作|润色|修订|审稿)-note\]\s*/imu;
 const REPEATED_WHITESPACE_RE = /[ \t]{2,}/u;
 const REPEATED_PUNCTUATION_RE = /([!?;,。：；！？])\1+/u;
+const LATIN_LETTER_RE = /[A-Za-z\u00C0-\u1EF9]/g;
+const VI_MARKED_CHAR_RE =
+  /[ăâêôơưđáàảãạấầẩẫậắằẳẵặéèẻẽẹếềểễệíìỉĩịóòỏõọốồổỗộớờởỡợúùủũụứừửữựýỳỷỹỵ]/gi;
 
 const DELIMITER_PAIRS = [
   { open: "“", close: "”", label: "dấu ngoặc kép cong" },
@@ -16,7 +21,10 @@ const DELIMITER_PAIRS = [
   { open: "『", close: "』", label: "ngoặc thoại kép" },
 ] as const;
 
-export function validateVietnameseSurface(content: string): ReadonlyArray<PostWriteViolation> {
+export function validateVietnameseSurface(
+  content: string,
+  options?: { readonly worldGlossaryTerms?: ReadonlyArray<string> },
+): ReadonlyArray<PostWriteViolation> {
   const violations: PostWriteViolation[] = [];
 
   for (const entry of VIETNAMESE_SPELLING_CATALOG) {
@@ -55,6 +63,23 @@ export function validateVietnameseSurface(content: string): ReadonlyArray<PostWr
       description: "Nội dung tiếng Việt chứa ký tự CJK ngoài ý muốn.",
       suggestion: "Thay ký tự CJK bằng nội dung tiếng Việt tương ứng.",
     });
+  }
+
+  // Output-language guard: a Vietnamese book whose prose is almost entirely
+  // unmarked Latin (e.g. English) must not pass the surface gate.
+  {
+    const latinChars = countMatches(content, LATIN_LETTER_RE);
+    const markedChars = countMatches(content, VI_MARKED_CHAR_RE);
+    if (latinChars >= 400 && markedChars / latinChars < 0.02) {
+      violations.push({
+        rule: "vi-output-language-mismatch",
+        severity: "error",
+        description:
+          "Chương gần như không chứa ký tự tiếng Việt có dấu — nghi ngờ văn bản bị viết bằng ngôn ngữ khác (ví dụ tiếng Anh) thay vì tiếng Việt.",
+        suggestion:
+          "Viết lại toàn bộ nội dung bằng tiếng Việt theo hợp đồng ngôn ngữ xuất (writingLanguage = vi) trước khi chốt chương.",
+      });
+    }
   }
 
   if (AGENT_NOTE_RE.test(content)) {
@@ -107,7 +132,120 @@ export function validateVietnameseSurface(content: string): ReadonlyArray<PostWr
     });
   }
 
+  const machinePhraseCount = countMatches(content, VI_MACHINE_PHRASE_RE);
+  if (machinePhraseCount >= 3) {
+    violations.push({
+      rule: "vi-prose-machine-phrase",
+      severity: "warning",
+      description: `Phát hiện ${machinePhraseCount} cụm từ dẫn đường kiểu máy (khung "không chỉ… mà", "từ đó phản ánh", "nhìn chung", "có thể nói"…).`,
+      suggestion: "Chuyển các cụm này thành hành động, thoại hoặc ý nói trực tiếp của nhân vật; giữ tối đa 1-2 lần trong toàn chương.",
+    });
+  }
+
+  if ((options?.worldGlossaryTerms?.length ?? 0) > 0) {
+    const known = new Set(
+      (options?.worldGlossaryTerms ?? []).map((term) => term.normalize("NFC").toLocaleLowerCase("vi")),
+    );
+    const unknownForeign = collectUnknownForeignNames(content, known);
+    if (unknownForeign.length > 0) {
+      violations.push({
+        rule: "vi-world-glossary-unknown-name",
+        severity: "warning",
+        description: `Tên riêng ngoại văn chưa có trong sổ tay: ${unknownForeign.join(", ")}.`,
+        suggestion:
+          "Bổ sung cách viết tiếng Việt chuẩn vào story/world_glossary.md cho các tên trên, rồi dùng đúng cách viết đã ghi trong sổ.",
+      });
+    }
+  }
+
   return violations;
+}
+
+const VI_MACHINE_PHRASE_RE =
+  /không chỉ[^.!?]{0,60}?(?:mà (?:còn|là)|mà còn)|từ đó (?:phản ánh|cho thấy)|nhìn chung|có thể nói|đáng để (?:nói|bàn)|quả thật vậy|không thể phủ nhận/giu;
+
+function countMatches(content: string, pattern: RegExp): number {
+  return [...content.matchAll(pattern)].length;
+}
+
+const FOREIGN_NAME_RE = /[A-Za-z][A-Za-z'’-]{3,}/gu;
+
+function collectUnknownForeignNames(
+  content: string,
+  known: ReadonlySet<string>,
+): string[] {
+  const tokens = [...content.matchAll(FOREIGN_NAME_RE)].map((match) => ({
+    value: match[0],
+    start: match.index ?? 0,
+    end: (match.index ?? 0) + match[0].length,
+  }));
+  const phrases: string[] = [];
+  let current: { value: string; start: number; end: number } | null = null;
+  for (const token of tokens) {
+    if (current && token.start - current.end === 1 && content[current.end] === " ") {
+      current = {
+        value: `${current.value} ${token.value}`,
+        start: current.start,
+        end: token.end,
+      };
+    } else {
+      if (current) phrases.push(current.value);
+      current = { ...token };
+    }
+  }
+  if (current) phrases.push(current.value);
+
+  const knownTokens = new Set(
+    [...known].flatMap((name) => name.split(" ")),
+  );
+  return [
+    ...new Set(
+      phrases.filter((phrase) => {
+        if (known.has(phrase.normalize("NFC").toLocaleLowerCase("vi"))) {
+          return false;
+        }
+        const words = phrase.split(" ");
+        // Token lẻ của tên đã biết trong sổ tay ("Rowan" ⊂ "Rowan Vale").
+        if (words.every((w) => knownTokens.has(w.toLocaleLowerCase("vi")))) {
+          return false;
+        }
+        // Cụm thuần từ tiếng Việt thuần ASCII ("rung thanh", "Không quanh"...).
+        if (words.every((w) => COMMON_VI_SENTENCE_WORDS.has(w.toLocaleLowerCase("vi")))) {
+          return false;
+        }
+        return true;
+      }),
+    ),
+  ];
+}
+
+// Từ tiếng Việt thuần ASCII hay đứng đầu câu — không phải tên riêng ngoại văn.
+const COMMON_VI_SENTENCE_WORDS = new Set<string>([
+  "tôi", "chúng", "hắn", "cô", "ông", "bà", "anh", "em", "không", "chưa",
+  "nhưng", "khi", "nếu", "đó", "đây", "nó", "và", "còn", "đã", "sẽ", "thì",
+  "trong", "ngoài", "trên", "dưới", "quanh", "sau", "trước", "vậy", "thật",
+  "rồi", "mỗi", "như", "tất", "mọi", "người", "ngay", "chính", "lần",
+  "tiếng", "hai", "ba", "bốn", "năm", "điều", "cách", "lúc", "chỗ", "đang",
+  "cũng", "một", "những", "các", "con", "cái", "việc", "tranh", "thanh",
+  "rung", "trong", "phải", "cần", "làm", "nói", "nhìn", "nghe", "đem",
+  "bước", "giữa", "theo", "cho", "của", "với", "từ", "này", "kia", "ấy",
+] as const);
+
+export async function readWorldGlossaryTerms(bookDir: string): Promise<string[]> {
+  try {
+    const markdown = await readFile(join(bookDir, "story", "world_glossary.md"), "utf-8");
+    return parseWorldGlossaryTerms(markdown);
+  } catch {
+    return [];
+  }
+}
+
+export function parseWorldGlossaryTerms(markdown: string): string[] {
+  return markdown
+    .split("\n")
+    .filter((line) => line.trimStart().startsWith("|"))
+    .map((line) => line.trim().replace(/^\|/, "").split("|")[0]?.trim() ?? "")
+    .filter((cell) => cell && cell !== "Tên nguyên bản" && !/^[^A-Za-z0-9À-ỹ]+$/.test(cell));
 }
 
 function countOccurrences(content: string, needle: string): number {

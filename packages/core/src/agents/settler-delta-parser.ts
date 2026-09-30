@@ -74,7 +74,9 @@ export function parseSettlerDeltaOutput(content: string): SettlerDeltaOutput {
   try {
     return {
       postSettlement: extract("POST_SETTLEMENT"),
-      runtimeStateDelta: RuntimeStateDeltaSchema.parse(normalizeHookStatusAliases(parsed)),
+      runtimeStateDelta: RuntimeStateDeltaSchema.parse(
+        normalizeHookStatusAliases(coerceRuntimeStateDelta(parsed)),
+      ),
     };
   } catch (error) {
     throw new SettlerDeltaParseError(
@@ -82,6 +84,52 @@ export function parseSettlerDeltaOutput(content: string): SettlerDeltaOutput {
       `runtime state delta failed schema validation: ${String(error)}`,
     );
   }
+}
+
+/**
+ * Models repeatedly produce settlements whose content is right but whose
+ * shape drifts from the schema in a few predictable ways (numeric chapter as
+ * a string, hook-op arrays whose elements are objects carrying a hookId,
+ * new-hook candidates as plain strings). Coerce those known drifts before
+ * schema validation so an otherwise-correct candidate is not thrown away;
+ * anything not recognized here still fails closed.
+ */
+function coerceRuntimeStateDelta(value: unknown): unknown {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return value;
+
+  const root = { ...(value as Record<string, unknown>) };
+
+  if (typeof root.chapter === "string" && /^\d+$/u.test(root.chapter.trim())) {
+    root.chapter = Number.parseInt(root.chapter.trim(), 10);
+  }
+
+  if (root.hookOps && typeof root.hookOps === "object" && !Array.isArray(root.hookOps)) {
+    const hookOps = { ...(root.hookOps as Record<string, unknown>) };
+    for (const key of ["mention", "resolve", "defer"] as const) {
+      const list = hookOps[key];
+      if (!Array.isArray(list)) continue;
+      const coerced = list.map((entry) => {
+        if (entry && typeof entry === "object" && !Array.isArray(entry)) {
+          const hookId = (entry as Record<string, unknown>).hookId;
+          if (typeof hookId === "string" && hookId.trim().length > 0) return hookId.trim();
+        }
+        return entry;
+      });
+      if (JSON.stringify(coerced) !== JSON.stringify(list)) hookOps[key] = coerced;
+    }
+    root.hookOps = hookOps;
+  }
+
+  if (Array.isArray(root.newHookCandidates)) {
+    root.newHookCandidates = root.newHookCandidates.map((entry) => {
+      if (typeof entry === "string" && entry.trim().length > 0) {
+        return { type: entry.trim() };
+      }
+      return entry;
+    });
+  }
+
+  return root;
 }
 
 /**

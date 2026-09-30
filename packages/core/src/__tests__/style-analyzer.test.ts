@@ -84,3 +84,20 @@ describe("analyzeStyle (English)", () => {
     expect(profile.topPatterns.some((p) => p.toLowerCase().startsWith("he"))).toBe(true);
   });
 });
+
+describe("analyzeStyle (Vietnamese)", () => {
+  const sampleVi = "Chạng vạng, mưa rơi đầy hiên. Nàng không quay đầu, chỉ gấp lá thư giấu vào ngăn kéo. Ánh đèn xe loé lên như một kẻ đã tìm thấy nơi này. Hắn bước vào, chẳng khác nào bóng tối tự tìm đến mình.";
+
+  it("measures sentences in word-like tokens instead of characters", () => {
+    const profile = analyzeStyle(sampleVi, "vi-sample", "vi");
+    expect(profile.avgSentenceLength).toBeGreaterThan(2);
+    expect(profile.avgSentenceLength).toBeLessThan(20);
+  });
+
+  it("uses Vietnamese rhetorical patterns and formats counts without CJK units", () => {
+    const profile = analyzeStyle(sampleVi, "vi-sample", "vi");
+    expect(profile.rhetoricalFeatures.length).toBeGreaterThan(0);
+    expect(profile.rhetoricalFeatures.some((f) => f.includes("so sánh"))).toBe(true);
+    expect(profile.topPatterns.every((p) => !p.includes("次") && !p.includes("处"))).toBe(true);
+  });
+});

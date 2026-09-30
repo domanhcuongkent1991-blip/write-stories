@@ -119,14 +119,43 @@ export class StateManager {
     const styleGuidePath = join(storyDir, "style_guide.md");
     try {
       const existing = await readFile(styleGuidePath, "utf-8");
-      if (!existing.includes("写作方法论") && !existing.includes("Writing Methodology")) {
+      if (
+        !existing.includes("写作方法论")
+        && !existing.includes("Writing Methodology")
+        && !existing.includes("Phương pháp viết")
+      ) {
         const { buildWritingMethodologySection } = await import("../utils/writing-methodology.js");
-        await writeFile(styleGuidePath, `${existing}\n\n${buildWritingMethodologySection(scaffoldLanguage)}`, "utf-8");
+        await writeFile(styleGuidePath, `${existing}\n\n${buildWritingMethodologySection(language)}`, "utf-8");
       }
     } catch {
       const { buildWritingMethodologySection } = await import("../utils/writing-methodology.js");
-      await writeFile(styleGuidePath, buildWritingMethodologySection(scaffoldLanguage), "utf-8");
+      await writeFile(styleGuidePath, buildWritingMethodologySection(language), "utf-8");
     }
+
+    if (language === "vi") {
+      await this.writeIfMissing(
+        join(storyDir, "world_glossary.md"),
+        StateManager.defaultWorldGlossary(),
+      );
+    }
+  }
+
+  static defaultWorldGlossary(): string {
+    return [
+      "# Sổ tay tên thế giới",
+      "",
+      "Tên riêng của thế giới trong cuốn sách này và cách viết tiếng Việt chuẩn. Khi viết chương mới, dùng đúng cách viết đã ghi trong sổ — không tự sáng tên mới.",
+      "",
+      "| Tên nguyên bản | Cách viết tiếng Việt chuẩn | Loại | Ghi chú |",
+      "|---|---|---|---|",
+      "|  |  |  |  |",
+      "",
+      "Quy ước:",
+      "- Nhân vật, tổ chức, địa danh, danh từ chung đặc thù thế giới đều ghi vào sổ.",
+      "- Tên nào nên giữ nguyên bản thì ghi \"giữ nguyên\" ở cột cách viết.",
+      "- Gặp tên riêng chưa có trong sổ: không tự đặt cách viết mới; ghi tên đó vào báo cáo cuối chương để bổ sung sau.",
+      "",
+    ].join("\n");
   }
 
   async loadControlDocuments(bookId: string): Promise<{

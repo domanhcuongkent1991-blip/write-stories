@@ -17,6 +17,12 @@ export const DEFAULT_CHAPTER_LENGTH_EN = 2000;
 const VI_WORDLIKE_TOKEN_RE =
   /[\p{L}\p{M}\p{N}]+(?:['’\-][\p{L}\p{M}\p{N}]+)*/gu;
 
+// Shared with style analysis so Vietnamese prose is measured by the same
+// token definition as chapter-length governance (vi_wordlike_tokens_v1).
+export function viWordlikeTokenCount(text: string): number {
+  return text.normalize("NFC").match(VI_WORDLIKE_TOKEN_RE)?.length ?? 0;
+}
+
 export function defaultChapterLength(language: WritingLanguage = "zh"): number {
   return resolveWritingLanguageProfile(language).defaultChapterLength;
 }
