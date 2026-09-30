@@ -194,12 +194,42 @@ function collectUnknownForeignNames(
     }
   }
   if (current) phrases.push(current.value);
+
+  const knownTokens = new Set(
+    [...known].flatMap((name) => name.split(" ")),
+  );
   return [
     ...new Set(
-      phrases.filter((phrase) => !known.has(phrase.normalize("NFC").toLocaleLowerCase("vi"))),
+      phrases.filter((phrase) => {
+        if (known.has(phrase.normalize("NFC").toLocaleLowerCase("vi"))) {
+          return false;
+        }
+        const words = phrase.split(" ");
+        // Token lẻ của tên đã biết trong sổ tay ("Rowan" ⊂ "Rowan Vale").
+        if (words.every((w) => knownTokens.has(w.toLocaleLowerCase("vi")))) {
+          return false;
+        }
+        // Cụm thuần từ tiếng Việt thuần ASCII ("rung thanh", "Không quanh"...).
+        if (words.every((w) => COMMON_VI_SENTENCE_WORDS.has(w.toLocaleLowerCase("vi")))) {
+          return false;
+        }
+        return true;
+      }),
     ),
   ];
 }
+
+// Từ tiếng Việt thuần ASCII hay đứng đầu câu — không phải tên riêng ngoại văn.
+const COMMON_VI_SENTENCE_WORDS = new Set<string>([
+  "tôi", "chúng", "hắn", "cô", "ông", "bà", "anh", "em", "không", "chưa",
+  "nhưng", "khi", "nếu", "đó", "đây", "nó", "và", "còn", "đã", "sẽ", "thì",
+  "trong", "ngoài", "trên", "dưới", "quanh", "sau", "trước", "vậy", "thật",
+  "rồi", "mỗi", "như", "tất", "mọi", "người", "ngay", "chính", "lần",
+  "tiếng", "hai", "ba", "bốn", "năm", "điều", "cách", "lúc", "chỗ", "đang",
+  "cũng", "một", "những", "các", "con", "cái", "việc", "tranh", "thanh",
+  "rung", "trong", "phải", "cần", "làm", "nói", "nhìn", "nghe", "đem",
+  "bước", "giữa", "theo", "cho", "của", "với", "từ", "này", "kia", "ấy",
+] as const);
 
 export async function readWorldGlossaryTerms(bookDir: string): Promise<string[]> {
   try {
