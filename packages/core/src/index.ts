@@ -657,6 +657,14 @@ export {
 } from "./utils/outline-coverage.js";
 export { parsePendingHooksMarkdown } from "./utils/story-markdown.js";
 
+// Audit
+export {
+  stripChapterTitleLine,
+  computeChapterFileHashFromMarkdown,
+  computeChapterFileHash,
+  readAuditRunContentHash,
+} from "./audit/chapter-file-hash.js";
+
 // Pipeline
 export { PipelineRunner, type PipelineConfig, type ChapterPipelineResult, type PreviewChapterResult, type WriteChaptersOptions, type DraftResult, type PlanChapterResult, type ComposeChapterResult, type ReviseResult, type TruthFiles, type BookStatusInfo, type ImportChaptersInput, type ImportChaptersResult, type TokenUsageSummary } from "./pipeline/runner.js";
 export { Scheduler, type SchedulerConfig } from "./pipeline/scheduler.js";

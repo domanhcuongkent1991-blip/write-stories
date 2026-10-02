@@ -46,6 +46,56 @@ function createAuditResult(overrides?: Partial<AuditResult>): AuditResult {
   };
 }
 
+// ---------------------------------------------------------------------------
+// Fixtures for the Vietnamese output-language guard on revision candidates.
+// ---------------------------------------------------------------------------
+
+/** Plain Vietnamese prose with real diacritics; 86 sentences = 1145 vi wordlike tokens, inside VI_LENGTH_SPEC. */
+const VI_CHAPTER_SENTENCES: ReadonlyArray<string> = [
+  "Gió đêm thổi ngang qua vòm tháp cổ, mang theo mùi muối biển mặn.",
+  "Lâm Hàn đứng bên lan can, mắt nhìn xuống mặt nước đen như mực.",
+  "Cô gái trẻ ngồi co ro ở góc thuyền, hai tay ôm chặt chiếc túi vải.",
+  "Tiếng chuông chùa vọng xa trong sương sớm mờ mịt bốn phía.",
+  "Anh nhìn cô, ánh mắt dịu lại trước khi quay sang bờ bên kia.",
+  "Mưa bắt đầu rơi, từng giọt gõ lên mặt tàu gỗ cũ kỹ.",
+  "Ngọn lửa trong bếp lá bùng lên rồi tắt ngúm trong tích tắc.",
+  "Con đường lát đá rêu xanh ướt nước dẫn vào rừng thông.",
+  "Bà cụ ngồi khoanh tay, nhìn cô chằm chằm không nói một lời nào.",
+  "Cuốn sách cổ trên bàn bật ra những trang giấy ố vàng khắc chữ.",
+  "Ngoài kia, chói lửa đỏ rực xuống mái nhà vàng vọt của thị trấn.",
+  "Đường phố vắng tanh, chỉ có tiếng bước chân vọng lại trên nền đá.",
+  "Cô đưa tay nhận lấy phong thư, ngón tay hơi run một chút.",
+  "Mùi hương hoa nhài thoang thoảng bay trong gió chiều.",
+  "Anh gật đầu, ánh mắt kiên định nhìn về phía cuối đường.",
+];
+
+const VI_CANONICAL_CHAPTER = Array.from(
+  { length: 86 },
+  (_unused, index) => VI_CHAPTER_SENTENCES[index % VI_CHAPTER_SENTENCES.length],
+).join(" ");
+
+/** Distinctive marker so assertions can prove the non-Vietnamese draft never reached the auditor. */
+const ENGLISH_CANDIDATE_MARKER = "ENGLISH-CANDIDATE-MARKER-Q7";
+
+const ENGLISH_CANDIDATE_SENTENCES: ReadonlyArray<string> = [
+  "the stranger in the grey coat refused to answer a single question about the night that followed",
+  "he walked the length of the empty pier without once turning his head toward the lamp",
+  "the harbour master said nothing and only turned the page of his weather ledger",
+  "every sailor on the deck had learned long ago not to ask about the ninth lantern",
+  "the fog came in off the water and swallowed the masts one after another",
+  "she counted the seconds between the bell strokes and lost track after the seventh",
+  "a rope snapped somewhere below and the sound travelled up through the planks",
+  "he wrote the number on his palm and then washed it off with cold seawater",
+  "the man in the grey coat refused to explain where he had learned the old names",
+  "by midnight the whole pier was empty and the lantern had gone out on its own",
+];
+
+/** 8 sentences = 512 Latin chars, 0 Vietnamese marked chars, so vi-output-language-mismatch fires. */
+const ENGLISH_CANDIDATE = `${ENGLISH_CANDIDATE_MARKER}. ${Array.from(
+  { length: 8 },
+  (_unused, index) => ENGLISH_CANDIDATE_SENTENCES[index % ENGLISH_CANDIDATE_SENTENCES.length],
+).join(". ")}.`;
+
 const baseParams = {
   book: { genre: "xuanhuan" },
   bookDir: "/tmp/book",
@@ -478,7 +528,7 @@ describe("runChapterReviewCycle v9", () => {
   });
 
   it("binds and applies an exact spelling repair without constructing the Reviser", async () => {
-    const filler = Array.from({ length: 1428 }, (_, index) => `tu${index}`).join(" ");
+    const filler = Array.from({ length: 1428 }, (_, index) => `từ${index}`).join(" ");
     const original = `${filler} cụm từ sai`;
     const candidate = `${filler} cụm từ đúng`;
     const spellingIssue: AuditIssue = {
@@ -522,8 +572,8 @@ describe("runChapterReviewCycle v9", () => {
   });
 
   it("routes a host-bound transition contradiction through the bounded revision cycle", async () => {
-    const original = Array.from({ length: 1150 }, (_, index) => `goc${index}`).join(" ");
-    const candidate = Array.from({ length: 1150 }, (_, index) => `sua${index}`).join(" ");
+    const original = Array.from({ length: 1150 }, (_, index) => `gốc${index}`).join(" ");
+    const candidate = Array.from({ length: 1150 }, (_, index) => `sửa${index}`).join(" ");
     const transitionFinding: AuditIssue = {
       severity: "critical",
       category: "Transition Continuity",
@@ -576,7 +626,7 @@ describe("runChapterReviewCycle v9", () => {
   });
 
   it("applies local spelling first and then spends exactly one structural revision call", async () => {
-    const filler = Array.from({ length: 1140 }, (_, index) => `tu${index}`).join(" ");
+    const filler = Array.from({ length: 1140 }, (_, index) => `từ${index}`).join(" ");
     const original = `${filler} lầy bơi`;
     const patched = `${filler} bãi bùn đất lầy lội`;
     const structurallyRevised = `${patched} với nguyên nhân chuyển cảnh rõ ràng`;
@@ -644,8 +694,8 @@ describe("runChapterReviewCycle v9", () => {
   });
 
   it("does not accept a revision while the host-bound transition contradiction remains", async () => {
-    const original = Array.from({ length: 1150 }, (_, index) => `goc${index}`).join(" ");
-    const candidate = Array.from({ length: 1150 }, (_, index) => `sua${index}`).join(" ");
+    const original = Array.from({ length: 1150 }, (_, index) => `gốc${index}`).join(" ");
+    const candidate = Array.from({ length: 1150 }, (_, index) => `sửa${index}`).join(" ");
     const transitionFinding: AuditIssue = {
       severity: "critical",
       category: "Transition Continuity",
@@ -752,8 +802,8 @@ describe("runChapterReviewCycle v9", () => {
   });
 
   it("routes a score-fail within the repair floor through one bounded revision", async () => {
-    const original = Array.from({ length: 1150 }, (_, index) => `goc${index}`).join(" ");
-    const candidate = Array.from({ length: 1150 }, (_, index) => `sua${index}`).join(" ");
+    const original = Array.from({ length: 1150 }, (_, index) => `gốc${index}`).join(" ");
+    const candidate = Array.from({ length: 1150 }, (_, index) => `sửa${index}`).join(" ");
     const memoDriftIssue: AuditIssue = {
       severity: "critical",
       category: "Chapter Memo Drift Check",
@@ -1218,5 +1268,112 @@ describe("runChapterReviewCycle v9", () => {
     expect(result.finalContent).not.toContain("——");
     expect(result.auditResult.passed).toBe(true);
     expect(reviseChapter).not.toHaveBeenCalled();
+  });
+
+  // -------------------------------------------------------------------------
+  // Output-language guard: a reviser candidate that is not Vietnamese must be
+  // rejected before settlement and before the post-revision auditor, and it must
+  // never become the base for the next repair iteration.
+  // -------------------------------------------------------------------------
+
+  it("rejects a non-Vietnamese revision candidate before settle and before the post-revision audit", async () => {
+    const auditChapter = vi.fn().mockResolvedValue(createAuditResult({
+      decision: "repair-required",
+      passed: false,
+      overallScore: 70,
+      issues: [DETERMINISTIC_REPAIR],
+    }));
+    const reviseChapter = vi.fn().mockResolvedValue({
+      revisedContent: ENGLISH_CANDIDATE,
+      wordCount: 3000,
+      fixedIssues: ["fixed continuity"],
+      tokenUsage: ZERO_USAGE,
+    });
+    const settleRevisionCandidate = vi.fn().mockResolvedValue({ valid: true });
+    const retained: Array<{
+      readonly reason: string;
+      readonly rejectionEvidence: { readonly findings: ReadonlyArray<{ readonly category: string }> };
+    }> = [];
+    const retainRejectedCandidate = vi.fn((input: {
+      readonly reason: string;
+      readonly rejectionEvidence: { readonly findings: ReadonlyArray<{ readonly category: string }> };
+    }) => {
+      retained.push(input);
+    });
+
+    const result = await runChapterReviewCycle({
+      ...baseParams,
+      lengthSpec: VI_LENGTH_SPEC,
+      initialOutput: { content: VI_CANONICAL_CHAPTER, wordCount: 1145, postWriteErrors: [] },
+      createReviser: () => ({ reviseChapter }),
+      auditor: { auditChapter },
+      settleRevisionCandidate,
+      retainRejectedCandidate,
+      runPostWriteChecks: (content) => (content === VI_CANONICAL_CHAPTER ? [DETERMINISTIC_REPAIR] : []),
+    });
+
+    // (a) The post-revision auditor never receives the non-Vietnamese draft.
+    for (const call of auditChapter.mock.calls) {
+      expect(String(call[1])).not.toContain(ENGLISH_CANDIDATE_MARKER);
+    }
+    expect(auditChapter).toHaveBeenCalledTimes(1);
+    expect(settleRevisionCandidate).not.toHaveBeenCalled();
+
+    // (b)/(c) The canonical Vietnamese chapter survives untouched and is not marked revised.
+    expect(result.finalContent).toBe(VI_CANONICAL_CHAPTER);
+    expect(result.finalContent).not.toContain(ENGLISH_CANDIDATE_MARKER);
+    expect(result.revised).toBe(false);
+
+    // (d) index.json keeps the canonical findings, not the candidate language failure.
+    expect(result.auditResult.issues.map((issue) => issue.category)).not.toContain("vi-output-language-mismatch");
+    expect(result.auditResult.contentHash).toBe(computeChapterContentHash(VI_CANONICAL_CHAPTER));
+
+    // (e) Telemetry stays bound to the canonical chapter.
+    expect(result.revisionAttempts).toBe(1);
+    const postRevisionRun = result.auditRuns?.find((run) => run.phase === "post-revision");
+    expect(postRevisionRun?.contentHash).not.toBe(computeChapterContentHash(ENGLISH_CANDIDATE));
+
+    // The rejection is recorded with language evidence attached to the retained candidate.
+    expect(retained).toHaveLength(1);
+    expect(retained[0]?.reason).toContain("not Vietnamese");
+    expect(retained[0]?.rejectionEvidence.findings.map((finding) => finding.category))
+      .toContain("vi-output-language-mismatch");
+  });
+
+  it("rolls a language-rejected candidate back to canonical so the next iteration revises the Vietnamese draft", async () => {
+    const auditChapter = vi.fn().mockResolvedValue(createAuditResult({
+      decision: "repair-required",
+      passed: false,
+      overallScore: 70,
+      issues: [DETERMINISTIC_REPAIR],
+    }));
+    const reviseChapter = vi.fn().mockResolvedValue({
+      revisedContent: ENGLISH_CANDIDATE,
+      wordCount: 3000,
+      fixedIssues: ["fixed continuity"],
+      tokenUsage: ZERO_USAGE,
+    });
+    const retainRejectedCandidate = vi.fn();
+
+    const result = await runChapterReviewCycle({
+      ...baseParams,
+      lengthSpec: VI_LENGTH_SPEC,
+      maxReviewIterations: 2,
+      initialOutput: { content: VI_CANONICAL_CHAPTER, wordCount: 1145, postWriteErrors: [] },
+      createReviser: () => ({ reviseChapter }),
+      auditor: { auditChapter },
+      retainRejectedCandidate,
+      runPostWriteChecks: (content) => (content === VI_CANONICAL_CHAPTER ? [DETERMINISTIC_REPAIR] : []),
+    });
+
+    expect(reviseChapter).toHaveBeenCalledTimes(2);
+    // Both attempts were seeded from the canonical Vietnamese chapter, never from the rejected draft.
+    for (const call of reviseChapter.mock.calls) {
+      expect(String(call[1])).toBe(VI_CANONICAL_CHAPTER);
+    }
+    expect(retainRejectedCandidate).toHaveBeenCalledTimes(2);
+    expect(auditChapter).toHaveBeenCalledTimes(1);
+    expect(result.finalContent).toBe(VI_CANONICAL_CHAPTER);
+    expect(result.revised).toBe(false);
   });
 });

@@ -8,7 +8,7 @@ import { countChapterLength, isOutsideHardRange } from "../utils/length-metrics.
 import { computeChapterContentHash, type AuditReAuditTelemetry } from "../audit/chapter-audit-evaluator.js";
 import type { ChapterAuditEvaluation } from "../audit/chapter-audit-evaluator.js";
 import { decideAudit, evaluateRevisionCandidate } from "../audit/audit-policy.js";
-import { toAuditIssuesFromSurface } from "../agents/vietnamese-surface-validator.js";
+import { toAuditIssuesFromSurface, validateVietnameseSurface } from "../agents/vietnamese-surface-validator.js";
 import { createAuditRun, type AuditRunV1 } from "../audit/audit-run.js";
 import {
   applyVietnameseLocalRepair,
@@ -654,6 +654,46 @@ export async function runChapterReviewCycle(params: {
           en: `repair iteration ${iteration + 1} produced no new content, exiting loop`,
         });
         break;
+      }
+
+      // Output-language guard. A reviser that answered in another language is
+      // not a repair candidate: settling it, auditing it, or rolling it forward
+      // as the next base only burns provider budget and lets its
+      // vi-output-language-mismatch findings be written to index.json as if they
+      // described the canonical chapter. The canonical draft already cleared the
+      // writer post-write gate, so this guard judges candidates only.
+      const outputLanguageViolations = params.lengthSpec.countingMode === "vi_wordlike_tokens_v1"
+        ? validateVietnameseSurface(revisedContent)
+          .filter((violation) => violation.rule === "vi-output-language-mismatch")
+        : [];
+      if (outputLanguageViolations.length > 0) {
+        revisionRejectionReason = "candidate rejected: output language is not Vietnamese";
+        params.logWarn({
+          zh: "修复候选并非越南语，直接丢弃，不进入结算与审稿，保留原章节",
+          en: "Revision candidate is not Vietnamese; discarded before settlement and audit, keeping the canonical chapter.",
+        });
+        await params.retainRejectedCandidate?.({
+          content: revisedContent,
+          contentHash: computeChapterContentHash(revisedContent),
+          wordCount: countChapterLength(revisedContent, params.lengthSpec.countingMode),
+          reason: revisionRejectionReason,
+          rejectionEvidence: buildCandidateRejectionEvidence({
+            rejectionCode: "audit-failed",
+            ownerClass: "AUDIT",
+            findings: toAuditIssuesFromSurface(outputLanguageViolations).map((issue) => ({
+              ...issue,
+              // decideAudit is fail-closed on a critical finding with no
+              // repairTarget, so the language blocker must carry one.
+              repairTarget: issue.repairTarget ?? "prose",
+            })),
+            fallbackDescription: revisionRejectionReason,
+          }),
+        });
+
+        if (iteration + 1 >= maxReviewIterations) break;
+        // workingContent and currentAudit stay on the canonical chapter: the next
+        // iteration must retry the repair from canonical, not from this draft.
+        continue;
       }
 
       revisionCandidateIdentity = {
