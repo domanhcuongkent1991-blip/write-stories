@@ -342,3 +342,52 @@ describe("buildWriterSystemPrompt — world glossary notebook", () => {
     expect(prompt).not.toContain("## Sổ tay tên thế giới");
   });
 });
+
+describe("buildWriterSystemPrompt — character pronoun lock", () => {
+  it("embeds the character pronoun lock section when role rules are provided", () => {
+    const prompt = buildWriterSystemPrompt(
+      { ...BOOK, language: "vi" },
+      GENRE,
+      null,
+      "",
+      "",
+      "# Style guide body",
+      undefined,
+      1,
+      "full",
+      undefined,
+      "vi",
+      undefined,
+      undefined,
+      undefined,
+      [{ name: "Lâm Hàn", aliases: ["Lâm Hàn", "Lâm"], allowed: ["anh"], denied: ["hắn", "cậu"] }],
+    );
+
+    expect(prompt).toContain("## Khóa xưng hô nhân vật");
+    expect(prompt).toContain("Lâm Hàn");
+    expect(prompt).toContain("anh");
+    expect(prompt).toContain("hắn");
+  });
+
+  it("omits the character pronoun lock section when no rules are provided", () => {
+    const prompt = buildWriterSystemPrompt(
+      { ...BOOK, language: "vi" },
+      GENRE,
+      null,
+      "",
+      "",
+      "# Style guide body",
+      undefined,
+      1,
+      "full",
+      undefined,
+      "vi",
+      undefined,
+      undefined,
+      undefined,
+      [],
+    );
+
+    expect(prompt).not.toContain("## Khóa xưng hô nhân vật");
+  });
+});

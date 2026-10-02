@@ -7,6 +7,7 @@ import { buildFanficCanonSection, buildCharacterVoiceProfiles, buildFanficModeIn
 import { buildEnglishGenreIntro } from "./en-prompt-sections.js";
 import { buildLengthSpec, formatWriterPromptLengthGuidance } from "../utils/length-metrics.js";
 import { resolveWritingLanguageProfile } from "../utils/language.js";
+import type { CharacterPronounRule } from "./vietnamese-surface-validator.js";
 
 export interface FanficContext {
   readonly fanficCanon: string;
@@ -33,6 +34,7 @@ export function buildWriterSystemPrompt(
   inputProfile: "legacy" | "governed" = "legacy",
   lengthSpec?: LengthSpec,
   worldGlossaryBody?: string,
+  characterPronounRules?: ReadonlyArray<CharacterPronounRule>,
 ): string {
   const promptLanguage = languageOverride ?? genreProfile.language;
   const isEnglish = resolveWritingLanguageProfile(promptLanguage).scaffoldLanguage === "en";
@@ -61,6 +63,7 @@ export function buildWriterSystemPrompt(
         buildStyleGuide(styleGuide, promptLanguage),
         buildStyleFingerprint(styleFingerprint),
         buildWorldGlossarySection(worldGlossaryBody ?? ""),
+        buildCharacterPronounLockSection(characterPronounRules),
         fanficContext ? buildFanficCanonSection(fanficContext.fanficCanon, fanficContext.fanficMode) : "",
         fanficContext ? buildCharacterVoiceProfiles(fanficContext.fanficCanon) : "",
         fanficContext ? buildFanficModeInstructions(fanficContext.fanficMode, fanficContext.allowedDeviations) : "",
@@ -81,6 +84,7 @@ export function buildWriterSystemPrompt(
         buildStyleGuide(styleGuide, promptLanguage),
         buildStyleFingerprint(styleFingerprint),
         buildWorldGlossarySection(worldGlossaryBody ?? ""),
+        buildCharacterPronounLockSection(characterPronounRules),
         fanficContext ? buildFanficCanonSection(fanficContext.fanficCanon, fanficContext.fanficMode) : "",
         fanficContext ? buildCharacterVoiceProfiles(fanficContext.fanficCanon) : "",
         fanficContext ? buildFanficModeInstructions(fanficContext.fanficMode, fanficContext.allowedDeviations) : "",
@@ -341,6 +345,45 @@ function buildWorldGlossarySection(worldGlossaryBody: string): string {
     worldGlossaryBody.trim(),
     "",
     "Khi viết, dùng đúng cách viết tên trong sổ tay trên. Gặp tên riêng chưa có trong sổ thì không tự đặt cách viết mới — ghi tên đó vào phần cuối chương để bổ sung sau.",
+  ].join("\n");
+}
+
+// ---------------------------------------------------------------------------
+// Character pronoun locks (story/roles/*.md → Vietnamese_Pronoun)
+// ---------------------------------------------------------------------------
+
+function buildCharacterPronounLockSection(
+  characterPronounRules?: ReadonlyArray<CharacterPronounRule>,
+): string {
+  const rules = (characterPronounRules ?? []).filter(
+    (rule) => rule.allowed.length > 0 || rule.denied.length > 0,
+  );
+  if (rules.length === 0) return "";
+
+  const lines = rules.map((rule) => {
+    const allowed = rule.allowed.length > 0
+      ? `dùng đại từ "${rule.allowed.join(" / ")}"`
+      : "";
+    const denied = rule.denied.length > 0
+      ? `cấm tuyệt đối ${rule.denied.map((token) => `"${token}"`).join(", ")}`
+      : "";
+    if (allowed && denied) {
+      return `- ${rule.name}: ${allowed}; ${denied} khi trần thuật về nhân vật này.`;
+    }
+    if (allowed) {
+      return `- ${rule.name}: ${allowed} khi trần thuật về nhân vật này.`;
+    }
+    return `- ${rule.name}: ${denied} khi trần thuật về nhân vật này.`;
+  });
+
+  return [
+    "## Khóa xưng hô nhân vật (bắt buộc)",
+    "",
+    "Các quy tắc dưới đây lấy từ sổ vai trò trong story/roles/. Chúng được kiểm tra tự động sau khi viết; vi phạm sẽ chặn chương.",
+    "",
+    lines.join("\n"),
+    "",
+    "Quy tắc trên chỉ áp dụng cho đại từ trần thuật bên ngoài thoại. Trong thoại nhân vật tự nhiên dùng đại từ riêng của họ thì giữ nguyên.",
   ].join("\n");
 }
 
