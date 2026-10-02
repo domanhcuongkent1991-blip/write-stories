@@ -26,6 +26,7 @@ _*.md
 
 # Local security/qualification tool cache and generated OSV reports
 .codex/
+.mimosa/
 osv-*.json
 
 # CodeGraph local index (local-only tool cache; git hooks also hard-block commits/pushes of it)

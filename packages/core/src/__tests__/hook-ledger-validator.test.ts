@@ -263,7 +263,30 @@ advance:
     expect(violations).toHaveLength(1);
     expect(violations[0]!.severity).toBe("warning");
     expect(violations[0]!.verification).toBe("unverified");
-    expect(violations[0]!.category).toContain("语义复核");
+    // Display text is Vietnamese, but ruleId MUST stay the historical Chinese
+    // string: ruleId is the cross-run reconciliation key recorded on disk.
+    expect(violations[0]!.ruleId).toBe("hook 账需语义复核");
+    expect(violations[0]!.category).toBe("hook cần đối chiếu ngữ nghĩa");
+    expect(violations[0]!.category).not.toMatch(/[一-鿿]/u);
+  });
+
+  it("emits Vietnamese description/suggestion with no CJK while pinning the legacy ruleId", () => {
+    const memo = `## 本章 hook 账
+advance:
+- H002 "读数差额" → 主角找到抄表本撕页残留和数字342
+`;
+    const draft = "我在配电房地板上拨开碎纸屑，背面露出一排数字的下半截：342。旁边还有抄表本撕下来的毛边。";
+    const violations = validateHookLedger(memo, draft);
+    expect(violations).toHaveLength(1);
+    const [issue] = violations;
+    // The legacy string is frozen forever: persisted audit runs on disk key
+    // findings by ruleId, so localizing it would orphan historical records.
+    expect(issue!.ruleId).toBe("hook 账需语义复核");
+    expect(issue!.description).not.toMatch(/[一-鿿]/u);
+    expect(issue!.suggestion).not.toMatch(/[一-鿿]/u);
+    // ...while still carrying the concrete hook id for the reviewer.
+    expect(issue!.description).toContain("H002");
+    expect(issue!.suggestion).toContain("H002");
   });
 
   it("does NOT flag hooks that are only under defer", () => {

@@ -30,6 +30,14 @@ import { normalizeHookPayoffTiming } from "./hook-lifecycle.js";
 
 export type HookLedgerViolation = AuditIssue;
 
+/**
+ * Cross-run reconciliation key for the "memo declared a hook the draft never
+ * echoes" advisory. FROZEN: persisted audit runs on disk match findings by
+ * ruleId, so localizing the user-facing `category` must never rewrite this.
+ * It keeps its historical Chinese text on purpose.
+ */
+const HOOK_LEDGER_SEMANTIC_REVIEW_RULE_ID = "hook 账需语义复核";
+
 export interface HookLedgerEntry {
   readonly id: string;
   /** Raw text of the ledger line after the hook_id. */
@@ -209,9 +217,10 @@ export function validateHookLedger(
     if (!draftEchoesEntry(draftContent, entry)) {
       violations.push({
         severity: "warning",
-        category: "hook 账需语义复核",
-        description: `memo 在 advance/resolve 里声明要处理 ${entry.id}，但确定性关键词检查没有找到对应落点`,
-        suggestion: `复核正文是否已经用动作、对话、物件或信息变化推进了 ${entry.id}；若没有，请补具体场景，若已推进，可忽略这条确定性提示`,
+        ruleId: HOOK_LEDGER_SEMANTIC_REVIEW_RULE_ID,
+        category: "hook cần đối chiếu ngữ nghĩa",
+        description: `memo khai báo sẽ xử lý ${entry.id} trong advance/resolve, nhưng kiểm tra từ khóa xác định không tìm thấy điểm nào tương ứng trong bản nháp`,
+        suggestion: `đối chiếu xem phần thân bản đã đẩy tiến ${entry.id} bằng hành động, đối thoại, đồ vật hay đổi thông tin chưa; nếu chưa thì hãy bổ sung một cảnh cụ thể, nếu đã đẩy tiến rồi thì có thể bỏ qua gợi ý xác định này`,
         source: "deterministic",
         verification: "unverified",
         repairTarget: "prose",

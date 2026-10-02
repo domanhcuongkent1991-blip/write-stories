@@ -125,11 +125,114 @@ describe("ReviserAgent", () => {
       expect(combinedPrompt).not.toContain("1000-1500");
       expect(combinedPrompt).toContain("chapter memo/context");
       expect(combinedPrompt).toContain("preserve causal beats and compress redundant transitions");
+      const systemPrompt = messages[0]?.content ?? "";
+      // A Vietnamese book must never be pushed back into English. utils/language.ts
+      // maps vi -> scaffoldLanguage "en", so keying the override off the scaffold
+      // language alone used to force English output on Vietnamese books.
+      expect(systemPrompt).toContain("MUST be in Vietnamese");
+      expect(systemPrompt).toContain("tiếng Việt có dấu");
+      expect(systemPrompt).not.toContain("MUST be in English");
     } finally {
       await rm(root, { recursive: true, force: true });
     }
   });
 
+  it("adds no LANGUAGE OVERRIDE for Chinese books", async () => {
+    const root = await mkdtemp(join(tmpdir(), "inkos-reviser-zh-noprefix-"));
+    const bookDir = join(root, "book");
+    await mkdir(join(bookDir, "story"), { recursive: true });
+    await writeFile(join(bookDir, "book.json"), JSON.stringify({
+      id: "chinese-book",
+      title: "Chinese Book",
+      genre: "xuanhuan",
+      platform: "other",
+      chapterWordCount: 3000,
+      targetChapters: 10,
+      status: "active",
+      language: "zh",
+      createdAt: "2026-03-23T00:00:00.000Z",
+      updatedAt: "2026-03-23T00:00:00.000Z",
+    }), "utf-8");
+    const agent = new ReviserAgent({
+      client: {
+        provider: "openai",
+        apiFormat: "chat",
+        stream: false,
+        defaults: { temperature: 0.7, maxTokens: 4096, thinkingBudget: 0, extra: {} },
+      },
+      model: "test-model",
+      projectRoot: root,
+    });
+    const chatSpy = vi.spyOn(ReviserAgent.prototype as never, "chat" as never).mockResolvedValue({
+      content: "=== FIXED_ISSUES ===\n\n=== REVISED_CONTENT ===\n\u4fee\u8ba2\u540e\u7684\u6b63\u6587\u3002",
+      usage: ZERO_USAGE,
+    });
+
+    try {
+      await agent.reviseChapter(
+        bookDir,
+        "\u539f\u59cb\u6b63\u6587\u3002",
+        1,
+        [CRITICAL_ISSUE],
+        "rewrite",
+        "xuanhuan",
+      );
+      const systemPrompt = ((chatSpy.mock.calls[0]?.[0] ?? []) as ReadonlyArray<{ content: string }>)[0]?.content ?? "";
+      // zh books keep the historic behaviour: no language override at all.
+      expect(systemPrompt).not.toContain("LANGUAGE OVERRIDE");
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+  it("gives Vietnamese legacy modes a Vietnamese length guardrail", async () => {
+    const root = await mkdtemp(join(tmpdir(), "inkos-reviser-vi-length-guardrail-"));
+    const bookDir = join(root, "book");
+    await mkdir(join(bookDir, "story"), { recursive: true });
+    await writeFile(join(bookDir, "book.json"), JSON.stringify({
+      id: "vietnamese-book",
+      title: "Vietnamese Book",
+      genre: "xuanhuan",
+      platform: "other",
+      chapterWordCount: 1150,
+      targetChapters: 10,
+      status: "active",
+      language: "vi",
+      createdAt: "2026-03-23T00:00:00.000Z",
+      updatedAt: "2026-03-23T00:00:00.000Z",
+    }), "utf-8");
+    const agent = new ReviserAgent({
+      client: {
+        provider: "openai",
+        apiFormat: "chat",
+        stream: false,
+        defaults: { temperature: 0.7, maxTokens: 4096, thinkingBudget: 0, extra: {} },
+      },
+      model: "test-model",
+      projectRoot: root,
+    });
+    const chatSpy = vi.spyOn(ReviserAgent.prototype as never, "chat" as never).mockResolvedValue({
+      content: "=== FIXED_ISSUES ===\n\n=== REVISED_CONTENT ===\nB\u1ea3n \u0111\u00e3 s\u1eeda.",
+      usage: ZERO_USAGE,
+    });
+
+    try {
+      await agent.reviseChapter(
+        bookDir,
+        "B\u1ea3n th\u1ea3o ban \u0111\u1ea7u.",
+        1,
+        [CRITICAL_ISSUE],
+        "polish",
+        "xuanhuan",
+        { lengthSpec: buildLengthSpec(1150, "vi") },
+      );
+      const systemPrompt = ((chatSpy.mock.calls[0]?.[0] ?? []) as ReadonlyArray<{ content: string }>)[0]?.content ?? "";
+      // Vietnamese books get the length rule in Vietnamese, never the Chinese one.
+      expect(systemPrompt).toContain("\u0110\u1ed9 d\u00e0i ch\u01b0\u01a1ng ph\u1ea3i n\u1eb1m trong kho\u1ea3ng c\u1ee9ng theo ch\u1ebf \u0111\u1ed9 \u0111\u1ebfm \u0111\u00e3 ch\u1ec9 \u0111\u1ecbnh");
+      expect(systemPrompt).not.toContain("\u7ae0\u8282\u957f\u5ea6");
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
   it("uses the English scaffold for governed Vietnamese revision context", async () => {
     const root = await mkdtemp(join(tmpdir(), "inkos-reviser-vi-scaffold-"));
     const bookDir = join(root, "book");
