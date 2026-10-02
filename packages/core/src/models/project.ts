@@ -99,6 +99,9 @@ export const WritingConfigSchema = z.object({
   reviewRetries: z.number().int().min(0).max(10).default(1),
   reviewMode: z.enum(["auto", "manual"]).default("auto"),
   revisionGate: z.enum(["strict", "lenient", "always"]).default("strict"),
+  // Opt-in repair floor: score fails in [floor, 85) with repairable findings
+  // are routed to the bounded revision path instead of failing outright.
+  scoreRepairFloorScore: z.number().int().min(0).max(84).optional(),
 });
 
 export type WritingConfig = z.infer<typeof WritingConfigSchema>;

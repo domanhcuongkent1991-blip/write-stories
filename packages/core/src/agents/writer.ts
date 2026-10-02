@@ -79,7 +79,11 @@ import { readFile, readdir } from "node:fs/promises";
 import { join } from "node:path";
 import { commitAtomicFileSet, type AtomicFileWrite } from "../utils/atomic-file-set.js";
 import { WritingLanguagePreflightError } from "../state/writing-language-preflight.js";
-import { validateVietnameseSurface } from "./vietnamese-surface-validator.js";
+import {
+  readCharacterPronounRules,
+  readPlannerHookLabels,
+  validateVietnameseSurface,
+} from "./vietnamese-surface-validator.js";
 
 import {
   readVolumeMap,
@@ -447,7 +451,10 @@ export class WriterAgent extends BaseAgent {
     const surfaceNormalizedContent = normalizePostWriteSurface(creative.content, resolvedLanguage);
     const surfaceNormalizedWordCount = countChapterLength(surfaceNormalizedContent, resolvedLengthSpec.countingMode);
     const ruleViolations = [
-      ...(writingLanguage === "vi" ? validateVietnameseSurface(creative.content) : []),
+      ...(writingLanguage === "vi" ? validateVietnameseSurface(creative.content, {
+        characterPronouns: await readCharacterPronounRules(bookDir),
+        plannerHookLabels: await readPlannerHookLabels(bookDir),
+      }) : []),
       ...validatePostWrite(surfaceNormalizedContent, genreProfile, bookRules, resolvedLanguage),
       ...detectCrossChapterRepetition(surfaceNormalizedContent, fingerprintChapters, resolvedLanguage),
       ...detectParagraphLengthDrift(surfaceNormalizedContent, fingerprintChapters, resolvedLanguage),

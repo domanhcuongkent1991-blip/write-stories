@@ -30,7 +30,13 @@ import type { RadarSource } from "../agents/radar-source.js";
 import { readGenreProfile } from "../agents/rules-reader.js";
 import { analyzeAITells } from "../agents/ai-tells.js";
 import { analyzeSensitiveWords } from "../agents/sensitive-words.js";
-import { readWorldGlossaryTerms, validateVietnameseSurface } from "../agents/vietnamese-surface-validator.js";
+import {
+  readCharacterPronounRules,
+  readPlannerHookLabels,
+  readWorldGlossaryTerms,
+  toAuditIssuesFromSurface,
+  validateVietnameseSurface,
+} from "../agents/vietnamese-surface-validator.js";
 import { StateManager, type CanonicalChapterProjection } from "../state/manager.js";
 import { archiveChapterVersion, readChapterUserBrief } from "../state/chapter-workspace.js";
 import { MemoryDB, type Fact } from "../state/memory-db.js";
@@ -2679,15 +2685,10 @@ export class PipelineRunner {
       // mirroring the write path's runPostWriteChecks.
       let mergedFindings = afterEvaluation.findings;
       if (book.language === "vi") {
-        const viSurfaceIssues = validateVietnameseSurface(revisedContent, {
+        const viSurfaceIssues = toAuditIssuesFromSurface(validateVietnameseSurface(revisedContent, {
           worldGlossaryTerms: await readWorldGlossaryTerms(bookDir),
-        }).map((v) => ({
-          severity: v.severity === "error" ? "critical" as const : "warning" as const,
-          category: v.rule,
-          ruleId: v.rule,
-          verification: "verified" as const,
-          description: v.description,
-          suggestion: v.suggestion,
+          characterPronouns: await readCharacterPronounRules(bookDir),
+          plannerHookLabels: await readPlannerHookLabels(bookDir),
         }));
         if (viSurfaceIssues.length > 0) {
           mergedFindings = [...mergedFindings, ...viSurfaceIssues];
@@ -3074,6 +3075,8 @@ export class PipelineRunner {
       const surfaceIssues = profile.language === "vi"
         ? validateVietnameseSurface(output.content, {
           worldGlossaryTerms: await readWorldGlossaryTerms(bookDir),
+          characterPronouns: await readCharacterPronounRules(bookDir),
+          plannerHookLabels: await readPlannerHookLabels(bookDir),
         })
         : [];
       const hardBlockers = [
@@ -3736,6 +3739,12 @@ export class PipelineRunner {
       const worldGlossaryTerms = writingLanguage === "vi"
         ? await readWorldGlossaryTerms(bookDir)
         : [];
+      const viCharacterPronouns = writingLanguage === "vi"
+        ? await readCharacterPronounRules(bookDir)
+        : [];
+      const viPlannerHookLabels = writingLanguage === "vi"
+        ? await readPlannerHookLabels(bookDir)
+        : [];
       const auditor = new ContinuityAuditor(this.agentCtxFor("auditor", bookId));
       const reviewResult = await runChapterReviewCycle({
         book: { genre: book.genre },
@@ -3772,19 +3781,11 @@ export class PipelineRunner {
             ? validateHookLedger(memoBody, content)
             : [];
           const viIssues = writingLanguage === "vi"
-            ? validateVietnameseSurface(content, { worldGlossaryTerms }).map((v) => ({
-                severity: v.severity === "error" ? "critical" as const : "warning" as const,
-                category: v.rule,
-                description: v.description,
-                suggestion: v.suggestion,
-                source: "deterministic" as const,
-                ...(v.repairHint ? {
-                  repairScope: "local" as const,
-                  repairTarget: "prose" as const,
-                  verification: "verified" as const,
-                  repairHint: v.repairHint,
-                } : v.verification ? { verification: v.verification } : {}),
-              }))
+            ? toAuditIssuesFromSurface(validateVietnameseSurface(content, {
+              worldGlossaryTerms,
+              characterPronouns: viCharacterPronouns,
+              plannerHookLabels: viPlannerHookLabels,
+            }), { includeSource: true })
             : [];
           return [...baseIssues, ...ledgerIssues, ...viIssues];
         },

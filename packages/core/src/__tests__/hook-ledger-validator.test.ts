@@ -488,6 +488,31 @@ describe("assessMemoHookDebtGovernance", () => {
     expect(assessment).toEqual({ compliant: true, violations: [] });
   });
 
+  it("rejects new opens beyond the remaining hook capacity", () => {
+    const fullBookHooks = (): StoredHook[] =>
+      Array.from({ length: 12 }, (_, index) => debtHook(`H${String(index + 1).padStart(3, "0")}`, { payoffTiming: "mid-arc" }));
+    const memo = `## Hook ledger for this chapter\nopen:\n- [new] fresh thread one || reason\n- [new] fresh thread two || reason\nadvance:\n- H001 "x" → open → progressing`;
+    const assessment = assessMemoHookDebtGovernance(memo, {
+      activeHooks: fullBookHooks(),
+      chapterNumber: 11,
+      hookCapacity: 12,
+    });
+    expect(assessment.compliant).toBe(false);
+    expect(assessment.violations.join(" ")).toContain("capacity");
+  });
+
+  it("allows new opens within the remaining hook capacity", () => {
+    const fullBookHooks = (): StoredHook[] =>
+      Array.from({ length: 11 }, (_, index) => debtHook(`H${String(index + 1).padStart(3, "0")}`, { payoffTiming: "mid-arc" }));
+    const memo = `## Hook ledger for this chapter\nopen:\n- [new] fresh thread || reason\nadvance:\n- H001 "x" → open → progressing`;
+    const assessment = assessMemoHookDebtGovernance(memo, {
+      activeHooks: fullBookHooks(),
+      chapterNumber: 11,
+      hookCapacity: 12,
+    });
+    expect(assessment.compliant).toBe(true);
+  });
+
   it("rejects a high-debt memo that defers every ready hook", () => {
     const memo = `## Hook ledger for this chapter\nopen:\n- [new] fresh mystery || reason\ndefer:\n- H001 "x" → not yet\n- H002 "y" → not yet`;
     const assessment = assessMemoHookDebtGovernance(memo, {

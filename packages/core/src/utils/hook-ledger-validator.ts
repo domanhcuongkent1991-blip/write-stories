@@ -327,6 +327,13 @@ export interface HookDebtGovernanceOptions {
   /** The authoritative live hook snapshot (stable IDs, not memo claims). */
   readonly activeHooks: ReadonlyArray<StoredHook>;
   readonly chapterNumber: number;
+  /**
+   * Book-wide hook capacity (planner hook budget). When set, brand-new opens
+   * beyond `capacity - activeHooks.length` are rejected so an overfull memo
+   * re-plans itself instead of failing at the LLM auditor after the chapter
+   * has already been written.
+   */
+  readonly hookCapacity?: number;
 }
 
 export interface HookDebtGovernanceAssessment {
@@ -376,6 +383,15 @@ export function assessMemoHookDebtGovernance(
     violations.push(
       `Open hook debt is ${debtHooks.length} (>= ${HOOK_DEBT_OPEN_FLOOR}); the memo opens ${ledger.newOpenCount} brand-new hooks but at most ${HOOK_DEBT_MAX_NEW_OPENS} new opens are allowed this chapter.`,
     );
+  }
+
+  if (options.hookCapacity !== undefined && ledger.newOpenCount > 0) {
+    const remaining = Math.max(0, options.hookCapacity - debtHooks.length);
+    if (ledger.newOpenCount > remaining) {
+      violations.push(
+        `Hook budget: ${debtHooks.length} active hooks against capacity ${options.hookCapacity} — only ${remaining} new hook(s) allowed, but the memo opens ${ledger.newOpenCount}. Resolve or advance existing debt instead of opening new threads.`,
+      );
+    }
   }
 
   return { compliant: violations.length === 0, violations };

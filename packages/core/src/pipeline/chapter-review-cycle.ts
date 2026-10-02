@@ -8,6 +8,7 @@ import { countChapterLength, isOutsideHardRange } from "../utils/length-metrics.
 import { computeChapterContentHash, type AuditReAuditTelemetry } from "../audit/chapter-audit-evaluator.js";
 import type { ChapterAuditEvaluation } from "../audit/chapter-audit-evaluator.js";
 import { decideAudit, evaluateRevisionCandidate } from "../audit/audit-policy.js";
+import { toAuditIssuesFromSurface } from "../agents/vietnamese-surface-validator.js";
 import { createAuditRun, type AuditRunV1 } from "../audit/audit-run.js";
 import {
   applyVietnameseLocalRepair,
@@ -260,18 +261,9 @@ export async function runChapterReviewCycle(params: {
   let localRepair: LocalRepairTelemetry | undefined;
 
   // Convert initial postWriteErrors into AuditIssues as fallback when runPostWriteChecks isn't provided.
-  const initialPostWriteIssues: ReadonlyArray<AuditIssue> = params.initialOutput.postWriteErrors.map((violation) => ({
-    severity: "critical" as const,
-    category: violation.rule,
-    description: violation.description,
-    suggestion: violation.suggestion,
-    ...(violation.repairHint ? {
-      repairHint: violation.repairHint,
-      repairScope: "local" as const,
-      repairTarget: "prose" as const,
-      verification: "verified" as const,
-    } : {}),
-  }));
+  const initialPostWriteIssues: ReadonlyArray<AuditIssue> = toAuditIssuesFromSurface(
+    params.initialOutput.postWriteErrors,
+  );
 
   params.assertChapterContentNotEmpty(finalContent, "draft generation");
 

@@ -84,6 +84,9 @@ export interface PlanChapterOutput {
 
 const MEMO_RETRY_LIMIT = 2;
 const MEMO_TEMPERATURE = 0.2;
+// Shared by the prompt budget hint and the deterministic capacity check so the
+// two can never drift apart.
+const HOOK_CAPACITY = 12;
 
 interface MemoGenerationPolicy {
   readonly parseAttemptLimit: number;
@@ -262,6 +265,7 @@ export class PlannerAgent extends BaseAgent {
       const debtGovernance = assessMemoHookDebtGovernance(memo.body, {
         activeHooks: authoritativeMemoHooks,
         chapterNumber: input.chapterNumber,
+        hookCapacity: HOOK_CAPACITY,
       });
       if (!debtGovernance.compliant) {
         const bindMemoContract = (body: string) => bindExpectedHookOperationsV2(body, {
@@ -316,6 +320,7 @@ export class PlannerAgent extends BaseAgent {
         const correctedGovernance = assessMemoHookDebtGovernance(correctedMemoResult.memo.body, {
           activeHooks: authoritativeMemoHooks,
           chapterNumber: input.chapterNumber,
+          hookCapacity: HOOK_CAPACITY,
         });
         if (!correctedGovernance.compliant) {
           throw new HookResolvePreflightError(
@@ -916,7 +921,7 @@ export class PlannerAgent extends BaseAgent {
   }
 
   private renderHookBudget(activeCount: number, language: ScaffoldLanguage): string {
-    const cap = 12;
+    const cap = HOOK_CAPACITY;
     if (activeCount < 10) {
       return language === "en"
         ? `### Hook Budget\n- ${activeCount} active hooks (capacity: ${cap})`

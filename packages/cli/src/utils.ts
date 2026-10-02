@@ -163,6 +163,7 @@ export function buildPipelineConfig(
     defaultLLMConfig: config.llm,
     foundationReviewRetries: config.foundation.reviewRetries,
     writingReviewRetries: config.writing?.reviewRetries ?? 1,
+    scoreRepairFloorScore: config.writing?.scoreRepairFloorScore,
     chapterReviewMode: extra?.chapterReviewMode,
     revisionGate: extra?.revisionGate,
     modelOverrides: config.modelOverrides,
