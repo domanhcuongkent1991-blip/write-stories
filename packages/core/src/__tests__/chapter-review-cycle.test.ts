@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { runChapterReviewCycle } from "../pipeline/chapter-review-cycle.js";
 import { computeChapterContentHash } from "../audit/chapter-audit-evaluator.js";
+import { countChapterLength } from "../utils/length-metrics.js";
 import type { AuditResult, AuditIssue } from "../agents/continuity.js";
 import type { LengthSpec } from "../models/length-governance.js";
 
@@ -801,9 +802,46 @@ describe("runChapterReviewCycle v9", () => {
     expect(result.auditResult.parseFailed).toBeUndefined();
   });
 
-  it("routes a score-fail within the repair floor through one bounded revision", async () => {
+  it("accepts a low-scoring chapter without spending a revision", async () => {
     const original = Array.from({ length: 1150 }, (_, index) => `gốc${index}`).join(" ");
-    const candidate = Array.from({ length: 1150 }, (_, index) => `sửa${index}`).join(" ");
+    const memoDriftIssue: AuditIssue = {
+      severity: "critical",
+      category: "Chapter Memo Drift Check",
+      description: "Cảnh 3 thiếu các trị số đo mà memo đã cam kết.",
+      suggestion: "Bổ sung trị số đo vào cảnh niêm phong.",
+    };
+    // Real observed score for this pipeline: the same chapter scored 90, 80 and
+    // 58 across runs. A score alone must not buy a rewrite.
+    const auditChapter = vi.fn().mockResolvedValue(createAuditResult({
+      passed: false,
+      overallScore: 58,
+      issues: [memoDriftIssue],
+    }));
+    const reviseChapter = vi.fn();
+
+    const result = await runChapterReviewCycle({
+      ...baseParams,
+      bookId: "book-score-advisory",
+      lengthSpec: VI_LENGTH_SPEC,
+      initialOutput: { content: original, wordCount: 1150, postWriteErrors: [] },
+      createReviser: () => ({ reviseChapter }),
+      auditor: { auditChapter },
+      settleRevisionCandidate: async () => ({ valid: true }),
+      scoreRepairFloorScore: 72,
+    });
+
+    expect(reviseChapter).not.toHaveBeenCalled();
+    expect(auditChapter).toHaveBeenCalledTimes(1);
+    expect(result.auditResult.decision).toBe("pass");
+    expect(result.auditResult.overallScore).toBe(58);
+    expect(result.finalContent).toBe(original);
+  });
+
+  it("still spends the bounded revision on a verified critical finding", async () => {
+    // In-range prose: an out-of-range draft adds its own verified
+    // length.hard-range blocker and would mask what this test is about.
+    const original = Array.from({ length: 260 }, (_, index) => `gốc ${index} nội dung chương.`).join(" ");
+    const candidate = Array.from({ length: 260 }, (_, index) => `sửa ${index} nội dung chương.`).join(" ");
     const memoDriftIssue: AuditIssue = {
       severity: "critical",
       category: "Chapter Memo Drift Check",
@@ -815,6 +853,8 @@ describe("runChapterReviewCycle v9", () => {
         passed: false,
         overallScore: 82,
         issues: [memoDriftIssue],
+        // Deterministic bucket: this is the finding that actually blocks.
+        hostFindings: [memoDriftIssue],
       }))
       .mockResolvedValueOnce(createAuditResult({ passed: true, overallScore: 91, issues: [] }));
     const reviseChapter = vi.fn().mockResolvedValue({
@@ -826,47 +866,18 @@ describe("runChapterReviewCycle v9", () => {
 
     const result = await runChapterReviewCycle({
       ...baseParams,
-      bookId: "book-score-repair",
+      bookId: "book-verified-repair",
       lengthSpec: VI_LENGTH_SPEC,
-      initialOutput: { content: original, wordCount: 1150, postWriteErrors: [] },
+      initialOutput: { content: original, wordCount: countChapterLength(original, VI_LENGTH_SPEC.countingMode), postWriteErrors: [] },
       createReviser: () => ({ reviseChapter }),
       auditor: { auditChapter },
       settleRevisionCandidate: async () => ({ valid: true }),
-      scoreRepairFloorScore: 75,
     });
 
     expect(reviseChapter).toHaveBeenCalledTimes(1);
     expect(auditChapter).toHaveBeenCalledTimes(2);
     expect(result.finalContent).toBe(candidate);
     expect(result.auditResult.decision).toBe("pass");
-  });
-
-  it("keeps a score-fail outright when the repair floor flag is not set", async () => {
-    const original = Array.from({ length: 1150 }, (_, index) => `goc${index}`).join(" ");
-    const memoDriftIssue: AuditIssue = {
-      severity: "critical",
-      category: "Chapter Memo Drift Check",
-      description: "Cảnh 3 thiếu các trị số đo mà memo đã cam kết.",
-      suggestion: "Bổ sung trị số đo vào cảnh niêm phong.",
-    };
-    const auditChapter = vi.fn().mockResolvedValue(createAuditResult({
-      passed: false,
-      overallScore: 82,
-      issues: [memoDriftIssue],
-    }));
-    const reviseChapter = vi.fn();
-
-    const result = await runChapterReviewCycle({
-      ...baseParams,
-      lengthSpec: VI_LENGTH_SPEC,
-      initialOutput: { content: original, wordCount: 1150, postWriteErrors: [] },
-      createReviser: () => ({ reviseChapter }),
-      auditor: { auditChapter },
-    });
-
-    expect(reviseChapter).not.toHaveBeenCalled();
-    expect(result.auditResult.decision).toBe("fail");
-    expect(result.finalContent).toBe(original);
   });
 
   it("returns initial and post-revision audit runs with one shared attempt identity", async () => {
@@ -1072,21 +1083,27 @@ describe("runChapterReviewCycle v9", () => {
   });
 
   it("runs the configured two repair iterations and rejects non-passing candidates", async () => {
+    // Each round carries a verified blocker, so the loop still runs to its
+    // configured bound and the last candidate is still refused.
+    const continuityIssue: AuditIssue = { severity: "critical", category: "continuity", description: "broken", suggestion: "fix" };
     const auditChapter = vi.fn()
       .mockResolvedValueOnce(createAuditResult({
         passed: false,
         overallScore: 70,
-        issues: [{ severity: "critical", category: "continuity", description: "broken", suggestion: "fix" }],
+        issues: [continuityIssue],
+        hostFindings: [continuityIssue],
       }))
       .mockResolvedValueOnce(createAuditResult({
         passed: false,
         overallScore: 80,
         issues: [{ severity: "warning", category: "pacing", description: "slow", suggestion: "trim" }],
+        hostFindings: [{ ...continuityIssue, description: "still broken", suggestion: "fix" }],
       }))
       .mockResolvedValueOnce(createAuditResult({
         passed: false,
         overallScore: 76,
         issues: [{ severity: "warning", category: "pacing", description: "still slow", suggestion: "trim more" }],
+        hostFindings: [{ ...continuityIssue, description: "still broken again", suggestion: "fix" }],
       }));
 
     const reviseChapter = vi.fn()
@@ -1172,16 +1189,21 @@ describe("runChapterReviewCycle v9", () => {
   });
 
   it("defaults to one automatic repair pass", async () => {
+    // The revision loop is now entered by a verified blocker, so the critical
+    // travels in hostFindings (deterministic) rather than as an LLM issue.
+    const continuityIssue: AuditIssue = { severity: "critical", category: "continuity", description: "broken", suggestion: "fix" };
     const auditChapter = vi.fn()
       .mockResolvedValueOnce(createAuditResult({
         passed: false,
         overallScore: 70,
-        issues: [{ severity: "critical", category: "continuity", description: "broken", suggestion: "fix" }],
+        issues: [continuityIssue],
+        hostFindings: [continuityIssue],
       }))
       .mockResolvedValueOnce(createAuditResult({
         passed: false,
         overallScore: 80,
         issues: [{ severity: "warning", category: "pacing", description: "slow", suggestion: "trim" }],
+        hostFindings: [{ ...continuityIssue, description: "still broken", suggestion: "fix again" }],
       }))
       .mockResolvedValueOnce(createAuditResult({
         passed: true,

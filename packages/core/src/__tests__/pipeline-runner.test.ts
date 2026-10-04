@@ -4653,6 +4653,10 @@ describe("PipelineRunner", () => {
           issues: [CRITICAL_ISSUE],
           summary: "needs revision",
           overallScore: 40,
+          // hostFindings enter the deterministic bucket, so they carry the
+          // verified critical that keeps this chapter fail-closed. A critical
+          // raised by the LLM alone is unverified and no longer blocks.
+          hostFindings: [CRITICAL_ISSUE],
         }),
       )
       .mockResolvedValueOnce(
@@ -4661,6 +4665,10 @@ describe("PipelineRunner", () => {
           issues: [],
           summary: "",
           overallScore: 40,
+          // A fail verdict the round genuinely reached, but did not report in
+          // `issues`. That gap is what this test exercises — without a blocker
+          // the round simply passes. Same finding, so only one is restored.
+          hostFindings: [CRITICAL_ISSUE],
         }),
       );
     vi.spyOn(ReviserAgent.prototype, "reviseChapter").mockResolvedValue(
@@ -4681,12 +4689,17 @@ describe("PipelineRunner", () => {
       const result = await runner.writeNextChapter(bookId, 220);
       const savedIndex = await state.loadChapterIndex(bookId);
 
+      // The re-audit failed without reporting a finding of its own, so the earlier
+      // round's evidence is restored rather than lost.
       expect(result.status).toBe("audit-failed");
       expect(result.auditResult.summary).toBe("needs revision");
-      expect(result.auditResult.issues).toEqual([
-        expect.objectContaining(CRITICAL_ISSUE),
-      ]);
+      expect(result.auditResult.issues).toEqual(
+        expect.arrayContaining([expect.objectContaining(CRITICAL_ISSUE)]),
+      );
+      // A corroborated finding appears twice: once from the deterministic host
+      // bucket and once from the LLM bucket that matched its fingerprint.
       expect(savedIndex[0]?.auditIssues).toEqual([
+        `[critical] ${CRITICAL_ISSUE.description}`,
         `[critical] ${CRITICAL_ISSUE.description}`,
       ]);
     } finally {
@@ -4938,9 +4951,23 @@ describe("PipelineRunner", () => {
     vi.spyOn(WriterAgent.prototype, "writeChapter").mockResolvedValue(
       createWriterOutput({ content: originalDraft, wordCount: originalDraft.length }),
     );
+    const candidateBlocker: AuditIssue = {
+      severity: "critical",
+      category: "continuity",
+      description: "候选稿与既有状态冲突。",
+      suggestion: "修正候选稿。",
+    };
     vi.spyOn(ContinuityAuditor.prototype, "auditChapter")
       .mockResolvedValueOnce(createAuditResult({ passed: true, issues: [], summary: "initial", overallScore: 95 }))
-      .mockResolvedValueOnce(createAuditResult({ passed: false, issues: [], summary: "candidate rejected", overallScore: 80 }));
+      // The shared gate is deterministic now, so a candidate is only refused
+      // when it carries a verified blocker — not merely for a low score.
+      .mockResolvedValueOnce(createAuditResult({
+        passed: false,
+        issues: [candidateBlocker],
+        hostFindings: [candidateBlocker],
+        summary: "candidate rejected",
+        overallScore: 80,
+      }));
     vi.spyOn(ReviserAgent.prototype, "reviseChapter").mockResolvedValue(
       createReviseOutput({ revisedContent: rejectedCandidate, wordCount: rejectedCandidate.length }),
     );
@@ -5078,7 +5105,14 @@ describe("PipelineRunner", () => {
       createWriterOutput({ content: draftBody, wordCount: draftBody.length }),
     );
     const auditChapter = vi.spyOn(ContinuityAuditor.prototype, "auditChapter").mockResolvedValue(
-      createAuditResult({ passed: false, overallScore: 40, issues: [CRITICAL_ISSUE] }),
+      createAuditResult({
+        passed: false,
+        overallScore: 40,
+        issues: [CRITICAL_ISSUE],
+        // Verified via the deterministic bucket: a score alone must not be able
+        // to fail a chapter, and an LLM-only critical is unverified.
+        hostFindings: [CRITICAL_ISSUE],
+      }),
     );
     const reviseChapter = vi.spyOn(ReviserAgent.prototype, "reviseChapter");
 
@@ -8223,6 +8257,15 @@ describe("PipelineRunner", () => {
     suggestion: "压缩一行解释。",
   };
 
+  // A deterministic blocker: the shared gate now turns on verified critical
+  // findings, so this is what "below the gate" has to mean.
+  const GATE_BLOCKING_ISSUE: AuditIssue = {
+    severity: "critical",
+    category: "continuity",
+    description: "候选稿仍与上一章状态矛盾。",
+    suggestion: "修正状态冲突。",
+  };
+
   it("applies the revised chapter with a state-degraded baseline when settlement cannot validate", async () => {
     const { root, runner, state, bookId, chaptersDir, revisedBody } = await createRevisionGateFixture("always");
     const storyDir = join(state.bookDir(bookId), "story");
@@ -8274,9 +8317,24 @@ describe("PipelineRunner", () => {
     async (revisionGate) => {
     const { root, runner, bookId, chaptersDir, revisedBody } = await createRevisionGateFixture(revisionGate);
 
+    // "Below the shared gate" is now a verified critical finding, not a low
+    // score: the shared gate is deterministic. A warning-only candidate would
+    // legitimately clear it under any revisionGate.
     vi.spyOn(ContinuityAuditor.prototype, "auditChapter")
-      .mockResolvedValueOnce(createAuditResult({ passed: false, issues: [GATE_WARNING_ISSUE], summary: "needs revision", overallScore: 80 }))
-      .mockResolvedValueOnce(createAuditResult({ passed: false, issues: [GATE_WARNING_ISSUE], summary: "still weak", overallScore: 80 }));
+      .mockResolvedValueOnce(createAuditResult({
+        passed: false,
+        issues: [GATE_BLOCKING_ISSUE],
+        hostFindings: [GATE_BLOCKING_ISSUE],
+        summary: "needs revision",
+        overallScore: 80,
+      }))
+      .mockResolvedValueOnce(createAuditResult({
+        passed: false,
+        issues: [GATE_BLOCKING_ISSUE],
+        hostFindings: [GATE_BLOCKING_ISSUE],
+        summary: "still broken",
+        overallScore: 80,
+      }));
 
     try {
       const result = await runner.reviseDraft(bookId, 1);
