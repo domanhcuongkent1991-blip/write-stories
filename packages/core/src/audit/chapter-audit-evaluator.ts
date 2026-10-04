@@ -204,21 +204,41 @@ export function evaluateChapterAudit(input: ChapterAuditEvaluationInput): Chapte
   const deterministic = suppliedDeterministic.map((issue, index) => normalizedIssue(issue, "deterministic", contentHash, index));
   const state = input.stateFindings.map((issue, index) => normalizedIssue(issue, "state", contentHash, deterministic.length + index));
   const corroboratedFingerprints = new Set([...deterministic, ...state].map((issue) => issue.fingerprint));
+  // A corroborated LLM finding inherits the host finding's repairTarget. Without
+  // this it stays `undefined` while carrying `verified`, and the policy treats a
+  // missing repairTarget as unrepairable — so a chapter whose finding the host
+  // had already scoped to "prose" would fail closed for the wrong reason.
+  const hostRepairTargetByFingerprint = new Map<string, NonNullable<AuditIssue["repairTarget"]>>();
+  for (const issue of [...deterministic, ...state]) {
+    if (issue.fingerprint !== undefined && issue.repairTarget !== undefined) {
+      hostRepairTargetByFingerprint.set(issue.fingerprint, issue.repairTarget);
+    }
+  }
   const llm = input.llmAudit.issues.map((issue, index) => {
     const normalized = normalizedIssue(issue, "llm", contentHash, deterministic.length + state.length + index);
-    return corroboratedFingerprints.has(normalized.fingerprint)
-      ? { ...normalized, verification: "verified" as const }
-      : normalized;
+    if (normalized.fingerprint === undefined || !corroboratedFingerprints.has(normalized.fingerprint)) return normalized;
+    const hostRepairTarget = hostRepairTargetByFingerprint.get(normalized.fingerprint);
+    return {
+      ...normalized,
+      verification: "verified" as const,
+      ...(normalized.repairTarget === undefined && hostRepairTarget !== undefined
+        ? { repairTarget: hostRepairTarget }
+        : {}),
+    };
   });
   const findings = [...deterministic, ...state, ...llm];
   const parseFailed = input.llmAudit.parseFailed === true;
+  // Mirror of the policy verdict, kept in sync with decideAudit: a verified
+  // critical finding is the only deterministic blocker. The LLM score is not a
+  // gate here — decideAudit owns the final decision, including the opt-in
+  // repair-floor routing.
   const decision: AuditDecision = parseFailed
     ? "inconclusive"
     : input.llmAudit.overallScore === undefined
       ? "inconclusive"
       : findings.some((issue) => issue.verification === "verified" && issue.severity === "critical")
         ? "repair-required"
-        : input.llmAudit.overallScore >= 85 ? "pass" : "fail";
+        : "pass";
 
   return {
     decision,
