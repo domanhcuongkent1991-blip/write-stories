@@ -320,7 +320,7 @@ export function buildImportFoundationSource(
 }
 
 /** Legacy revisionGate values are parse-compatible diagnostics only. */
-const SHARED_REVISION_GATE_STANDARD = "Legacy revisionGate is compatibility/diagnostic only. Every mode uses the shared candidate gate: score >= 85, no verified blockers, valid settled state, and an in-range hard length.";
+const SHARED_REVISION_GATE_STANDARD = "Legacy revisionGate is compatibility/diagnostic only. Every mode uses the shared candidate gate: no verified critical blockers, valid settled state, and an in-range hard length. The LLM score is advisory and does not gate acceptance.";
 
 export interface PipelineConfig {
   readonly client: LLMClient;
@@ -5994,7 +5994,15 @@ ${matrix}`,
   }
 
   private restoreLostAuditIssues(previous: AuditResult, next: AuditResult): AuditResult {
-    if (next.passed || next.issues.length > 0 || previous.issues.length === 0) {
+    if (next.issues.length > 0 || previous.issues.length === 0) {
+      return next;
+    }
+
+    // A round that cleared the gate on its own merits leaves `next` untouched:
+    // its empty issue list is the real, re-verified result, and re-attaching the
+    // previous round's findings would misreport it. Only a round that produced
+    // no findings at all after a failing one is treated as evidence loss.
+    if (next.decision === "pass") {
       return next;
     }
 

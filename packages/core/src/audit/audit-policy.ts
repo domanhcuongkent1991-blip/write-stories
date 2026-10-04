@@ -12,13 +12,21 @@ export interface AuditPolicyContext {
   readonly maxRevisionAttempts: number;
   readonly legacyRevisionGate?: "strict" | "lenient" | "always";
   /**
-   * Opt-in score-fail repair floor: a fail verdict with no verified blockers
-   * whose overall score falls in [floor, 85) is routed to the bounded repair
-   * path instead of failing outright, as long as repairable findings exist
-   * and a revision budget remains. Undefined (or >= 85) disables the routing.
+   * @deprecated Score-based repair routing was removed: the self-reported score
+   * no longer gates any verdict. The field is still accepted so existing
+   * `inkos.json` files keep validating, but it no longer influences decisions.
    */
   readonly scoreRepairFloorScore?: number;
 }
+
+/**
+ * Advisory-only quality gate. The LLM self-reported score is retained for
+ * reporting and for the opt-in repair-floor routing below, but it no longer
+ * decides pass/fail: with zero verified critical blockers a chapter passes.
+ * Scores vary far more between identical runs than the gap this threshold
+ * measures, so gating on it looped chapters indefinitely.
+ */
+export const PASS_MIN_SCORE = 85;
 
 export function normalizeLegacyRevisionGate(gate: AuditPolicyContext["legacyRevisionGate"]): "strict" | "lenient" | undefined {
   if (gate === "always") return "strict";
@@ -39,24 +47,12 @@ export function decideAudit(
 
   const blockers = evaluation.findings.filter((finding) => finding.verification === "verified" && finding.severity === "critical");
   if (blockers.length === 0) {
-    if (evaluation.overallScore >= 85) return withDecision(evaluation, "pass");
-    const floor = context.scoreRepairFloorScore;
-    // Mirror the review cycle's repair-issue filter: pure length telemetry is
-    // never handed to the reviser, and info commentary is not an actionable
-    // repair instruction. Without an actionable finding a rewrite would be
-    // blind, so the score-fail stays a fail.
-    const scoreRepairEligible = floor !== undefined
-      && floor < 85
-      && evaluation.overallScore >= floor
-      && evaluation.findings.some((finding) =>
-        (finding.severity === "critical" || finding.severity === "warning")
-        && finding.ruleId !== "length.soft-range");
-    if (scoreRepairEligible) {
-      const scoreRevisionBudget = context.autoRevisionAllowed
-        && context.revisionAttempts < Math.min(1, context.maxRevisionAttempts);
-      return scoreRevisionBudget ? withDecision(evaluation, "repair-required") : withDecision(evaluation, "fail");
-    }
-    return withDecision(evaluation, "fail");
+    // Deterministic contract: no verified critical finding means the chapter is
+    // structurally sound. The LLM score stays advisory — reported for the
+    // operator, never a gate. Routing low-scoring chapters into a repair loop
+    // on score alone only added oscillation, because the score swings by more
+    // between identical runs than the gap being measured.
+    return withDecision(evaluation, "pass");
   }
   if (blockers.some((finding) => finding.repairTarget === undefined || finding.evidence?.contentHash !== evaluation.contentHash)) {
     return withDecision(evaluation, "fail");
@@ -77,9 +73,12 @@ export function evaluateRevisionCandidate(input: {
   readonly afterContentHash: string;
   readonly stateSettlementValid: boolean;
 }): RevisionCandidateResult {
-  if (!input.stateSettlementValid) return { accepted: false, rejectionReason: "state settlement is invalid" };
+  if (input.stateSettlementValid === false) return { accepted: false, rejectionReason: "state settlement is invalid" };
   if (input.beforeContentHash === input.afterContentHash) return { accepted: false, rejectionReason: "candidate content is unchanged" };
-  if (input.after.decision !== "pass" || input.after.passed !== true || (input.after.overallScore ?? 0) < 85) {
+  // The candidate must clear the same deterministic bar a canonical chapter has
+  // to clear: `after.decision` is already "pass" only when it carries no
+  // verified critical blocker, so no separate score test is applied here.
+  if (input.after.decision !== "pass" || input.after.passed !== true) {
     return { accepted: false, rejectionReason: "candidate did not pass the acceptance gate" };
   }
   const beforeHasHardLengthBlocker = input.before.findings.some((finding) =>
@@ -104,7 +103,6 @@ export function evaluateRevisionCandidate(input: {
   return { accepted: true };
 }
 
-export const MINOR_AUDIT_ACCEPTANCE_MIN_SCORE = 90;
 export const MINOR_AUDIT_ACCEPTANCE_MAX_ISSUES = 1;
 export const MINOR_AUDIT_ACCEPTANCE_CATEGORIES: ReadonlyArray<string> = Object.freeze([
   "chapter memo drift check",
@@ -127,11 +125,11 @@ interface MinorAcceptanceAuditLike {
 
 /**
  * Minor-audit acceptance: a fail verdict whose blocking issues are all small,
- * human-fixable prose notes (memo drift / POV / transition), with a high
- * score and at most one such issue, may be accepted as `pass` with the notes
- * carried on the result. Everything else stays fail-closed: parse failures,
- * inconclusive verdicts, Hook Check/state/surface/length issues, scores below
- * the floor, or more than one blocking issue never qualify.
+ * human-fixable prose notes (memo drift / POV / transition) and at most one such
+ * issue may be accepted as `pass` with the notes carried on the result. The
+ * score is reported but no longer gates the decision. Everything else stays
+ * fail-closed: parse failures, inconclusive verdicts, Hook Check/state/surface/
+ * length issues, or more than one blocking issue never qualify.
  */
 export function applyMinorAuditAcceptance<T extends MinorAcceptanceAuditLike>(
   auditResult: T,
@@ -140,7 +138,6 @@ export function applyMinorAuditAcceptance<T extends MinorAcceptanceAuditLike>(
   if (!options.enabled || auditResult.passed || auditResult.parseFailed === true) return auditResult;
   if (auditResult.decision !== "fail" && auditResult.decision !== "repair-required") return auditResult;
   const score = auditResult.overallScore;
-  if (typeof score !== "number" || score < MINOR_AUDIT_ACCEPTANCE_MIN_SCORE) return auditResult;
   const blocking = auditResult.issues.filter((issue) => issue.severity === "critical" || issue.severity === "error");
   if (blocking.length === 0 || blocking.length > MINOR_AUDIT_ACCEPTANCE_MAX_ISSUES) return auditResult;
   const offPolicy = blocking.filter((issue) => {
@@ -152,7 +149,7 @@ export function applyMinorAuditAcceptance<T extends MinorAcceptanceAuditLike>(
   const acceptanceNote = {
     severity: "warning" as const,
     category: "minor-acceptance",
-    description: `Chapter accepted under the minor-audit acceptance policy (score ${score}): ${notes.join(" | ")}`,
+    description: `Chapter accepted under the minor-audit acceptance policy (score ${score ?? "n/a"}): ${notes.join(" | ")}`,
     suggestion: "Human review recommended; the noted issues are non-blocking prose-level notes.",
   };
   return {

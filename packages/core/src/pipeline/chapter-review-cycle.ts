@@ -54,7 +54,6 @@ const DEFAULT_MAX_REVIEW_ITERATIONS = 1;
 // Hard ceiling so a configured retry budget can never run away; must be >=
 // the default CLI writing.reviewRetries (2) for the configured budget to apply.
 const MAX_REVIEW_ITERATIONS_CAP = 2;
-const PASS_SCORE_THRESHOLD = 85;
 const VIETNAMESE_SPELLING_SIGNAL_RE = /(?:vietnamese spelling|spelling|typo|orthograph|chính tả|lỗi\s+(?:lặp từ\s+)?đánh máy|đánh máy)/iu;
 
 function bindVietnameseAuditorSpellingFindings(
@@ -423,7 +422,6 @@ export async function runChapterReviewCycle(params: {
   const isPassed = (assessment: { auditResult: AuditResult; score: number; lengthInRange: boolean }): boolean =>
     assessment.auditResult.decision === "pass"
     && assessment.auditResult.passed
-    && assessment.score >= PASS_SCORE_THRESHOLD
     && assessment.lengthInRange;
 
   // ---------------------------------------------------------------------------
