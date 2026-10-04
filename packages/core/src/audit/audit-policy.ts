@@ -19,15 +19,6 @@ export interface AuditPolicyContext {
   readonly scoreRepairFloorScore?: number;
 }
 
-/**
- * Advisory-only quality gate. The LLM self-reported score is retained for
- * reporting and for the opt-in repair-floor routing below, but it no longer
- * decides pass/fail: with zero verified critical blockers a chapter passes.
- * Scores vary far more between identical runs than the gap this threshold
- * measures, so gating on it looped chapters indefinitely.
- */
-export const PASS_MIN_SCORE = 85;
-
 export function normalizeLegacyRevisionGate(gate: AuditPolicyContext["legacyRevisionGate"]): "strict" | "lenient" | undefined {
   if (gate === "always") return "strict";
   return gate;
