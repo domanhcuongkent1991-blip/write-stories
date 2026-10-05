@@ -242,15 +242,17 @@ describe("validateHookLedger", () => {
     expect(violations).toEqual([]);
   });
 
-  it("flags a warning for each un-echoed advance/resolve entry", () => {
-    // Only 胖虎 (H007) present; 雷架/焦痕 (H012) and 杂役/腰牌 (H003) missing.
+  it("advises on un-echoed advance entries and escalates un-echoed resolve entries", () => {
+    // Only 胖虎 (H007) present; 雷架/焦痕 (H012) advance missing, 杂役/腰牌 (H003) resolve un-echoed.
     const draft = "林秋只摸出胖虎借条，其他都没写。";
     const violations = validateHookLedger(ZH_MEMO, draft);
     expect(violations).toHaveLength(2);
-    expect(violations.every((v) => v.severity === "warning")).toBe(true);
-    expect(violations.every((v) => v.verification === "unverified")).toBe(true);
-    expect(violations.map((v) => v.description).join(" ")).toContain("H012");
-    expect(violations.map((v) => v.description).join(" ")).toContain("H003");
+    const h012 = violations.find((v) => v.description.includes("H012"))!;
+    expect(h012.severity).toBe("warning");
+    expect(h012.verification).toBe("unverified");
+    const h003 = violations.find((v) => v.description.includes("H003"))!;
+    expect(h003.severity).toBe("critical");
+    expect(h003.verification).toBe("verified");
   });
 
   it("does not turn semantic near-misses into critical failures", () => {
@@ -621,5 +623,56 @@ describe("canonicalizeMemoHookIds", () => {
     const memo = `## Current task\nThe operational-mystery-quy-khi appears.\n\n## Hook ledger for this chapter\nadvance:\n- H001 "x" → pressured`;
     const canonical = canonicalizeMemoHookIds(memo, [hook("H001"), hook("operational-mystery-quy-khi-khi")]);
     expect(canonical).toBe(memo);
+  });
+});
+
+describe("validateHookLedger — resolve without prose evidence escalates", () => {
+  const MEMO = `## 本章 hook 账
+resolve:
+- H003 "杂役腰牌" → 林秋主动摘下
+- H014 "Frostwall token" → xác nhận người nhận từng bước vào trạm
+
+advance:
+- H007 "胖虎借条" → pressured
+`;
+
+  it("escalates a resolve commitment the draft never echoes to critical/verified", () => {
+    const draft = "Lâm Hàn xếp sổ lại và rời phòng hồ sơ khi chuông đổi ca vang lên.";
+    const violations = validateHookLedger(MEMO, draft);
+    const resolveViolations = violations.filter((v) => v.severity === "critical");
+    expect(resolveViolations).toHaveLength(2);
+    for (const violation of resolveViolations) {
+      expect(violation.verification).toBe("verified");
+      expect(violation.repairTarget).toBe("prose");
+      expect(violation.evidence?.contentHash).toMatch(/^[0-9a-f]{64}$/);
+      expect(violation.description).toMatch(/H003|H014/);
+    }
+  });
+
+  it("keeps an un-echoed advance commitment advisory (warning, unverified)", () => {
+    const draft = "Lâm Hàn xếp sổ lại và rời phòng hồ sơ khi chuông đổi ca vang lên.";
+    const violations = validateHookLedger(MEMO, draft);
+    const advanceViolations = violations.filter((v) => /H007/.test(v.description));
+    expect(advanceViolations).toHaveLength(1);
+    expect(advanceViolations[0]?.severity).toBe("warning");
+    expect(advanceViolations[0]?.verification).toBe("unverified");
+  });
+
+  it("does not flag a resolve whose descriptor keyword appears in the draft", () => {
+    const draft = "Lâm Hàn tháo thẻ Frostwall token khỏi móc và đặt nó lên bàn đối chiếu.";
+    const violations = validateHookLedger(MEMO, draft);
+    expect(violations.filter((v) => v.severity === "critical" && /H014/.test(v.description))).toHaveLength(0);
+  });
+
+  it("keeps a resolve with no measurable keywords advisory (VI descriptor without quotes)", () => {
+    const memo = `## 本章 hook 账
+resolve:
+- H021 nợ mười lăm tên → chốt sổ
+`;
+    const draft = "Lâm Hàn chốt sổ rồi gấp giấy lại.";
+    const violations = validateHookLedger(memo, draft);
+    const h021 = violations.filter((v) => /H021/.test(v.description));
+    expect(h021).toHaveLength(1);
+    expect(h021[0]?.severity).toBe("warning");
   });
 });

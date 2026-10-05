@@ -3745,6 +3745,12 @@ export class PipelineRunner {
       const viPlannerHookLabels = writingLanguage === "vi"
         ? await readPlannerHookLabels(bookDir)
         : [];
+      const knownProperNames = writingLanguage === "vi"
+        ? [
+          ...worldGlossaryTerms,
+          ...viCharacterPronouns.map((rule) => rule.name.replace(/\s*[(（][^)）]*[)）]\s*$/u, "").trim()),
+        ]
+        : [];
       const auditor = new ContinuityAuditor(this.agentCtxFor("auditor", bookId));
       const reviewResult = await runChapterReviewCycle({
         book: { genre: book.genre },
@@ -3757,6 +3763,7 @@ export class PipelineRunner {
         initialUsage: totalUsage,
         initialStateFindings,
         initialTruthFileOverrides,
+        knownProperNames,
         createReviser: () => new ReviserAgent(this.agentCtxFor("reviser", bookId)),
         auditor,
         normalizePostWriteSurface: (chapterContent) =>

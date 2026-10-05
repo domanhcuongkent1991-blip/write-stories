@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { runChapterReviewCycle } from "../pipeline/chapter-review-cycle.js";
+import { bindVietnameseAuditorProperNounFindings, runChapterReviewCycle } from "../pipeline/chapter-review-cycle.js";
 import { computeChapterContentHash } from "../audit/chapter-audit-evaluator.js";
 import { countChapterLength } from "../utils/length-metrics.js";
 import type { AuditResult, AuditIssue } from "../agents/continuity.js";
@@ -1397,5 +1397,82 @@ describe("runChapterReviewCycle v9", () => {
     expect(auditChapter).toHaveBeenCalledTimes(1);
     expect(result.finalContent).toBe(VI_CANONICAL_CHAPTER);
     expect(result.revised).toBe(false);
+  });
+});
+
+describe("bindVietnameseAuditorProperNounFindings", () => {
+  const KNOWN_NAMES = ["Lục Cảnh", "Ngụy Vinh", "Frostwall"];
+  const CONTENT = "Phiếu cấp nhiệt ghi nguồn rút từ Lục Giới, kho ký ức nằm dưới Frostwall của Lục Cảnh.";
+
+  const properNounIssue = (overrides: Partial<Record<string, unknown>> = {}): AuditIssue => ({
+    severity: "critical",
+    category: "Proper Noun Check",
+    description:
+      "The chapter identifies the memory store as “Lục Giới,” while the established hook and state use “Lục Cảnh.” This changes a protected proper name.",
+    suggestion: "Dùng đúng tên chuẩn trong sổ tay.",
+    source: "llm",
+    verification: "unverified",
+    ...overrides,
+  } as AuditIssue);
+
+  it("binds a quoted name pair onto verified evidence when the target exists in the chapter", () => {
+    const { findings } = bindVietnameseAuditorProperNounFindings(
+      CONTENT,
+      [properNounIssue()],
+      KNOWN_NAMES,
+    );
+    expect(findings).toHaveLength(1);
+    const bound = findings[0]!;
+    expect(bound.severity).toBe("critical");
+    expect(bound.verification).toBe("verified");
+    expect(bound.ruleId).toBe("vi-auditor-proper-name");
+    expect(bound.repairHint?.kind).toBe("exact-replacement");
+    expect(bound.repairHint?.targetText).toBe("Lục Giới");
+    expect(bound.repairHint?.replacementText).toBe("Lục Cảnh");
+    expect(bound.evidence?.contentHash).toMatch(/^[0-9a-f]{64}$/);
+  });
+
+  it("skips the binding when both quoted tokens are known names", () => {
+    const { findings } = bindVietnameseAuditorProperNounFindings(
+      CONTENT,
+      [properNounIssue({
+        description: "The chapter uses “Lục Cảnh” and “Frostwall” consistently.",
+      })],
+      KNOWN_NAMES,
+    );
+    expect(findings).toHaveLength(0);
+  });
+
+  it("skips the binding when the claimed wrong name is absent from the chapter", () => {
+    const { findings } = bindVietnameseAuditorProperNounFindings(
+      CONTENT,
+      [properNounIssue({
+        description: "The chapter should have said “Lục Cảnh” instead of “Lục Địa.”",
+      })],
+      KNOWN_NAMES,
+    );
+    expect(findings).toHaveLength(0);
+  });
+
+  it("does not double-bind issues already covered by the spelling signal", () => {
+    const { findings } = bindVietnameseAuditorProperNounFindings(
+      CONTENT,
+      [properNounIssue({
+        category: "spelling",
+        description: "Lỗi chính tả: “Lục Giới” phải là “Lục Cảnh.”",
+        repairHint: { kind: "exact-replacement", targetText: "Lục Giới", replacementText: "Lục Cảnh", occurrenceIndexes: [1], context: "" },
+      })],
+      KNOWN_NAMES,
+    );
+    expect(findings).toHaveLength(0);
+  });
+
+  it("ignores informational lines without a name claim", () => {
+    const { findings } = bindVietnameseAuditorProperNounFindings(
+      CONTENT,
+      [properNounIssue({ severity: "info" })],
+      KNOWN_NAMES,
+    );
+    expect(findings).toHaveLength(0);
   });
 });

@@ -1,4 +1,5 @@
 import type { AuditIssue } from "../agents/continuity.js";
+import { computeChapterContentHash } from "../audit/chapter-audit-evaluator.js";
 import { HookRecordSchema, type HookOps, type HookRecord } from "../models/runtime-state.js";
 import type { StoredHook } from "../state/memory-db.js";
 import {
@@ -37,6 +38,15 @@ export type HookLedgerViolation = AuditIssue;
  * It keeps its historical Chinese text on purpose.
  */
 const HOOK_LEDGER_SEMANTIC_REVIEW_RULE_ID = "hook 账需语义复核";
+
+/**
+ * Rule id for the escalated resolve-evidence check. A resolve commitment the
+ * draft never echoes rips a hook out of the ledger without prose proof — the
+ * hook is gone forever and the debt quietly stays open (G1 ch20: four hooks
+ * declared resolved, none evidenced, chapter passed at 90). Distinct id so
+ * persisted runs can tell the blocker apart from the advisory.
+ */
+const HOOK_RESOLVE_EVIDENCE_RULE_ID = "hook-resolve-evidence";
 
 export interface HookLedgerEntry {
   readonly id: string;
@@ -212,8 +222,18 @@ export function validateHookLedger(
   const violations: HookLedgerViolation[] = [];
 
   // Evidence check for everything the memo committed to land in prose.
-  const committed = dedupeById([...ledger.advance, ...ledger.resolve]);
-  for (const entry of committed) {
+  // Advance commitments stay advisory: the keyword echo is a heuristic and a
+  // miss usually means the prose used different words for the same beat.
+  // RESOLVE commitments are different — a resolve rips the hook out of the
+  // ledger permanently, so a resolve with zero echo is a state-breaking lie,
+  // not a wording mismatch. When the descriptor yields measurable keywords
+  // and none appear in the draft, that is a verified critical blocker with
+  // bound content evidence. Descriptors with no measurable keywords (bare id
+  // or a fully accented Vietnamese descriptor) stay advisory: absence of a
+  // measurable keyword proves nothing.
+  const committedAdvances = dedupeById(ledger.advance);
+  const committedResolves = dedupeById(ledger.resolve);
+  for (const entry of committedAdvances) {
     if (!draftEchoesEntry(draftContent, entry)) {
       violations.push({
         severity: "warning",
@@ -226,6 +246,33 @@ export function validateHookLedger(
         repairTarget: "prose",
       });
     }
+  }
+  for (const entry of committedResolves) {
+    if (draftEchoesEntry(draftContent, entry)) continue;
+    if (entry.keywords.length === 0) {
+      violations.push({
+        severity: "warning",
+        ruleId: HOOK_LEDGER_SEMANTIC_REVIEW_RULE_ID,
+        category: "hook cần đối chiếu ngữ nghĩa",
+        description: `memo khai báo sẽ xử lý ${entry.id} trong advance/resolve, nhưng kiểm tra từ khóa xác định không tìm thấy điểm nào tương ứng trong bản nháp`,
+        suggestion: `đối chiếu xem phần thân bản đã đẩy tiến ${entry.id} bằng hành động, đối thoại, đồ vật hay đổi thông tin chưa; nếu chưa thì hãy bổ sung một cảnh cụ thể, nếu đã đẩy tiến rồi thì có thể bỏ qua gợi ý xác định này`,
+        source: "deterministic",
+        verification: "unverified",
+        repairTarget: "prose",
+      });
+      continue;
+    }
+    violations.push({
+      severity: "critical",
+      ruleId: HOOK_RESOLVE_EVIDENCE_RULE_ID,
+      category: "hook resolve thiếu bằng chứng trong bản nháp",
+      description: `memo khai báo resolve ${entry.id}, nhưng bản nháp không chứa bất kỳ từ khóa nhận diện nào của hook (${entry.keywords.join(", ")}); hook bị rút khỏi ledger mà văn không chứng minh đã giải quyết`,
+      suggestion: `thêm vào bản nháp một cảnh cụ thể chứng minh ${entry.id} được giải quyết (đồ vật, đối thoại, quyết định hiển hiện trong văn), hoặc hạ xuống advance/defer nếu chương chưa thật sự chốt hook này`,
+      source: "deterministic",
+      verification: "verified",
+      repairTarget: "prose",
+      evidence: { contentHash: computeChapterContentHash(draftContent) },
+    });
   }
 
   // "揭 1 埋 1" hard floor: when anything was resolved, at least the same

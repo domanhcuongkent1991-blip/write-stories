@@ -56,6 +56,81 @@ const DEFAULT_MAX_REVIEW_ITERATIONS = 1;
 const MAX_REVIEW_ITERATIONS_CAP = 2;
 const VIETNAMESE_SPELLING_SIGNAL_RE = /(?:vietnamese spelling|spelling|typo|orthograph|chính tả|lỗi\s+(?:lặp từ\s+)?đánh máy|đánh máy)/iu;
 
+const VIETNAMESE_PROPER_NOUN_SIGNAL_RE =
+  /proper[-\s]?noun|tên\s+(?:riêng|nhân\s+vật|địa\s+danh|sai)|protected\s+(?:proper\s+)?name|incorrect\s+name|wrong\s+name|unknown\s+name/iu;
+
+/**
+ * Host-side binding for auditor proper-name findings: the auditor names the
+ * wrong variant and the canonical form in its description (both quoted); the
+ * host only escalates when the wrong variant really occurs in the chapter and
+ * the canonical form is a known name (world glossary / role files). Same
+ * trust model as the spelling binding — the LLM proposes, the host verifies —
+ * so an unverified G1-style "Lục Giới vs Lục Cảnh" critical becomes a real
+ * blocker instead of a false pass.
+ */
+export function bindVietnameseAuditorProperNounFindings(
+  content: string,
+  issues: ReadonlyArray<AuditIssue>,
+  knownNames: ReadonlyArray<string>,
+): { readonly findings: ReadonlyArray<AuditIssue> } {
+  if (knownNames.length === 0) return { findings: [] };
+  const known = new Set(knownNames.map((name) => name.normalize("NFC")));
+  const findings: AuditIssue[] = [];
+
+  for (const issue of issues) {
+    const signal = `${issue.ruleId ?? ""} ${issue.category} ${issue.description}`;
+    if (VIETNAMESE_SPELLING_SIGNAL_RE.test(signal)) continue;
+    if (!VIETNAMESE_PROPER_NOUN_SIGNAL_RE.test(signal)) continue;
+    if (issue.severity === "info") continue;
+    // An exact-replacement hint means the spelling binding owns this issue.
+    if (issue.repairHint?.kind === "exact-replacement") continue;
+
+    // Auditor prose quotes names together with trailing punctuation ("Lục
+    // Giới," / "Lục Cảnh.") — strip edge non-letters before matching.
+    const quoted = [
+      ...new Set(
+        [...issue.description.matchAll(/[“"']([^“”"']{2,})[”"']/gu)]
+          .map((match) => match[1]!.trim().replace(/^[^\p{L}\p{M}\d]+|[^\p{L}\p{M}\d]+$/gu, "").normalize("NFC"))
+          .filter((token) => token.length >= 2),
+      ),
+    ];
+    if (quoted.length < 2) continue;
+    const unknowns = quoted.filter((token) => !known.has(token));
+    const knowns = quoted.filter((token) => known.has(token));
+    if (unknowns.length !== 1 || knowns.length !== 1) continue;
+    const target = unknowns[0]!;
+    const replacement = knowns[0]!;
+    const firstOffset = content.indexOf(target);
+    if (firstOffset < 0) continue;
+
+    const contextStart = Math.max(0, firstOffset - 40);
+    const contextEnd = Math.min(content.length, firstOffset + target.length + 40);
+    findings.push({
+      ...issue,
+      severity: "critical",
+      category: "vi-known-proper-name",
+      ruleId: "vi-auditor-proper-name",
+      repairScope: "local",
+      repairTarget: "prose",
+      verification: "verified",
+      source: "deterministic",
+      evidence: {
+        ...issue.evidence,
+        contentHash: computeChapterContentHash(content),
+      },
+      repairHint: {
+        kind: "exact-replacement",
+        targetText: target,
+        replacementText: replacement,
+        occurrenceIndexes: [1],
+        context: content.slice(contextStart, contextEnd),
+      },
+    });
+  }
+
+  return { findings };
+}
+
 function bindVietnameseAuditorSpellingFindings(
   content: string,
   issues: ReadonlyArray<AuditIssue>,
@@ -213,9 +288,11 @@ export async function runChapterReviewCycle(params: {
   /** Re-run deterministic post-write checks (chapter-ref, paragraph shape, etc.) on any content. */
   readonly runPostWriteChecks?: (content: string) => ReadonlyArray<AuditIssue>;
   readonly maxReviewIterations?: number;
-  readonly autoRevisionAllowed?: boolean;
+  autoRevisionAllowed?: boolean;
   /** Opt-in score-fail repair floor forwarded to the audit policy. */
   readonly scoreRepairFloorScore?: number;
+  /** Canonical proper names (world glossary + role files) for auditor name-variant binding. */
+  readonly knownProperNames?: ReadonlyArray<string>;
   readonly operationId?: string;
   readonly attemptId?: string;
   readonly settleRevisionCandidate?: (
@@ -298,6 +375,9 @@ export async function runChapterReviewCycle(params: {
     const spellingBinding = params.lengthSpec.countingMode === "vi_wordlike_tokens_v1"
       ? bindVietnameseAuditorSpellingFindings(content, rawLlmAudit.issues)
       : { findings: [] as ReadonlyArray<AuditIssue>, invalid: false };
+    const properNounBinding = (params.knownProperNames?.length ?? 0) > 0
+      ? bindVietnameseAuditorProperNounFindings(content, rawLlmAudit.issues, params.knownProperNames!)
+      : { findings: [] as ReadonlyArray<AuditIssue> };
     let llmAudit: AuditResult = spellingBinding.invalid
       ? {
           ...rawLlmAudit,
@@ -375,6 +455,7 @@ export async function runChapterReviewCycle(params: {
       ...postWriteIssues,
       ...(llmAudit.hostFindings ?? []),
       ...spellingBinding.findings,
+      ...properNounBinding.findings,
     ]
       .map((issue) => issue.repairTarget ? issue : { ...issue, repairTarget: "prose" as const });
     const evaluation = decideAudit({
