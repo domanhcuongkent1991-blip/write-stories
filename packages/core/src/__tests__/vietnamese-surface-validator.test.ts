@@ -5,6 +5,7 @@ import { join } from "node:path";
 import {
   parseCharacterPronounRule,
   parsePendingHookTypeLabels,
+  parseWorldGlossaryTerms,
   readCharacterPronounRules,
   readPlannerHookLabels,
   toAuditIssuesFromSurface,
@@ -361,5 +362,123 @@ describe("readCharacterPronounRules / readPlannerHookLabels", () => {
     } finally {
       await rm(root, { recursive: true, force: true });
     }
+  });
+});
+
+describe("parseCharacterPronounRule — speech self-address", () => {
+  it("extracts speechSelf from the dialogue sentence", () => {
+    const markdown = [
+      "## Vietnamese_Pronoun",
+      "Đại từ trần thuật: gọi tên “Ngụy Vinh”; nếu cần đại từ thì dùng “ông” — KHÔNG dùng “hắn” hoặc “lão”. Trong đối thoại, nhân vật xưng “ta” và gọi Lâm Hàn là “ngươi” như chương 3-5 — giữ nguyên.",
+      "",
+    ].join("\n");
+    const rule = parseCharacterPronounRule("Ngụy Vinh", markdown);
+    expect(rule?.speechSelf).toEqual(["ta"]);
+    expect(rule?.denied).toContain("hắn");
+    expect(rule?.denied).toContain("lão");
+  });
+
+  it("returns empty speechSelf when no dialogue sentence exists", () => {
+    const markdown = [
+      "## Vietnamese_Pronoun",
+      "Đại từ dùng nhất quán trong toàn bộ chương tiếng Việt: “hắn”.",
+      "",
+    ].join("\n");
+    const rule = parseCharacterPronounRule("Rowan Vale", markdown);
+    expect(rule?.speechSelf).toEqual([]);
+  });
+});
+
+describe("validateVietnameseSurface — speech self-address locks (vi-speech-self-address)", () => {
+  const NGUY_VINH = {
+    name: "Ngụy Vinh",
+    aliases: ["Ngụy Vinh", "Ngụy"],
+    allowed: ["ông"],
+    denied: ["hắn", "lão"],
+    speechSelf: ["ta"],
+  };
+  const LAM_HAN = {
+    name: "Lâm Hàn",
+    aliases: ["Lâm Hàn", "Lâm"],
+    allowed: ["anh"],
+    denied: ["hắn", "cậu"],
+    speechSelf: ["ta"],
+  };
+  const NO_LOCK = {
+    name: "Tề Dực",
+    aliases: ["Tề Dực"],
+    allowed: ["ông"],
+    denied: [],
+    speechSelf: [],
+  };
+
+  it("flags “tôi” self-address in the dialogue of a character locked to “ta”", () => {
+    const text = "Ngụy Vinh khoanh tay. “Tôi đã nói rồi, ngươi không nên quay lại đây.”";
+    const findings = validateVietnameseSurface(text, { characterPronouns: [NGUY_VINH] });
+    const violation = findings.find((f) => f.rule === "vi-speech-self-address");
+    expect(violation?.severity).toBe("error");
+    expect(violation?.description).toContain("Ngụy Vinh");
+    expect(violation?.description).toContain("tôi");
+    expect(violation?.suggestion).toContain("ta");
+  });
+
+  it("keeps a correct “ta” self-address unflagged", () => {
+    const text = "Ngụy Vinh khoanh tay. “Ta đã nói rồi, ngươi không nên quay lại đây.”";
+    const findings = validateVietnameseSurface(text, { characterPronouns: [NGUY_VINH] });
+    expect(findings.find((f) => f.rule === "vi-speech-self-address")).toBeUndefined();
+  });
+
+  it("ignores self-address for characters without a speech lock", () => {
+    const text = "Tề Dực lắc đầu. “Tôi không biết gì cả.”";
+    const findings = validateVietnameseSurface(text, { characterPronouns: [NO_LOCK, NGUY_VINH] });
+    expect(findings.find((f) => f.rule === "vi-speech-self-address")).toBeUndefined();
+  });
+
+  it("ignores “tôi” in narration outside quotes", () => {
+    const text = "Ngụy Vinh nhìn xuống biển hồ. Cánh cửa khép lại sau lưng hắn.";
+    const findings = validateVietnameseSurface(text, { characterPronouns: [NGUY_VINH] });
+    expect(findings.find((f) => f.rule === "vi-speech-self-address")).toBeUndefined();
+  });
+
+  it("does not flag forms of addressing others inside dialogue", () => {
+    const text = "Ngụy Vinh gật đầu. “Ngươi cứ đi. Ta đợi tin.”";
+    const findings = validateVietnameseSurface(text, { characterPronouns: [NGUY_VINH] });
+    expect(findings.find((f) => f.rule === "vi-speech-self-address")).toBeUndefined();
+  });
+
+  it("attributes the dialogue to the nearest alias when several characters share the line", () => {
+    const text = "Lâm Hàn bước vào. Ngụy Vinh gượng cười. “Tôi tự có phép của mình.”";
+    const findings = validateVietnameseSurface(text, { characterPronouns: [LAM_HAN, NGUY_VINH] });
+    const violation = findings.find((f) => f.rule === "vi-speech-self-address");
+    expect(violation).toBeDefined();
+    expect(violation?.description).toContain("Ngụy Vinh");
+  });
+
+  it("skips a dialogue with no attributable speaker on the line", () => {
+    const text = "“Tôi tự có phép.” Cánh cửa đóng lại sau đó.";
+    const findings = validateVietnameseSurface(text, { characterPronouns: [NGUY_VINH] });
+    expect(findings.find((f) => f.rule === "vi-speech-self-address")).toBeUndefined();
+  });
+});
+
+describe("parseWorldGlossaryTerms — 4-column Vietnamese glossary", () => {
+  it("collects both the original and the Vietnamese name columns", () => {
+    const markdown = [
+      "# Sổ tay thế giới",
+      "",
+      "| Tên nguyên bản | Cách viết tiếng Việt | loại | ghi chú |",
+      "| --- | --- | --- | --- |",
+      "| Six Realms | Lục Cảnh | thuật ngữ | Sáu cảnh giới của thế giới |",
+      "| Frostwall | Tường Sương | địa danh | Bức tường băng phía bắc |",
+      "",
+    ].join("\n");
+    const terms = parseWorldGlossaryTerms(markdown);
+    expect(terms).toContain("Six Realms");
+    expect(terms).toContain("Lục Cảnh");
+    expect(terms).toContain("Frostwall");
+    expect(terms).toContain("Tường Sương");
+    // Header cells never leak into the known-name set.
+    expect(terms).not.toContain("Cách viết tiếng Việt");
+    expect(terms).not.toContain("loại");
   });
 });

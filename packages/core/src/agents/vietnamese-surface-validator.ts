@@ -9,6 +9,12 @@ export interface CharacterPronounRule {
   readonly aliases: ReadonlyArray<string>;
   readonly allowed: ReadonlyArray<string>;
   readonly denied: ReadonlyArray<string>;
+  /**
+   * Tự xưng trong đối thoại do sổ vai chốt ("Trong đối thoại, nhân vật xưng
+   * 'ta'"). Khác đại từ trần thuật: "ta"/"tôi" là honorific tokens bị loại
+   * khỏi allowed/denied, nhưng đây chính là hợp đồng xưng hô trong thoại.
+   */
+  readonly speechSelf?: ReadonlyArray<string>;
 }
 
 export interface VietnameseSurfaceOptions {
@@ -174,6 +180,7 @@ export function validateVietnameseSurface(
 
   if (options?.characterPronouns?.length) {
     violations.push(...checkPronounMismatches(content, options.characterPronouns));
+    violations.push(...checkSpeechSelfAddressMismatches(content, options.characterPronouns));
   }
 
   if (options?.plannerHookLabels?.length) {
@@ -377,6 +384,84 @@ function checkPronounMismatches(
 }
 
 // ---------------------------------------------------------------------------
+// vi-speech-self-address — self-address INSIDE dialogue must honor the
+// story/roles/ speech lock ("Trong đối thoại, nhân vật xưng 'ta'").
+// Distinct from vi-pronoun-mismatch, which only judges narrative pronouns:
+// "ta"/"tôi" are stripped from narration locks, but a role that explicitly
+// locks the dialogue self-address makes a "Tôi" in that character's speech a
+// contract break (G1 false-pass: Ngụy Vinh says "Tôi" where the role says
+// "ta"). Only fires when the speaker is unambiguously attributable and the
+// role actually declares a speech self-address — no data, no finding.
+// ---------------------------------------------------------------------------
+
+const SPEECH_SELF_FORBIDDEN_TOKENS = ["tôi", "tui"] as const;
+const DIALOGUE_SENTENCE_RE = /đối\s+thoại/iu;
+const SPEECH_SELF_DECLARATION_RE = /xưng\s+[“"']([^“”"']+)[”"']/giu;
+
+function checkSpeechSelfAddressMismatches(
+  content: string,
+  rules: ReadonlyArray<CharacterPronounRule>,
+): ReadonlyArray<PostWriteViolation> {
+  const locked = rules.filter((rule) => (rule.speechSelf?.length ?? 0) > 0);
+  if (locked.length === 0) return [];
+
+  const counts = new Map<string, { rule: CharacterPronounRule; token: string; count: number; excerpt: string }>();
+  for (const span of content.matchAll(QUOTED_SPEECH_RE)) {
+    const start = span.index ?? 0;
+    const end = start + span[0]!.length;
+    const lineStart = content.lastIndexOf("\n", start) + 1;
+    const lineEndIndex = content.indexOf("\n", end);
+    const lineEnd = lineEndIndex < 0 ? content.length : lineEndIndex;
+    const line = content.slice(lineStart, lineEnd);
+
+    // Attribute the dialogue to the alias closest to the speech span on the
+    // same line, ignoring aliases that appear INSIDE the speech itself.
+    let best: { rule: CharacterPronounRule; distance: number } | undefined;
+    let ambiguous = false;
+    for (const rule of locked) {
+      for (const alias of rule.aliases) {
+        const aliasRe = viWordRegExp(alias, "giu");
+        for (const match of line.matchAll(aliasRe)) {
+          const matchStart = lineStart + (match.index ?? 0);
+          const matchEnd = matchStart + match[0]!.length;
+          if (matchStart >= start && matchEnd <= end) continue;
+          const distance = matchStart >= end ? matchStart - end : start - matchEnd;
+          if (!best || distance < best.distance) {
+            best = { rule, distance };
+            ambiguous = false;
+          } else if (distance === best.distance && best.rule.name !== rule.name) {
+            ambiguous = true;
+          }
+        }
+      }
+    }
+    if (!best || ambiguous) continue;
+
+    const speech = span[0]!.slice(1, -1);
+    const forbidden = SPEECH_SELF_FORBIDDEN_TOKENS.filter(
+      (token) => !(best!.rule.speechSelf ?? []).includes(token),
+    );
+    for (const token of forbidden) {
+      const hits = [...speech.matchAll(viWordRegExp(token, "giu"))];
+      if (hits.length === 0) continue;
+      const key = `${best.rule.name}\u0000${token}`;
+      const entry = counts.get(key);
+      if (entry) entry.count += hits.length;
+      else counts.set(key, { rule: best.rule, token, count: hits.length, excerpt: speech.slice(0, 60) });
+    }
+  }
+
+  return [...counts.values()].map(({ rule, token, count, excerpt }) => ({
+    rule: "vi-speech-self-address",
+    severity: "error" as const,
+    description: `Trong đối thoại, nhân vật "${rule.name}" phải xưng "${(rule.speechSelf ?? []).join("/")}", văn dùng "${token}" ${count} chỗ trong thoại (ví dụ: "${excerpt}…").`,
+    suggestion: `Đổi tự xưng trong thoại của "${rule.name}" sang "${(rule.speechSelf ?? [])[0] ?? rule.name}"; giữ nguyên cách gọi người khác theo sổ vai.`,
+    repairScope: "local",
+    repairTarget: "prose",
+  }));
+}
+
+// ---------------------------------------------------------------------------
 // vi-planner-label-leak — hook-type labels from pending_hooks must never
 // reach the prose surface (they read like system jargon inside the story).
 // ---------------------------------------------------------------------------
@@ -454,8 +539,15 @@ export function parseCharacterPronounRule(
   const nameTokens = new Set(displayName.split(/\s+/).map((token) => token.toLocaleLowerCase("vi")));
   const allowed = new Set<string>();
   const denied = new Set<string>();
+  const speechSelf = new Set<string>();
 
   for (const sentence of splitNarrativeSentences(section.replace(/\n+/u, " "))) {
+    if (DIALOGUE_SENTENCE_RE.test(sentence)) {
+      for (const match of sentence.matchAll(SPEECH_SELF_DECLARATION_RE)) {
+        const token = match[1]?.trim();
+        if (token) speechSelf.add(token);
+      }
+    }
     const deniedIndex = sentence.search(/(?:CẤM|KHÔNG|không)\s+dùng/iu);
     const before = deniedIndex >= 0 ? sentence.slice(0, deniedIndex) : sentence;
     const after = deniedIndex >= 0 ? sentence.slice(deniedIndex) : "";
@@ -469,7 +561,7 @@ export function parseCharacterPronounRule(
     }
   }
 
-  return { name: roleFileName, aliases: [], allowed: [...allowed], denied: [...denied] };
+  return { name: roleFileName, aliases: [], allowed: [...allowed], denied: [...denied], speechSelf: [...speechSelf] };
 }
 
 export function parsePendingHookTypeLabels(pendingHooksMarkdown: string): string[] {
@@ -645,8 +737,15 @@ export function parseWorldGlossaryTerms(markdown: string): string[] {
   return markdown
     .split("\n")
     .filter((line) => line.trimStart().startsWith("|"))
-    .map((line) => line.trim().replace(/^\|/, "").split("|")[0]?.trim() ?? "")
-    .filter((cell) => cell && cell !== "Tên nguyên bản" && !/^[^A-Za-z0-9À-ỹ]+$/.test(cell));
+    // Vietnamese glossaries are 4-column tables (original | VI spelling |
+    // type | note). The VI spelling column is the authoritative surface the
+    // prose must use, so every non-empty cell becomes a known name — the
+    // header row is dropped so its labels never count as names.
+    .map((line) => line.trim().replace(/^\|/, "").replace(/\|$/, ""))
+    .filter((row) => !/^[|:\s-]+$/u.test(row))
+    .filter((row) => !row.split("|").some((cell) => cell.trim() === "Tên nguyên bản"))
+    .flatMap((row) => row.split("|").map((cell) => cell.trim()))
+    .filter((cell) => cell && !/^[^A-Za-z0-9À-ỹ]+$/.test(cell));
 }
 
 function countOccurrences(content: string, needle: string): number {
