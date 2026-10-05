@@ -8,6 +8,7 @@ import { countChapterLength, isOutsideHardRange } from "../utils/length-metrics.
 import { computeChapterContentHash, type AuditReAuditTelemetry } from "../audit/chapter-audit-evaluator.js";
 import type { ChapterAuditEvaluation } from "../audit/chapter-audit-evaluator.js";
 import { decideAudit, evaluateRevisionCandidate } from "../audit/audit-policy.js";
+import { toAuditIssuesFromSurface, validateVietnameseSurface } from "../agents/vietnamese-surface-validator.js";
 import { createAuditRun, type AuditRunV1 } from "../audit/audit-run.js";
 import {
   applyVietnameseLocalRepair,
@@ -53,8 +54,82 @@ const DEFAULT_MAX_REVIEW_ITERATIONS = 1;
 // Hard ceiling so a configured retry budget can never run away; must be >=
 // the default CLI writing.reviewRetries (2) for the configured budget to apply.
 const MAX_REVIEW_ITERATIONS_CAP = 2;
-const PASS_SCORE_THRESHOLD = 85;
 const VIETNAMESE_SPELLING_SIGNAL_RE = /(?:vietnamese spelling|spelling|typo|orthograph|chính tả|lỗi\s+(?:lặp từ\s+)?đánh máy|đánh máy)/iu;
+
+const VIETNAMESE_PROPER_NOUN_SIGNAL_RE =
+  /proper[-\s]?noun|tên\s+(?:riêng|nhân\s+vật|địa\s+danh|sai)|protected\s+(?:proper\s+)?name|incorrect\s+name|wrong\s+name|unknown\s+name/iu;
+
+/**
+ * Host-side binding for auditor proper-name findings: the auditor names the
+ * wrong variant and the canonical form in its description (both quoted); the
+ * host only escalates when the wrong variant really occurs in the chapter and
+ * the canonical form is a known name (world glossary / role files). Same
+ * trust model as the spelling binding — the LLM proposes, the host verifies —
+ * so an unverified G1-style "Lục Giới vs Lục Cảnh" critical becomes a real
+ * blocker instead of a false pass.
+ */
+export function bindVietnameseAuditorProperNounFindings(
+  content: string,
+  issues: ReadonlyArray<AuditIssue>,
+  knownNames: ReadonlyArray<string>,
+): { readonly findings: ReadonlyArray<AuditIssue> } {
+  if (knownNames.length === 0) return { findings: [] };
+  const known = new Set(knownNames.map((name) => name.normalize("NFC")));
+  const findings: AuditIssue[] = [];
+
+  for (const issue of issues) {
+    const signal = `${issue.ruleId ?? ""} ${issue.category} ${issue.description}`;
+    if (VIETNAMESE_SPELLING_SIGNAL_RE.test(signal)) continue;
+    if (!VIETNAMESE_PROPER_NOUN_SIGNAL_RE.test(signal)) continue;
+    if (issue.severity === "info") continue;
+    // An exact-replacement hint means the spelling binding owns this issue.
+    if (issue.repairHint?.kind === "exact-replacement") continue;
+
+    // Auditor prose quotes names together with trailing punctuation ("Lục
+    // Giới," / "Lục Cảnh.") — strip edge non-letters before matching.
+    const quoted = [
+      ...new Set(
+        [...issue.description.matchAll(/[“"']([^“”"']{2,})[”"']/gu)]
+          .map((match) => match[1]!.trim().replace(/^[^\p{L}\p{M}\d]+|[^\p{L}\p{M}\d]+$/gu, "").normalize("NFC"))
+          .filter((token) => token.length >= 2),
+      ),
+    ];
+    if (quoted.length < 2) continue;
+    const unknowns = quoted.filter((token) => !known.has(token));
+    const knowns = quoted.filter((token) => known.has(token));
+    if (unknowns.length !== 1 || knowns.length !== 1) continue;
+    const target = unknowns[0]!;
+    const replacement = knowns[0]!;
+    const firstOffset = content.indexOf(target);
+    if (firstOffset < 0) continue;
+
+    const contextStart = Math.max(0, firstOffset - 40);
+    const contextEnd = Math.min(content.length, firstOffset + target.length + 40);
+    findings.push({
+      ...issue,
+      severity: "critical",
+      category: "vi-known-proper-name",
+      ruleId: "vi-auditor-proper-name",
+      repairScope: "local",
+      repairTarget: "prose",
+      verification: "verified",
+      source: "deterministic",
+      evidence: {
+        ...issue.evidence,
+        contentHash: computeChapterContentHash(content),
+      },
+      repairHint: {
+        kind: "exact-replacement",
+        targetText: target,
+        replacementText: replacement,
+        occurrenceIndexes: [1],
+        context: content.slice(contextStart, contextEnd),
+      },
+    });
+  }
+
+  return { findings };
+}
 
 function bindVietnameseAuditorSpellingFindings(
   content: string,
@@ -213,9 +288,11 @@ export async function runChapterReviewCycle(params: {
   /** Re-run deterministic post-write checks (chapter-ref, paragraph shape, etc.) on any content. */
   readonly runPostWriteChecks?: (content: string) => ReadonlyArray<AuditIssue>;
   readonly maxReviewIterations?: number;
-  readonly autoRevisionAllowed?: boolean;
+  autoRevisionAllowed?: boolean;
   /** Opt-in score-fail repair floor forwarded to the audit policy. */
   readonly scoreRepairFloorScore?: number;
+  /** Canonical proper names (world glossary + role files) for auditor name-variant binding. */
+  readonly knownProperNames?: ReadonlyArray<string>;
   readonly operationId?: string;
   readonly attemptId?: string;
   readonly settleRevisionCandidate?: (
@@ -260,18 +337,9 @@ export async function runChapterReviewCycle(params: {
   let localRepair: LocalRepairTelemetry | undefined;
 
   // Convert initial postWriteErrors into AuditIssues as fallback when runPostWriteChecks isn't provided.
-  const initialPostWriteIssues: ReadonlyArray<AuditIssue> = params.initialOutput.postWriteErrors.map((violation) => ({
-    severity: "critical" as const,
-    category: violation.rule,
-    description: violation.description,
-    suggestion: violation.suggestion,
-    ...(violation.repairHint ? {
-      repairHint: violation.repairHint,
-      repairScope: "local" as const,
-      repairTarget: "prose" as const,
-      verification: "verified" as const,
-    } : {}),
-  }));
+  const initialPostWriteIssues: ReadonlyArray<AuditIssue> = toAuditIssuesFromSurface(
+    params.initialOutput.postWriteErrors,
+  );
 
   params.assertChapterContentNotEmpty(finalContent, "draft generation");
 
@@ -307,6 +375,9 @@ export async function runChapterReviewCycle(params: {
     const spellingBinding = params.lengthSpec.countingMode === "vi_wordlike_tokens_v1"
       ? bindVietnameseAuditorSpellingFindings(content, rawLlmAudit.issues)
       : { findings: [] as ReadonlyArray<AuditIssue>, invalid: false };
+    const properNounBinding = (params.knownProperNames?.length ?? 0) > 0
+      ? bindVietnameseAuditorProperNounFindings(content, rawLlmAudit.issues, params.knownProperNames!)
+      : { findings: [] as ReadonlyArray<AuditIssue> };
     let llmAudit: AuditResult = spellingBinding.invalid
       ? {
           ...rawLlmAudit,
@@ -384,6 +455,7 @@ export async function runChapterReviewCycle(params: {
       ...postWriteIssues,
       ...(llmAudit.hostFindings ?? []),
       ...spellingBinding.findings,
+      ...properNounBinding.findings,
     ]
       .map((issue) => issue.repairTarget ? issue : { ...issue, repairTarget: "prose" as const });
     const evaluation = decideAudit({
@@ -431,7 +503,6 @@ export async function runChapterReviewCycle(params: {
   const isPassed = (assessment: { auditResult: AuditResult; score: number; lengthInRange: boolean }): boolean =>
     assessment.auditResult.decision === "pass"
     && assessment.auditResult.passed
-    && assessment.score >= PASS_SCORE_THRESHOLD
     && assessment.lengthInRange;
 
   // ---------------------------------------------------------------------------
@@ -662,6 +733,46 @@ export async function runChapterReviewCycle(params: {
           en: `repair iteration ${iteration + 1} produced no new content, exiting loop`,
         });
         break;
+      }
+
+      // Output-language guard. A reviser that answered in another language is
+      // not a repair candidate: settling it, auditing it, or rolling it forward
+      // as the next base only burns provider budget and lets its
+      // vi-output-language-mismatch findings be written to index.json as if they
+      // described the canonical chapter. The canonical draft already cleared the
+      // writer post-write gate, so this guard judges candidates only.
+      const outputLanguageViolations = params.lengthSpec.countingMode === "vi_wordlike_tokens_v1"
+        ? validateVietnameseSurface(revisedContent)
+          .filter((violation) => violation.rule === "vi-output-language-mismatch")
+        : [];
+      if (outputLanguageViolations.length > 0) {
+        revisionRejectionReason = "candidate rejected: output language is not Vietnamese";
+        params.logWarn({
+          zh: "修复候选并非越南语，直接丢弃，不进入结算与审稿，保留原章节",
+          en: "Revision candidate is not Vietnamese; discarded before settlement and audit, keeping the canonical chapter.",
+        });
+        await params.retainRejectedCandidate?.({
+          content: revisedContent,
+          contentHash: computeChapterContentHash(revisedContent),
+          wordCount: countChapterLength(revisedContent, params.lengthSpec.countingMode),
+          reason: revisionRejectionReason,
+          rejectionEvidence: buildCandidateRejectionEvidence({
+            rejectionCode: "audit-failed",
+            ownerClass: "AUDIT",
+            findings: toAuditIssuesFromSurface(outputLanguageViolations).map((issue) => ({
+              ...issue,
+              // decideAudit is fail-closed on a critical finding with no
+              // repairTarget, so the language blocker must carry one.
+              repairTarget: issue.repairTarget ?? "prose",
+            })),
+            fallbackDescription: revisionRejectionReason,
+          }),
+        });
+
+        if (iteration + 1 >= maxReviewIterations) break;
+        // workingContent and currentAudit stay on the canonical chapter: the next
+        // iteration must retry the repair from canonical, not from this draft.
+        continue;
       }
 
       revisionCandidateIdentity = {

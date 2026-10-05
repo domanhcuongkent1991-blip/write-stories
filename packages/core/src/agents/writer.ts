@@ -79,7 +79,12 @@ import { readFile, readdir } from "node:fs/promises";
 import { join } from "node:path";
 import { commitAtomicFileSet, type AtomicFileWrite } from "../utils/atomic-file-set.js";
 import { WritingLanguagePreflightError } from "../state/writing-language-preflight.js";
-import { validateVietnameseSurface } from "./vietnamese-surface-validator.js";
+import {
+  type CharacterPronounRule,
+  readCharacterPronounRules,
+  readPlannerHookLabels,
+  validateVietnameseSurface,
+} from "./vietnamese-surface-validator.js";
 
 import {
   readVolumeMap,
@@ -252,6 +257,10 @@ export class WriterAgent extends BaseAgent {
         worldGlossaryBody = "";
       }
     }
+    let characterPronounRules: ReadonlyArray<CharacterPronounRule> = [];
+    if (writingLanguage === "vi") {
+      characterPronounRules = await readCharacterPronounRules(bookDir);
+    }
 
     // Build fanfic context if fanfic_canon.md exists
     const fanficContext: FanficContext | undefined = hasFanficCanon && bookRules?.fanficMode
@@ -269,6 +278,7 @@ export class WriterAgent extends BaseAgent {
       "governed",
       resolvedLengthSpec,
       worldGlossaryBody,
+      characterPronounRules,
     ), "longform.writer");
 
     const creativeUserPrompt = this.buildGovernedUserPrompt({
@@ -447,7 +457,10 @@ export class WriterAgent extends BaseAgent {
     const surfaceNormalizedContent = normalizePostWriteSurface(creative.content, resolvedLanguage);
     const surfaceNormalizedWordCount = countChapterLength(surfaceNormalizedContent, resolvedLengthSpec.countingMode);
     const ruleViolations = [
-      ...(writingLanguage === "vi" ? validateVietnameseSurface(creative.content) : []),
+      ...(writingLanguage === "vi" ? validateVietnameseSurface(creative.content, {
+        characterPronouns: characterPronounRules,
+        plannerHookLabels: await readPlannerHookLabels(bookDir),
+      }) : []),
       ...validatePostWrite(surfaceNormalizedContent, genreProfile, bookRules, resolvedLanguage),
       ...detectCrossChapterRepetition(surfaceNormalizedContent, fingerprintChapters, resolvedLanguage),
       ...detectParagraphLengthDrift(surfaceNormalizedContent, fingerprintChapters, resolvedLanguage),

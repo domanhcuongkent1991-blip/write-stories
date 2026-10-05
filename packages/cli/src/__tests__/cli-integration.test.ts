@@ -257,6 +257,21 @@ describe("CLI integration", () => {
       const config = JSON.parse(raw);
       expect(config.writing.reviewRetries).toBe(3);
     });
+
+    it("sets the score repair floor", async () => {
+      const output = run(["config", "set", "writing.scoreRepairFloorScore", "72"]);
+      expect(output).toContain("Set writing.scoreRepairFloorScore = 72");
+
+      const raw = await readFile(join(projectDir, "inkos.json"), "utf-8");
+      const config = JSON.parse(raw);
+      expect(config.writing.scoreRepairFloorScore).toBe(72);
+    });
+
+    it("rejects a score repair floor at or above the pass threshold", () => {
+      expect(() => {
+        run(["config", "set", "writing.scoreRepairFloorScore", "85"]);
+      }).toThrow();
+    });
   });
 
   describe("inkos config set-global", () => {

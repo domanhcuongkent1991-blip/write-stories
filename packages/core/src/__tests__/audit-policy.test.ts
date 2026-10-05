@@ -113,7 +113,25 @@ describe("decideAudit", () => {
       verification: "unverified" as const,
     };
 
-    it("routes a score-fail inside the opt-in floor to one repair", () => {
+    // Regression corpus: the LLM self-reported score is advisory only. These
+    // are real observed scores from the Vietnamese pipeline, where an identical
+    // chapter scored 90, 80 and 58 across runs while carrying no verified
+    // critical finding. Gating pass/fail on that number looped chapters for
+    // 9+ revise rounds chasing a value that never held still.
+    it("passes a low-scoring chapter that carries no verified critical finding", () => {
+      const result = decideAudit(input({
+        llmAudit: { passed: false, overallScore: 58, summary: "needs work", issues: [repairableFinding] },
+      }), {
+        operation: "audit",
+        autoRevisionAllowed: true,
+        revisionAttempts: 0,
+        maxRevisionAttempts: 1,
+      });
+
+      expect(result).toMatchObject({ decision: "pass", passed: true });
+    });
+
+    it("does not route a low score to repair even inside a legacy opt-in floor", () => {
       const result = decideAudit(input({
         llmAudit: { passed: false, overallScore: 82, summary: "needs work", issues: [repairableFinding] },
       }), {
@@ -124,56 +142,28 @@ describe("decideAudit", () => {
         scoreRepairFloorScore: 75,
       });
 
-      expect(result).toMatchObject({ decision: "repair-required", passed: false });
+      expect(result).toMatchObject({ decision: "pass", passed: true });
     });
 
-    it("still fails a score-fail when the routing flag is absent", () => {
+    it("passes at the same low score even when no revision budget remains", () => {
       const result = decideAudit(input({
-        llmAudit: { passed: false, overallScore: 82, summary: "needs work", issues: [repairableFinding] },
-      }), {
-        operation: "audit",
-        autoRevisionAllowed: true,
-        revisionAttempts: 0,
-        maxRevisionAttempts: 1,
-      });
-
-      expect(result).toMatchObject({ decision: "fail", passed: false });
-    });
-
-    it("still fails a score-fail below the floor", () => {
-      const result = decideAudit(input({
-        llmAudit: { passed: false, overallScore: 74, summary: "needs work", issues: [repairableFinding] },
-      }), {
-        operation: "audit",
-        autoRevisionAllowed: true,
-        revisionAttempts: 0,
-        maxRevisionAttempts: 1,
-        scoreRepairFloorScore: 75,
-      });
-
-      expect(result).toMatchObject({ decision: "fail", passed: false });
-    });
-
-    it("does not route to repair when no revision budget remains", () => {
-      const result = decideAudit(input({
-        llmAudit: { passed: false, overallScore: 82, summary: "needs work", issues: [repairableFinding] },
+        llmAudit: { passed: false, overallScore: 78, summary: "needs work", issues: [repairableFinding] },
       }), {
         operation: "re-audit",
         autoRevisionAllowed: false,
         revisionAttempts: 1,
         maxRevisionAttempts: 1,
-        scoreRepairFloorScore: 75,
       });
 
-      expect(result).toMatchObject({ decision: "fail", passed: false });
+      expect(result).toMatchObject({ decision: "pass", passed: true });
     });
 
-    it("does not route to repair when nothing is repairable", () => {
+    it("passes when the only findings are informational", () => {
       const result = decideAudit(input({
         llmAudit: {
           passed: false,
-          overallScore: 82,
-          summary: "needs work",
+          overallScore: 70,
+          summary: "flat pacing",
           issues: [{ severity: "info" as const, category: "Pacing Check", description: "flat beat", suggestion: "" }],
         },
       }), {
@@ -181,10 +171,9 @@ describe("decideAudit", () => {
         autoRevisionAllowed: true,
         revisionAttempts: 0,
         maxRevisionAttempts: 1,
-        scoreRepairFloorScore: 75,
       });
 
-      expect(result).toMatchObject({ decision: "fail", passed: false });
+      expect(result).toMatchObject({ decision: "pass", passed: true });
     });
 
     it("keeps a passing score passing regardless of the floor flag", () => {
@@ -195,6 +184,43 @@ describe("decideAudit", () => {
         maxRevisionAttempts: 1,
         scoreRepairFloorScore: 75,
       })).toMatchObject({ decision: "pass", passed: true });
+    });
+
+    it("still routes a verified critical finding to repair, whatever the score", () => {
+      const result = decideAudit(input({
+        llmAudit: { passed: false, overallScore: 99, summary: "clean", issues: [] },
+        stateFindings: [{
+          severity: "critical",
+          category: "hook-runtime-contradiction",
+          description: "Expected hook H008 to resolve, but runtime evidence records defer.",
+          suggestion: "Settle the hook or update the chapter intent.",
+          ruleId: "hook.expected-operation",
+          source: "state",
+          verification: "verified",
+          evidence: { contentHash },
+          repairTarget: "runtime-state",
+        }],
+      }), {
+        operation: "audit",
+        autoRevisionAllowed: true,
+        revisionAttempts: 0,
+        maxRevisionAttempts: 1,
+      });
+
+      expect(result).toMatchObject({ decision: "repair-required", passed: false });
+    });
+
+    it("still refuses an unverified-only critical finding no matter the score", () => {
+      const result = decideAudit(input({
+        llmAudit: { passed: false, overallScore: 100, summary: "claims disaster", issues: [repairableFinding] },
+      }), {
+        operation: "audit",
+        autoRevisionAllowed: true,
+        revisionAttempts: 0,
+        maxRevisionAttempts: 1,
+      });
+
+      expect(result).toMatchObject({ decision: "pass", passed: true });
     });
   });
 
@@ -328,11 +354,14 @@ describe("applyMinorAuditAcceptance", () => {
     expect(applyMinorAuditAcceptance(base, { enabled: false })).toEqual(base);
   });
 
-  it("refuses scores below the floor", () => {
-    expect(applyMinorAuditAcceptance({ ...base, overallScore: 89 }, { enabled: true })).toEqual({
-      ...base,
-      overallScore: 89,
-    });
+  it("accepts a single minor blocking issue whatever the score", () => {
+    expect(applyMinorAuditAcceptance({ ...base, overallScore: 89 }, { enabled: true }))
+      .toMatchObject({ passed: true, decision: "pass", minorAccepted: true });
+  });
+
+  it("accepts a single minor blocking issue even with no score reported", () => {
+    expect(applyMinorAuditAcceptance({ ...base, overallScore: undefined }, { enabled: true }))
+      .toMatchObject({ passed: true, decision: "pass", minorAccepted: true });
   });
 
   it("refuses more than one blocking issue", () => {

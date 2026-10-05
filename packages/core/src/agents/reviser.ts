@@ -218,15 +218,24 @@ export class ReviserAgent extends BaseAgent {
           : `\n\n主角人设锁定：${bookRules.protagonist.name}，${bookRules.protagonist.personalityLock.join("、")}。修改不得违反人设。`)
       : "";
     // Length guardrail only used by legacy modes (manual CLI revise).
-    // Auto mode delegates length to normalize, not reviser.
+    // Auto mode delegates length to normalize, not reviser: buildAutoSystemPrompt
+    // already carries the hard range via rewriteLengthGuidance (inlined into the
+    // REVISED_CONTENT description), so pasting this there would duplicate it.
     const lengthGuardrail = mode !== "auto" && options?.lengthSpec
-      ? (isEnglish
-          ? "\n8. Keep chapter length within the hard range under the specified counting mode. The hard range is non-negotiable."
-          : "\n8. 章节长度必须按指定计数模式落入硬性区间；硬性区间不可突破。")
+      ? (writingLanguage === "vi"
+          ? "\n8. Độ dài chương phải nằm trong khoảng cứng theo chế độ đếm đã chỉ định. Khoảng cứng không được vượt."
+          : writingLanguage === "en"
+            ? "\n8. Keep chapter length within the hard range under the specified counting mode. The hard range is non-negotiable."
+            : "\n8. 章节长度必须按指定计数模式落入硬性区间；硬性区间不可突破。")
       : "";
-    const langPrefix = isEnglish
-      ? `【LANGUAGE OVERRIDE】ALL output (FIXED_ISSUES, PATCHES, REVISED_CONTENT) MUST be in English.\n\n`
-      : "";
+    // Keyed off writingLanguage, not the scaffold language: utils/language.ts maps
+    // vi -> scaffoldLanguage "en", so keying off `isEnglish` alone forced English
+    // output onto Vietnamese books. zh keeps the historic empty prefix.
+    const langPrefix = writingLanguage === "vi"
+      ? `【LANGUAGE OVERRIDE】ALL output (FIXED_ISSUES, PATCHES, REVISED_CONTENT) MUST be in Vietnamese (tiếng Việt có dấu).\n\n`
+      : writingLanguage === "en"
+        ? `【LANGUAGE OVERRIDE】ALL output (FIXED_ISSUES, PATCHES, REVISED_CONTENT) MUST be in English.\n\n`
+        : "";
     const governedMode = Boolean(options?.chapterIntent && options?.contextPackage && options?.ruleStack);
     const hooksWorkingSet = governedMode && options?.contextPackage
       ? buildGovernedHookWorkingSet({

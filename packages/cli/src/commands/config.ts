@@ -31,6 +31,7 @@ configCommand
         "foundation.reviewRetries",
         "writing.reviewRetries",
         "writing.revisionGate",
+        "writing.scoreRepairFloorScore",
         "daemon.schedule.radarCron", "daemon.schedule.writeCron",
         "daemon.maxConcurrentBooks", "daemon.chaptersPerCycle",
         "daemon.retryDelayMs", "daemon.cooldownAfterChapterMs",
@@ -83,6 +84,15 @@ configCommand
         target[finalKey] = false;
       } else {
         target[finalKey] = value;
+      }
+      // Bound the repair floor before it reaches inkos.json: the policy only
+      // routes score fails in [floor, 85) to repair, so >= 85 is meaningless.
+      if (finalKey === "scoreRepairFloorScore") {
+        const floor = target[finalKey];
+        if (typeof floor !== "number" || !Number.isInteger(floor) || floor < 0 || floor > 84) {
+          logError(`writing.scoreRepairFloorScore must be an integer between 0 and 84 (got ${value}); the pass threshold is 85.`);
+          process.exit(1);
+        }
       }
 
       await writeFile(configPath, JSON.stringify(config, null, 2), "utf-8");

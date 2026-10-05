@@ -2024,4 +2024,119 @@ describe("WriterAgent", () => {
       await rm(root, { recursive: true, force: true });
     }
   });
+
+  it("injects Vietnamese character pronoun locks from story/roles into the creative system prompt", async () => {
+    const root = await mkdtemp(join(tmpdir(), "inkos-writer-vi-pronoun-lock-test-"));
+    const bookDir = join(root, "book");
+    const storyDir = join(bookDir, "story");
+    const rolesDir = join(storyDir, "roles", "主要角色");
+    await mkdir(rolesDir, { recursive: true });
+
+    await Promise.all([
+      writeFile(join(storyDir, "story_bible.md"), "# Story Bible\n", "utf-8"),
+      writeFile(join(storyDir, "pending_hooks.md"), "# Pending Hooks\n", "utf-8"),
+      writeFile(join(storyDir, "chapter_summaries.md"), "# Chapter Summaries\n", "utf-8"),
+      writeFile(join(storyDir, "subplot_board.md"), "# Subplot Board\n", "utf-8"),
+      writeFile(join(storyDir, "emotional_arcs.md"), "# Emotional Arcs\n", "utf-8"),
+      writeFile(join(storyDir, "style_profile.json"), "{}", "utf-8"),
+      writeFile(join(storyDir, "fanfic_canon.md"), "", "utf-8"),
+      writeFile(join(rolesDir, "Lâm Hàn.md"), [
+        "# Lâm Hàn",
+        "",
+        "## Vietnamese_Pronoun",
+        "",
+        "Đại từ trần thuật dùng nhất quán trong toàn bộ chương tiếng Việt: “anh”. CẤM dùng “hắn” hoặc “cậu” khi trần thuật về nhân vật này.",
+        "",
+      ].join("\n"), "utf-8"),
+    ]);
+
+    const agent = new WriterAgent({
+      client: {
+        provider: "openai",
+        apiFormat: "chat",
+        stream: false,
+        defaults: {
+          temperature: 0.7,
+          maxTokens: 4096,
+          thinkingBudget: 0,
+          extra: {},
+        },
+      },
+      model: "test-model",
+      projectRoot: root,
+    });
+
+    const chatSpy = vi.spyOn(WriterAgent.prototype as never, "chat" as never)
+      .mockResolvedValueOnce({
+        content: [
+          "=== CHAPTER_TITLE ===",
+          "Ledger Trail",
+          "",
+          "=== CHAPTER_CONTENT ===",
+          "Mara follows the ledger trail through the market.",
+          "",
+          "=== PRE_WRITE_CHECK ===",
+          "- ok",
+        ].join("\n"),
+        usage: ZERO_USAGE,
+      })
+      .mockResolvedValueOnce({
+        content: "=== OBSERVATIONS ===\n- observed",
+        usage: ZERO_USAGE,
+      })
+      .mockResolvedValueOnce({
+        content: [
+          "=== POST_SETTLEMENT ===",
+          "- ledger trail advanced",
+          "",
+          "=== RUNTIME_STATE_DELTA ===",
+          "```json",
+          JSON.stringify({
+            chapter: 1,
+            hookOps: { upsert: [], mention: [], resolve: [], defer: [] },
+            chapterSummary: {
+              chapter: 1,
+              title: "Ledger Trail",
+              characters: "Mara",
+              events: "Mara follows the ledger",
+              stateChanges: "Trail advances",
+              hookActivity: "none",
+              mood: "tense",
+              chapterType: "setup",
+            },
+            notes: [],
+          }, null, 2),
+          "```",
+        ].join("\n"),
+        usage: ZERO_USAGE,
+      });
+
+    try {
+      await agent.writeChapter({
+        book: {
+          id: "writer-book",
+          title: "Writer Book",
+          platform: "tomato",
+          genre: "xuanhuan",
+          status: "active",
+          targetChapters: 120,
+          chapterWordCount: 2200,
+          language: "vi",
+          createdAt: "2026-03-23T00:00:00.000Z",
+          updatedAt: "2026-03-23T00:00:00.000Z",
+        },
+        bookDir,
+        chapterNumber: 1,
+        ...createGovernedWriterInput(1),
+        lengthSpec: buildLengthSpec(220, "vi"),
+      });
+
+      const systemPrompt = (chatSpy.mock.calls[0]?.[0] as ReadonlyArray<{ content: string }> | undefined)?.[0]?.content ?? "";
+
+      expect(systemPrompt).toContain("## Khóa xưng hô nhân vật");
+      expect(systemPrompt).toContain("Lâm Hàn");
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
 });
