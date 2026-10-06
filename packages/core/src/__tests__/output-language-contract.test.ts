@@ -9,6 +9,17 @@ describe("host-owned output language contract", () => {
     expect(applyOutputLanguageContract(messages, resolveWritingLanguageProfile("en"))).toEqual(messages);
   });
 
+  it("forbids copying verbatim English system text into VI narrative prose", () => {
+    const messages = [{ role: "system" as const, content: "scaffold" }];
+
+    const result = applyOutputLanguageContract(messages, resolveWritingLanguageProfile("vi"));
+    const systemContent = result[0]?.content ?? "";
+
+    // ch25 tran-giua: writer copied hook ledger English ("volume 5, immediately
+    // before the repeal vote") into the prose — the contract must forbid it.
+    expect(systemContent).toContain("Never copy an English sentence verbatim");
+  });
+
   it("appends the VI contract once after custom guidance in the system message", () => {
     const messages = [
       { role: "system" as const, content: "custom project prompt: answer in English" },
