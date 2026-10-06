@@ -28,6 +28,7 @@ import {
   renderSummarySnapshot,
 } from "../utils/memory-retrieval.js";
 import {
+  collectAuthoritativeMemoHooks,
   gatherPlanningMaterials,
   loadPlanningSeedMaterials,
 } from "../utils/planning-materials.js";
@@ -194,14 +195,12 @@ export class PlannerAgent extends BaseAgent {
       persistProjections: input.persistRuntimeArtifacts,
     });
     const memorySelection = materials.memorySelection;
-    // The memo may reference any authoritative hook that retrieval explicitly
-    // exposed to it, including a dormant architect seed selected for this
-    // chapter. Active hooks alone are too narrow and make a visible valid ID
-    // fail governance as "unknown".
-    const authoritativeMemoHooks = [...new Map([
-      ...memorySelection.activeHooks,
-      ...memorySelection.hooks,
-    ].map((hook) => [hook.hookId, hook] as const)).values()];
+    // The memo contract is every non-resolved hook in state — independent of
+    // retrieval relevance. Retrieval-selected hooks and active debt are
+    // included too, but they must never be the only legal IDs: a progressing
+    // hook the chapter summaries still mention cannot fail as "unknown" just
+    // because BM25 ranked it low this chapter (G2 ch25, H003).
+    const authoritativeMemoHooks = collectAuthoritativeMemoHooks(memorySelection);
     const activeHookCount = memorySelection.activeHooks.filter(
       (hook) => hook.status !== "resolved" && hook.status !== "deferred",
     ).length;

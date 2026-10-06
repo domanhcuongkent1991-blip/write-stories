@@ -43,6 +43,16 @@ export interface MemorySelection {
   readonly hooks: ReadonlyArray<StoredHook>;
   readonly activeHooks: ReadonlyArray<StoredHook>;
   /**
+   * Every non-resolved hook the planner may legitimately reference in its
+   * ledger — not just the retrieval-selected subset. G2 ch25 showed the
+   * contract must not depend on retrieval relevance: a progressing hook with
+   * promoted=false (seed metadata from chapter 1) that the chapter summaries
+   * still mention failed governance as "unknown" purely because BM25 did not
+   * rank it. This list is the deterministic superset the memo contract is
+   * validated against.
+   */
+  readonly allUnresolvedHooks: ReadonlyArray<StoredHook>;
+  /**
    * Hooks with recycling pressure — stale hooks that the planner must
    * advance/resolve/defer (and if deferred, justify). Sorted by staleness DESC
    * (most overdue first). See computeRecyclableHooks for the selection rule.
@@ -187,6 +197,7 @@ export async function retrieveMemorySelection(params: {
           params.chapterNumber,
         ),
         activeHooks: effectiveActiveHooks,
+        allUnresolvedHooks: searchableHooks,
         recyclableHooks: computeRecyclableHooks(effectiveActiveHooks, params.chapterNumber),
         facts: selectRelevantFacts(facts, rankScores),
         volumeSummaries: selectRelevantVolumeSummaries(parsedVolumeSummaries, rankScores),
