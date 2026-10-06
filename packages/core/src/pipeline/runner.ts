@@ -2524,7 +2524,7 @@ export class PipelineRunner {
           settledRevision.updatedState,
           baselineHooks,
           settledRevision.updatedHooks,
-          language,
+          book.language === "vi" ? "vi" as const : language,
           authorityContext,
         );
       } catch (error) {
@@ -4441,7 +4441,7 @@ export class PipelineRunner {
       repairedOutput.updatedState,
       oldHooks,
       repairedOutput.updatedHooks,
-      pipelineLang,
+      book.language === "vi" ? "vi" as const : pipelineLang,
     );
 
     if (!validation.passed) {
@@ -4599,7 +4599,7 @@ export class PipelineRunner {
       syncedOutput.updatedState,
       oldHooks,
       syncedOutput.updatedHooks,
-      pipelineLang,
+      book.language === "vi" ? "vi" as const : pipelineLang,
       {
         storyFrame: authorityStoryFrame,
         bookRules: authorityBookRules,

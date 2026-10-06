@@ -2,6 +2,9 @@ import { readFile, readdir } from "node:fs/promises";
 import { join } from "node:path";
 import type { StoredHook, StoredSummary } from "../state/memory-db.js";
 import {
+  normalizeStoredHookStatus,
+} from "./hook-lifecycle.js";
+import {
   parseChapterSummariesMarkdown,
   retrieveMemorySelection,
   type MemorySelection,
@@ -32,6 +35,26 @@ export interface PlanningMaterials extends PlanningSeedMaterials {
   readonly activeHooks: ReadonlyArray<StoredHook>;
   readonly memorySelection: MemorySelection;
   readonly plannerInputs: ReadonlyArray<string>;
+}
+
+/**
+ * The hook-ID contract a fresh chapter memo is validated against. It must be
+ * a deterministic superset independent of retrieval relevance: every
+ * non-resolved hook (active debt, deferred/paused, dormant seeds) is a legal
+ * ID the memo may advance/defer/resolve. G2 ch25 failed a memo whose H003 is
+ * real, progressing, and mentioned by chapter summaries — but whose
+ * promoted=false metadata (seed flag from chapter 1) kept it out of
+ * activeHooks while BM25 happened not to rank it this chapter.
+ */
+export function collectAuthoritativeMemoHooks(
+  selection: Pick<MemorySelection, "activeHooks" | "hooks" | "allUnresolvedHooks">,
+): ReadonlyArray<StoredHook> {
+  return [...new Map([
+    ...selection.activeHooks,
+    ...selection.hooks,
+    ...selection.allUnresolvedHooks,
+  ].map((hook) => [hook.hookId, hook] as const)).values()]
+    .filter((hook) => normalizeStoredHookStatus(hook.status) !== "resolved");
 }
 
 async function readFileOrDefault(path: string): Promise<string> {

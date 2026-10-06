@@ -38,7 +38,7 @@ export class StateValidatorAgent extends BaseAgent {
     newState: string,
     oldHooks: string,
     newHooks: string,
-    language: ScaffoldLanguage = "zh",
+    language: ScaffoldLanguage | "vi" = "zh",
     authorityContext?: StateValidationAuthorityContext,
   ): Promise<ValidationResult> {
     const stateDiff = this.computeDiff(oldState, newState, "State Card");
@@ -49,9 +49,14 @@ export class StateValidatorAgent extends BaseAgent {
       return { warnings: [], passed: true, repairRequired: false };
     }
 
+    // A Vietnamese book must get Vietnamese verdict text: G2 ch15 showed the
+    // default zh branch letting the model answer in English, which the
+    // settlement repair loop then feeds back and fails to converge on.
     const langInstruction = language === "en"
       ? "Respond in English."
-      : "用中文回答。";
+      : language === "vi"
+        ? "Respond in Vietnamese."
+        : "用中文回答。";
 
     const systemPrompt = `You are a continuity validator for a novel writing system. ${langInstruction}
 
