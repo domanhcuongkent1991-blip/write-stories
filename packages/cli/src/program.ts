@@ -1,5 +1,6 @@
 import { createRequire } from "node:module";
 import { Command } from "commander";
+import { assertFreshDist, inferRepoRoot } from "./dist-freshness-guard.js";
 import { initCommand } from "./commands/init.js";
 import { configCommand } from "./commands/config.js";
 import { bookCommand } from "./commands/book.js";
@@ -112,6 +113,7 @@ export async function runProgram(
   argv: string[] = process.argv,
   hooks: ProgramHooks = {},
 ): Promise<void> {
+  assertFreshDist(inferRepoRoot(import.meta.url));
   const program = createProgram(hooks);
   await program.parseAsync(argv);
 }
