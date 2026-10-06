@@ -8,6 +8,7 @@ export const VI_OUTPUT_CONTRACT = [
   "Keep required machine keys, markers, JSON keys, IDs, enum values, and file paths exactly unchanged.",
   "Required markers such as CHAPTER_TITLE, CHAPTER_CONTENT, UPDATED_STATE, UPDATED_LEDGER, and UPDATED_HOOKS must not be translated.",
   "Do not replace missing required output with Chinese or English prose.",
+  "English text in planning documents (outline, hook ledger, payoff promises, notes) is scaffolding only: paraphrase it into natural Vietnamese in-world prose. Never copy an English sentence verbatim into the narrative unless that exact string was already established as a physical artifact in an approved earlier chapter.",
 ].join("\n");
 
 export function applyOutputLanguageContract(
