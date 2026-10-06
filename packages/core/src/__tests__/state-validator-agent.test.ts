@@ -242,4 +242,27 @@ describe("StateValidatorAgent", () => {
       "en",
     )).rejects.toThrow("empty response");
   });
+
+  it("instructs the state validator to answer in Vietnamese for vi books", async () => {
+    const agent = new StateValidatorAgent({
+      client: {
+        provider: "openai",
+        apiFormat: "chat",
+        stream: false,
+        defaults: { temperature: 0.7, maxTokens: 4096, thinkingBudget: 0, extra: {} },
+      },
+      model: "test-model",
+      projectRoot: process.cwd(),
+    });
+    const chatSpy = vi.spyOn(agent as unknown as { chat: (...args: unknown[]) => Promise<unknown> }, "chat")
+      .mockResolvedValue({ content: "PASS", usage: ZERO_USAGE });
+
+    await agent.validate("Nội dung chương.", 25, "state cũ", "state mới", "hooks cũ", "hooks mới", "vi");
+
+    const [messages] = chatSpy.mock.calls[0]! as [ReadonlyArray<{ role: string; content: string }>, unknown];
+    const system = messages.find((m) => m.role === "system")!;
+    expect(system.content).toContain("Respond in Vietnamese.");
+    expect(system.content).not.toContain("用中文回答");
+    expect(system.content).not.toContain("Respond in English.");
+  });
 });
